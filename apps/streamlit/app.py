@@ -17,6 +17,19 @@ import feedparser
 import streamlit as st
 from dateutil import parser as date_parser
 
+try:
+    from supabase_store import is_configured as db_is_configured
+    from supabase_store import load_packages, save_package
+except Exception:
+    db_is_configured = lambda: False
+
+    def save_package(row: dict, package: dict, status: str = "scripted_longform"):
+        return None, "supabase_store.py 모듈을 불러오지 못했습니다."
+
+    def load_packages(limit: int = 30):
+        return [], "supabase_store.py 모듈을 불러오지 못했습니다."
+
+
 st.set_page_config(page_title="Story Pattern Lab", page_icon="🔮", layout="wide")
 
 st.markdown(
@@ -35,16 +48,16 @@ st.markdown(
     }
     div[data-testid="stMetric"] > div {
         color: #005DAA !important;
-        font-size: 26px !important;
+        font-size: 25px !important;
         font-weight: 800 !important;
     }
-    .block-container { padding-top: 1.6rem; }
+    .block-container { padding-top: 1.4rem; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.2; public-list-metadata-only"
+USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.4; public-list-metadata-only"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 
@@ -81,6 +94,7 @@ REWRITE_PRINCIPLES = [
     "롱폼 대본을 먼저 만들고, 쇼츠/쓰레드/카드뉴스는 파생물로 확장한다.",
 ]
 
+
 @dataclass
 class StoryItem:
     source: str
@@ -95,6 +109,7 @@ class StoryItem:
     like_count: int = 0
     comment_count: int = 0
     view_count: int = 0
+
 
 class LinkTextParser(HTMLParser):
     def __init__(self) -> None:
@@ -127,6 +142,7 @@ class LinkTextParser(HTMLParser):
         if href and text:
             self.links.append((href, text))
 
+
 def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
     try:
         value = st.secrets.get(name)
@@ -137,8 +153,10 @@ def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
     value = os.environ.get(name)
     return value if value else default
 
+
 def openai_is_configured() -> bool:
     return bool(get_secret("OPENAI_API_KEY"))
+
 
 def clean_html(value: str | None) -> str:
     if not value:
@@ -147,6 +165,7 @@ def clean_html(value: str | None) -> str:
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:1200]
+
 
 def decode_html(raw: bytes, content_type: str = "") -> str:
     charset_match = re.search(r"charset=([\w-]+)", content_type or "")
@@ -161,6 +180,7 @@ def decode_html(raw: bytes, content_type: str = "") -> str:
             continue
     return raw.decode("utf-8", errors="ignore")
 
+
 def parse_datetime(value: str | None) -> Optional[datetime]:
     if not value:
         return None
@@ -172,16 +192,19 @@ def parse_datetime(value: str | None) -> Optional[datetime]:
     except Exception:
         return None
 
+
 def minutes_since(value: Optional[datetime]) -> Optional[int]:
     if not value:
         return None
     now = datetime.now(timezone.utc)
     return max(0, int((now - value).total_seconds() / 60))
 
+
 def log_score(value: int, scale: float) -> float:
     if value <= 0:
         return 0
     return max(0, min(100, log10(value + 1) * scale))
+
 
 def story_angle(title: str) -> str:
     lower = title.lower()
@@ -198,6 +221,7 @@ def story_angle(title: str) -> str:
         return "Update / Longform Story"
     return "General Storytime"
 
+
 def calculate_scores(item: StoryItem) -> dict[str, float]:
     rank_score = max(0, min(100, 100 - (item.rank_position - 1) * 3))
     freshness_minutes = minutes_since(item.posted_at)
@@ -213,6 +237,7 @@ def calculate_scores(item: StoryItem) -> dict[str, float]:
     risk_score = 35 if item.region == "해외" else 60
     return {"viral_score": round(viral_score, 2), "velocity_score": round(velocity_score, 2), "debate_score": round(debate_score, 2), "production_score": round(production_score, 2), "risk_score": round(risk_score, 2), "freshness_score": round(freshness_score, 2), "rank_score": round(rank_score, 2)}
 
+
 def collect_rss(source_name: str, source_meta: dict[str, str], limit: int) -> list[StoryItem]:
     feed = feedparser.parse(source_meta["url"])
     items: list[StoryItem] = []
@@ -227,6 +252,7 @@ def collect_rss(source_name: str, source_meta: dict[str, str], limit: int) -> li
         items.append(StoryItem(source=source_name, region=source_meta["region"], category=source_meta["category"], title=title, url=url, original_excerpt=summary, posted_at=parse_datetime(published), collected_at=collected_at, rank_position=index))
     return items
 
+
 def is_domestic_story_link(parser_type: str, href: str, text: str) -> bool:
     if len(text) < 8:
         return False
@@ -238,6 +264,7 @@ def is_domestic_story_link(parser_type: str, href: str, text: str) -> bool:
     if parser_type == "bobaedream":
         return "view" in href and ("No=" in href or "code=" in href)
     return False
+
 
 def collect_public_list(source_name: str, source_meta: dict[str, str], limit: int) -> tuple[list[StoryItem], str]:
     collected_at = datetime.now(timezone.utc)
@@ -264,13 +291,16 @@ def collect_public_list(source_name: str, source_meta: dict[str, str], limit: in
             break
     return items, f"{source_name} 수집 완료: {len(items)}개"
 
+
 def pseudo_translate(text: str) -> str:
     if not text:
         return "번역할 원문 요약이 없습니다. LLM API 생성 버튼을 눌러 번역/요약을 생성하세요."
     return "[운영자 확인용 번역은 LLM API 생성 후 제공됩니다] " + text[:600]
 
+
 def infer_analysis(row: dict) -> dict[str, str]:
     return {"core_summary": f"이 소재는 '{row['title']}'에서 시작되는 {row['angle']} 유형의 사연입니다.", "core_conflict": "주인공이 불편함을 감지했지만 주변 인물의 반응 때문에 스스로를 의심하게 되는 구조입니다.", "relationship_map": "주인공 / 갈등 유발 인물 / 주변 압박 인물의 삼각 구도로 재구성할 수 있습니다.", "red_flag": "문제의 사건 자체보다, 사건 이후 상대가 책임을 회피하거나 감정을 축소하는 태도가 핵심 레드플래그입니다.", "comment_trigger": "시청자는 '예민한 반응인가, 조기 경고를 본 것인가'로 갈릴 가능성이 높습니다.", "pattern_insight": "Most people saw drama. She saw the pattern. 이 방향으로 관계 패턴을 해석합니다.", "risk_note": "원문 표현을 그대로 쓰지 않고, 인물·장소·관계 디테일을 일반화해서 재창작해야 합니다."}
+
 
 def status_badge(score: float) -> str:
     if score >= 75:
@@ -278,6 +308,7 @@ def status_badge(score: float) -> str:
     if score >= 55:
         return "🟡 후보"
     return "⚪ 관찰"
+
 
 def make_template_script(row: dict, analysis: dict[str, str]) -> str:
     return f"""0:00 Cold Open
@@ -305,9 +336,11 @@ The ending should not simply say who was right or wrong. It should show what thi
 Was this an overreaction, or did they see the pattern before everyone else?
 """
 
+
 def fallback_package(row: dict, analysis: dict[str, str]) -> dict:
     script = make_template_script(row, analysis)
     return {"source": "template_fallback", "overview_ko": analysis["core_summary"], "translation_ko": pseudo_translate(row.get("original_excerpt") or row.get("title", "")), "analysis": analysis, "risk_filter": ["원문 직접 복제 금지", "인물/장소/직장명 일반화", "댓글 원문 대량 저장 금지"], "longform_script": script, "shorts": {"30s": f"Everyone focused on the drama.\nBut the real story was the pattern behind it.\n{row['title']}\nWould you walk away?", "60s": f"She thought it was one small problem.\nBut it started with this: {row['title']}\nMost people saw drama. She saw the pattern.\nWas it an overreaction, or an early warning?", "90s": script[:900]}, "threads": {"5_post": "1. Most people saw this as drama.\n2. But the pattern was louder.\n3. The first red flag was subtle.\n4. The conflict escalated because nobody named it.\n5. Would you have noticed it earlier?", "10_post": "템플릿 기반 Threads 초안입니다. LLM API 연결 후 확장됩니다."}, "card_news": {"8_cards": [{"title": "The First Moment", "body": row["title"], "image_prompt": "cinematic storytime thumbnail, tense domestic drama", "design_note": "dark text on clean background"}]}, "titles": ["Everyone Saw Drama. She Saw the Pattern.", "They Called Her Dramatic Until the Truth Came Out", "This Was Not the Real Problem", "She Noticed the Red Flag Early", "The Pattern Was There the Whole Time"], "thumbnail_text": ["SHE WAS RIGHT", "NOT JUST DRAMA", "THE PATTERN", "RED FLAG?"], "comment_question": "Was this an overreaction, or did they see the pattern before everyone else?"}
+
 
 def build_llm_messages(row: dict, analysis: dict[str, str], tone: str, structure: str, voice: str, output_language: str, pattern_pct: int) -> list[dict[str, str]]:
     safe_excerpt = clean_html(row.get("original_excerpt", ""))[:900]
@@ -323,6 +356,7 @@ Output language for final scripts: {output_language}.
 Return ONLY valid JSON. No markdown fences."""
     user = {"source": row.get("source"), "region": row.get("region"), "url": row.get("url"), "title": row.get("title"), "angle": row.get("angle"), "excerpt": safe_excerpt, "metric_hint": {"production_score": row.get("production_score"), "viral_score": row.get("viral_score"), "debate_score": row.get("debate_score"), "comment_count": row.get("comment_count"), "like_count": row.get("like_count")}, "draft_analysis": analysis, "desired_tone": tone, "desired_structure": structure, "desired_voice": voice, "required_longform_structure": ["Cold open", "Context setup", "First red flag", "Escalation", "Turning point", "Hidden pattern analysis", "Emotional climax", "Comment-triggering question", "Closing line"], "json_schema": schema}
     return [{"role": "system", "content": system.strip()}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}]
+
 
 def openai_chat(messages: list[dict[str, str]], model: str, temperature: float, max_tokens: int) -> tuple[Optional[str], Optional[str]]:
     api_key = get_secret("OPENAI_API_KEY")
@@ -347,6 +381,7 @@ def openai_chat(messages: list[dict[str, str]], model: str, temperature: float, 
     except Exception as error:
         return None, f"OpenAI 호출 오류: {error}"
 
+
 def extract_json_object(text: str) -> Optional[dict]:
     cleaned = text.strip()
     cleaned = re.sub(r"^```(?:json)?", "", cleaned).strip()
@@ -362,6 +397,7 @@ def extract_json_object(text: str) -> Optional[dict]:
         except Exception:
             return None
     return None
+
 
 def generate_llm_package(row: dict, analysis: dict[str, str], tone: str, structure: str, voice: str, output_language: str, pattern_pct: int, model: str, temperature: float) -> tuple[dict, Optional[str]]:
     messages = build_llm_messages(row, analysis, tone, structure, voice, output_language, pattern_pct)
@@ -381,35 +417,30 @@ def generate_llm_package(row: dict, analysis: dict[str, str], tone: str, structu
     parsed["generated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     return parsed, None
 
+
 def package_to_text(package: dict, key: str, default: str = "") -> str:
     value = package.get(key, default)
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False, indent=2)
 
-def get_package_key(row: dict, tone: str, structure: str, voice: str, output_language: str, pattern_pct: int, model: str) -> str:
+
+def package_key(row: dict, tone: str, structure: str, voice: str, output_language: str, pattern_pct: int, model: str) -> str:
     return "|".join([row.get("url", row.get("id", row.get("title", ""))), tone, structure, voice, output_language, str(pattern_pct), model])
 
-def make_expansions_from_package(package: dict) -> dict[str, str]:
+
+def expansions_from_package(package: dict) -> dict[str, str]:
     shorts = package.get("shorts", {}) if isinstance(package.get("shorts"), dict) else {}
     threads = package.get("threads", {}) if isinstance(package.get("threads"), dict) else {}
     return {"30초 쇼츠": shorts.get("30s", ""), "60초 쇼츠": shorts.get("60s", ""), "90초 쇼츠": shorts.get("90s", ""), "Threads 5": threads.get("5_post", ""), "Threads 10": threads.get("10_post", ""), "카드뉴스": json.dumps(package.get("card_news", {}), ensure_ascii=False, indent=2), "썸네일": "\n".join(package.get("thumbnail_text", [])) if isinstance(package.get("thumbnail_text"), list) else str(package.get("thumbnail_text", "")), "제목": "\n".join(package.get("titles", [])) if isinstance(package.get("titles"), list) else str(package.get("titles", ""))}
 
-st.title("Story Pattern Lab")
-st.caption("실시간 점수 · 소재 확정 · LLM 제작 패키지 · 롱폼/쇼츠/Threads/카드뉴스 확장")
 
-if "stories" not in st.session_state:
-    st.session_state.stories = []
-if "approved" not in st.session_state:
-    st.session_state.approved = []
-if "statuses" not in st.session_state:
-    st.session_state.statuses = {}
-if "collection_logs" not in st.session_state:
-    st.session_state.collection_logs = []
-if "rows" not in st.session_state:
-    st.session_state.rows = []
-if "production_packages" not in st.session_state:
-    st.session_state.production_packages = {}
+st.title("Story Pattern Lab")
+st.caption("실시간 점수 · 소재 확정 · LLM 제작 패키지 · Supabase 히스토리")
+
+for key, value in {"stories": [], "approved": [], "statuses": {}, "collection_logs": [], "rows": [], "production_packages": {}, "history_rows": []}.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 with st.sidebar:
     st.header("수집 설정")
@@ -418,20 +449,18 @@ with st.sidebar:
     per_source_limit = st.slider("소스당 수집 개수", 5, 50, 15, 5)
     collect_button = st.button("실시간 후보 수집", type="primary", use_container_width=True)
     st.divider()
-    st.header("LLM API")
-    api_state = "연결 가능" if openai_is_configured() else "키 없음"
-    st.caption(f"OpenAI API 상태: {api_state}")
+    st.header("API 상태")
+    st.caption(f"OpenAI: {'ON' if openai_is_configured() else 'OFF'}")
+    st.caption(f"Supabase: {'ON' if db_is_configured() else 'OFF'}")
     llm_model = st.text_input("모델명", value=get_secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL) or DEFAULT_OPENAI_MODEL)
     temperature = st.slider("창의성", 0.1, 1.2, 0.75, 0.05)
-    if st.button("API 연결 테스트", use_container_width=True):
+    if st.button("OpenAI 테스트", use_container_width=True):
         with st.spinner("OpenAI API 테스트 중..."):
             raw, err = openai_chat([{"role": "user", "content": "Return exactly OK."}], model=llm_model, temperature=0.1, max_tokens=8)
-        if err:
-            st.error(err)
-        else:
-            st.success(f"응답: {raw}")
-    st.divider()
-    st.caption("국내 소스는 원문/댓글 저장 없이 공개 목록의 제목·URL 중심으로만 실험 수집합니다.")
+        st.error(err) if err else st.success(f"응답: {raw}")
+    if st.button("Supabase 테스트", use_container_width=True):
+        rows, err = load_packages(1)
+        st.error(err) if err else st.success("Supabase 연결 성공")
 
 if collect_button:
     collected: list[StoryItem] = []
@@ -456,58 +485,42 @@ col1.metric("수집 소재", len(stories))
 col2.metric("활성 소스", source_count)
 col3.metric("평균 Viral", avg_score)
 col4.metric("확정 소재", len(st.session_state.approved))
-col5.metric("LLM", "ON" if openai_is_configured() else "OFF")
+col5.metric("히스토리", len(st.session_state.history_rows))
 
 if st.session_state.collection_logs:
     with st.expander("수집 로그", expanded=False):
         for log in st.session_state.collection_logs:
             st.write(f"- {log}")
 
-tabs = st.tabs(["📡 Step 1: 소스", "🏆 Step 2: 리더보드", "🎬 Step 3: 제작 패키지", "✅ Step 4: 확정", "🧪 Step 5: 원칙"])
+tabs = st.tabs(["📡 소스", "🏆 리더보드", "🎬 제작 패키지", "🗂️ 히스토리", "🧪 원칙/DB"])
 
 with tabs[0]:
     st.subheader("소스 목록")
-    st.write("왼쪽에서 수집 소스를 선택하고 실시간 후보 수집을 누르면 리더보드가 채워집니다.")
-    st.markdown("### 해외 소스")
     st.dataframe([{"site": name, **meta} for name, meta in OVERSEAS_SOURCES.items()], use_container_width=True, hide_index=True)
-    st.markdown("### 국내 소스 후보")
     st.dataframe(DOMESTIC_SOURCES, use_container_width=True, hide_index=True)
-    st.markdown("### 국내 실험 수집 가능 소스")
     st.dataframe([{"site": name, **meta} for name, meta in DOMESTIC_COLLECTABLE_SOURCES.items()], use_container_width=True, hide_index=True)
 
 with tabs[1]:
     st.subheader("스코어 리더보드")
     if not stories:
-        st.info("왼쪽 사이드바에서 소스를 고르고 실시간 후보 수집을 눌러주세요.")
+        st.info("왼쪽에서 소스를 고르고 실시간 후보 수집을 눌러주세요.")
     else:
         rows = []
         for item in stories:
             scores = calculate_scores(item)
-            row_id = f"{item.source}-{item.rank_position}-{abs(hash(item.url))}"
             minutes_posted = minutes_since(item.posted_at)
-            comments_per_hour = None
-            score_per_hour = None
-            posted_at_str = None
-            if item.posted_at:
-                posted_at_str = item.posted_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-                if minutes_posted and minutes_posted > 0:
-                    hours_elapsed = minutes_posted / 60.0
-                    comments_per_hour = round(item.comment_count / hours_elapsed, 2) if item.comment_count else 0
-                    score_per_hour = round(item.like_count / hours_elapsed, 2) if item.like_count else 0
-            rows.append({"id": row_id, "badge": status_badge(scores["production_score"]), "region": item.region, "source": item.source, "angle": story_angle(item.title), "title": item.title, "url": item.url, "rank": item.rank_position, "posted_at": posted_at_str, "collected_at": item.collected_at.strftime("%Y-%m-%d %H:%M:%S UTC"), "fresh_min": minutes_posted, "like_count": item.like_count, "comment_count": item.comment_count, "view_count": item.view_count, "comments_per_hour": comments_per_hour, "score_per_hour": score_per_hour, "original_excerpt": item.original_excerpt, **scores})
+            posted_at_str = item.posted_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if item.posted_at else None
+            rows.append({"id": f"{item.source}-{item.rank_position}-{abs(hash(item.url))}", "badge": status_badge(scores["production_score"]), "region": item.region, "source": item.source, "angle": story_angle(item.title), "title": item.title, "url": item.url, "rank": item.rank_position, "posted_at": posted_at_str, "collected_at": item.collected_at.strftime("%Y-%m-%d %H:%M:%S UTC"), "fresh_min": minutes_posted, "like_count": item.like_count, "comment_count": item.comment_count, "view_count": item.view_count, "original_excerpt": item.original_excerpt, **scores})
         rows = sorted(rows, key=lambda row: row["production_score"], reverse=True)
         st.session_state.rows = rows
-        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-        search_query = c1.text_input("제목 검색", value="")
-        region_options = sorted(set(row["region"] for row in rows))
-        selected_regions = c2.multiselect("지역", region_options, default=region_options)
-        sort_options = ["production_score", "viral_score", "velocity_score", "debate_score", "risk_score", "fresh_min", "like_count", "comment_count", "view_count", "comments_per_hour", "score_per_hour"]
-        sort_key = c3.selectbox("정렬", sort_options, index=0)
-        max_risk = c4.slider("위험 점수 상한", 0, 100, 80, 5)
-        filtered_rows = [row for row in rows if (not search_query or search_query.lower() in row["title"].lower()) and row["region"] in selected_regions and row["risk_score"] <= max_risk]
+        c1, c2, c3 = st.columns([2, 1, 1])
+        q = c1.text_input("제목 검색", "")
+        sort_key = c2.selectbox("정렬", ["production_score", "viral_score", "velocity_score", "debate_score", "risk_score", "fresh_min"], index=0)
+        max_risk = c3.slider("위험 점수 상한", 0, 100, 80, 5)
+        filtered = [row for row in rows if (not q or q.lower() in row["title"].lower()) and row["risk_score"] <= max_risk]
         reverse = sort_key not in ["risk_score", "fresh_min"]
-        rows_sorted = sorted(filtered_rows, key=lambda row: row[sort_key] if row[sort_key] is not None else -1, reverse=reverse)
-        st.dataframe(rows_sorted, use_container_width=True, hide_index=True, column_order=["badge", "region", "production_score", "viral_score", "velocity_score", "debate_score", "like_count", "comment_count", "view_count", "comments_per_hour", "score_per_hour", "risk_score", "fresh_min", "rank", "source", "angle", "title", "url"])
+        filtered = sorted(filtered, key=lambda row: row[sort_key] if row[sort_key] is not None else -1, reverse=reverse)
+        st.dataframe(filtered, use_container_width=True, hide_index=True, column_order=["badge", "region", "production_score", "viral_score", "velocity_score", "debate_score", "risk_score", "fresh_min", "rank", "source", "angle", "title", "url"])
 
 with tabs[2]:
     st.subheader("소재 선택 → LLM 제작 패키지")
@@ -515,10 +528,9 @@ with tabs[2]:
     if not rows:
         st.info("먼저 리더보드에서 소재를 수집/생성해주세요.")
     else:
-        selected_index = st.radio("제작할 소재", options=list(range(len(rows))), format_func=lambda i: f"{i + 1}. {rows[i]['title'][:58]}" + ("…" if len(rows[i]["title"]) > 58 else "") + f" | {rows[i]['source']} | {rows[i]['region']}", key="story_select_for_llm")
-        selected = rows[selected_index]
+        idx = st.radio("제작할 소재", options=list(range(len(rows))), format_func=lambda i: f"{i + 1}. {rows[i]['title'][:60]} | {rows[i]['source']} | {rows[i]['region']}")
+        selected = rows[idx]
         analysis = infer_analysis(selected)
-        story_status_key = selected.get("id", selected["url"])
         metric_cols = st.columns(6)
         metric_cols[0].metric("Production", selected.get("production_score", 0))
         metric_cols[1].metric("Viral", selected.get("viral_score", 0))
@@ -529,104 +541,107 @@ with tabs[2]:
         with st.expander("원문 개요 / 안전 확인", expanded=True):
             st.write(f"**원문 제목:** {selected['title']}")
             st.write(f"**소스:** {selected['source']} / {selected['region']}")
-            st.write(f"**분류:** {selected['angle']}")
-            st.write(f"**원문 링크:** {selected['url']}")
+            st.write(f"**URL:** {selected['url']}")
             st.text_area("원문 요약 또는 공개목록 excerpt", selected.get("original_excerpt", ""), height=120)
             st.json(analysis)
-        status_col, action_col = st.columns([1, 1])
-        with status_col:
-            current_status = st.session_state.statuses.get(story_status_key, "candidate")
-            status = st.selectbox("제작 상태", STATUS_OPTIONS, index=STATUS_OPTIONS.index(current_status) if current_status in STATUS_OPTIONS else 2)
-            st.session_state.statuses[story_status_key] = status
-        with action_col:
-            if st.button("이 소재 제작 확정", type="primary", use_container_width=True):
-                approved_item = {**selected, "status": "approved", "approved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                st.session_state.approved.append(approved_item)
-                st.session_state.statuses[story_status_key] = "approved"
-                st.success("제작 소재로 확정했습니다.")
-        st.markdown("### LLM 제작 설정")
         option_cols = st.columns(5)
         tone = option_cols[0].selectbox("톤", ["Drama", "Suspense", "Comical", "Documentary"], index=0)
         structure = option_cols[1].selectbox("구조", ["Classic", "Twist", "Parallel"], index=0)
         voice = option_cols[2].selectbox("시점", ["Third Person", "First Person", "Second Person"], index=0)
         output_language = option_cols[3].selectbox("출력 언어", ["English", "Korean"], index=0)
         pattern_pct = option_cols[4].slider("패턴 비중", 0, 30, 10, 5)
-        package_key = "|".join([selected.get("url", selected.get("id", selected.get("title", ""))), tone, structure, voice, output_language, str(pattern_pct), llm_model])
-        llm_col1, llm_col2 = st.columns([1, 1])
-        with llm_col1:
-            if st.button("LLM API로 제작 패키지 생성", type="primary", use_container_width=True):
-                with st.spinner("LLM이 원문을 안전하게 재구성하고 제작 패키지를 생성 중입니다..."):
-                    package, error = generate_llm_package(selected, analysis, tone=tone, structure=structure, voice=voice, output_language=output_language, pattern_pct=pattern_pct, model=llm_model, temperature=temperature)
-                st.session_state.production_packages[package_key] = package
-                if error:
-                    st.warning(error)
-                else:
-                    st.success("LLM 제작 패키지 생성 완료")
-        with llm_col2:
-            st.download_button("원문 링크 저장", selected["url"], file_name="source_url.txt", use_container_width=True)
-        package = st.session_state.production_packages.get(package_key)
+        key = package_key(selected, tone, structure, voice, output_language, pattern_pct, llm_model)
+        col_a, col_b, col_c = st.columns(3)
+        if col_a.button("LLM API로 제작 패키지 생성", type="primary", use_container_width=True):
+            with st.spinner("LLM 제작 패키지 생성 중..."):
+                package, error = generate_llm_package(selected, analysis, tone, structure, voice, output_language, pattern_pct, llm_model, temperature)
+            st.session_state.production_packages[key] = package
+            st.warning(error) if error else st.success("LLM 제작 패키지 생성 완료")
+        package = st.session_state.production_packages.get(key)
+        if package and col_b.button("Supabase에 저장", use_container_width=True):
+            result, error = save_package(selected, package)
+            if error:
+                st.error(error)
+            else:
+                st.success("Supabase 저장 완료")
+                if isinstance(result, list):
+                    st.session_state.history_rows = result + st.session_state.history_rows
+        col_c.download_button("원문 링크 저장", selected["url"], file_name="source_url.txt", use_container_width=True)
         if not package:
-            st.info("아직 이 설정으로 생성된 LLM 제작 패키지가 없습니다. 위 버튼을 눌러 생성하세요.")
-            with st.expander("템플릿 초안 미리보기"):
-                st.text_area("기본 템플릿 대본", make_template_script(selected, analysis), height=360)
+            st.info("아직 제작 패키지가 없습니다. 생성 버튼을 누르세요.")
+            st.text_area("템플릿 초안", make_template_script(selected, analysis), height=360)
         else:
             if package.get("api_error"):
                 st.error(package["api_error"])
-            package_tabs = st.tabs(["개요/분석", "10분 롱폼", "쇼츠", "Threads", "카드뉴스", "제목/썸네일", "JSON"])
-            with package_tabs[0]:
+            tabs_pkg = st.tabs(["개요/분석", "10분 롱폼", "쇼츠", "Threads", "카드뉴스", "제목/썸네일", "JSON"])
+            with tabs_pkg[0]:
                 st.text_area("운영자용 한글 요약", package_to_text(package, "overview_ko"), height=120)
                 st.text_area("운영자용 한글 번역", package_to_text(package, "translation_ko"), height=160)
                 st.text_area("LLM 추론 분석", package_to_text(package, "analysis"), height=260)
-                st.text_area("리스크 필터", package_to_text(package, "risk_filter"), height=140)
-            with package_tabs[1]:
-                longform = package_to_text(package, "longform_script")
-                edited_longform = st.text_area("10분 롱폼 대본", longform, height=520)
+            with tabs_pkg[1]:
+                edited = st.text_area("10분 롱폼 대본", package_to_text(package, "longform_script"), height=520)
                 if st.button("수정한 롱폼 저장", use_container_width=True):
-                    package["longform_script"] = edited_longform
-                    st.session_state.production_packages[package_key] = package
+                    package["longform_script"] = edited
+                    st.session_state.production_packages[key] = package
                     st.success("수정본 저장 완료")
-            expansions = make_expansions_from_package(package)
-            with package_tabs[2]:
-                st.text_area("30초 쇼츠", expansions["30초 쇼츠"], height=160)
-                st.text_area("60초 쇼츠", expansions["60초 쇼츠"], height=220)
-                st.text_area("90초 쇼츠", expansions["90초 쇼츠"], height=260)
-            with package_tabs[3]:
-                st.text_area("5-post Thread", expansions["Threads 5"], height=220)
-                st.text_area("10-post Thread", expansions["Threads 10"], height=320)
-            with package_tabs[4]:
-                st.text_area("카드뉴스 패키지", expansions["카드뉴스"], height=420)
-            with package_tabs[5]:
-                st.text_area("썸네일 문구", expansions["썸네일"], height=140)
-                st.text_area("제목 후보", expansions["제목"], height=240)
+            exp = expansions_from_package(package)
+            with tabs_pkg[2]:
+                st.text_area("30초 쇼츠", exp["30초 쇼츠"], height=160)
+                st.text_area("60초 쇼츠", exp["60초 쇼츠"], height=220)
+                st.text_area("90초 쇼츠", exp["90초 쇼츠"], height=260)
+            with tabs_pkg[3]:
+                st.text_area("5-post Thread", exp["Threads 5"], height=220)
+                st.text_area("10-post Thread", exp["Threads 10"], height=320)
+            with tabs_pkg[4]:
+                st.text_area("카드뉴스 패키지", exp["카드뉴스"], height=420)
+            with tabs_pkg[5]:
+                st.text_area("썸네일 문구", exp["썸네일"], height=140)
+                st.text_area("제목 후보", exp["제목"], height=240)
                 st.text_area("댓글 질문", package_to_text(package, "comment_question"), height=100)
-            with package_tabs[6]:
+            with tabs_pkg[6]:
                 st.download_button("제작 패키지 JSON 다운로드", data=json.dumps(package, ensure_ascii=False, indent=2), file_name="story_production_package.json", mime="application/json", use_container_width=True)
                 st.json(package)
 
 with tabs[3]:
-    st.subheader("제작 확정 보드")
-    if not st.session_state.approved:
-        st.info("아직 확정된 소재가 없습니다. Step 3에서 제작 확정을 눌러주세요.")
+    st.subheader("Supabase 히스토리")
+    c1, c2 = st.columns([1, 1])
+    limit = c1.slider("불러올 개수", 5, 100, 30, 5)
+    if c2.button("히스토리 불러오기", type="primary", use_container_width=True):
+        rows, error = load_packages(limit)
+        if error:
+            st.error(error)
+        else:
+            st.session_state.history_rows = rows
+            st.success(f"히스토리 {len(rows)}개 불러옴")
+    history = st.session_state.history_rows
+    if not history:
+        st.info("아직 불러온 히스토리가 없습니다.")
     else:
-        st.dataframe(st.session_state.approved, use_container_width=True, hide_index=True, column_order=["status", "approved_at", "production_score", "viral_score", "source", "angle", "title", "url"])
+        st.dataframe(history, use_container_width=True, hide_index=True, column_order=["created_at", "status", "source_name", "production_score", "viral_score", "title", "source_url"])
+        selected_history_title = st.selectbox("상세 확인", [row.get("title", "제목 없음") for row in history])
+        selected_history = next((row for row in history if row.get("title") == selected_history_title), history[0])
+        pkg = selected_history.get("package_json", {})
+        st.text_area("저장된 10분 롱폼", package_to_text(pkg, "longform_script"), height=420)
+        st.download_button("히스토리 JSON 다운로드", json.dumps(selected_history, ensure_ascii=False, indent=2), file_name="history_package.json", mime="application/json", use_container_width=True)
 
 with tabs[4]:
-    st.subheader("원문 LLM 추론분석 및 재가공 원칙")
-    st.write("이 앱의 LLM 생성 흐름은 `원문/요약 → 운영자용 번역 → 추론 분석 → 리스크 필터 → 새 구조 재창작 → 롱폼 → 파생물` 순서로 설계했습니다.")
+    st.subheader("원칙 / DB 세팅")
     for principle in REWRITE_PRINCIPLES:
         st.write(f"- {principle}")
     st.divider()
-    st.markdown("### API 세팅")
-    st.code("""# Streamlit Secrets 예시
-OPENAI_API_KEY = "sk-..."
-OPENAI_MODEL = "gpt-4o-mini"
-# 선택사항
-OPENAI_API_BASE = "https://api.openai.com/v1"
-""", language="toml")
-    st.markdown("### 다음 개발 우선순위")
-    st.write("1. Reddit API로 score, num_comments, created_utc 수집")
-    st.write("2. Supabase에 story_candidates / metric_snapshots / production_packages 저장")
-    st.write("3. 히스토리에서 제작 확장으로 보내는 버튼 추가")
-    st.write("4. LLM 결과물 버전 관리 및 export 기능 추가")
+    st.markdown("### Supabase 테이블 SQL")
+    st.code("""create table if not exists story_production_packages (
+  id uuid primary key default gen_random_uuid(),
+  source_url text,
+  source_name text,
+  title text,
+  status text default 'scripted_longform',
+  production_score numeric,
+  viral_score numeric,
+  package_json jsonb,
+  created_at timestamptz default now()
+);""", language="sql")
+    st.markdown("### 앱 설정")
+    st.write("OpenAI와 Supabase 값은 Streamlit Secrets 또는 환경변수에서 읽습니다. 키는 코드에 저장하지 않습니다.")
 
-st.caption("Story Pattern Lab v0.2 · LLM API 연결형 Streamlit 제작 대시보드")
+st.caption("Story Pattern Lab v0.4 · OpenAI + Supabase 연결형 Streamlit 제작 대시보드")
