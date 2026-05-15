@@ -9,13 +9,36 @@ from html import unescape
 from html.parser import HTMLParser
 from math import log10
 from typing import Optional
-from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 import feedparser
 import streamlit as st
 from dateutil import parser as date_parser
+
+try:
+    from source_fetcher import fetch_article_body
+except Exception:
+    fetch_article_body = None
+
+try:
+    from llm_pipeline import (
+        analyze_story,
+        build_live_blueprint,
+        write_live_longform,
+        generate_derivatives,
+        build_package,
+    )
+except Exception as import_error:
+    analyze_story = build_live_blueprint = write_live_longform = generate_derivatives = build_package = None
+    LLM_PIPELINE_IMPORT_ERROR = str(import_error)
+else:
+    LLM_PIPELINE_IMPORT_ERROR = None
+
+try:
+    from quality_check import quality_check_live_script
+except Exception:
+    quality_check_live_script = None
 
 try:
     from supabase_store import is_configured as db_is_configured
@@ -48,16 +71,23 @@ st.markdown(
     }
     div[data-testid="stMetric"] > div {
         color: #005DAA !important;
-        font-size: 25px !important;
+        font-size: 24px !important;
         font-weight: 800 !important;
     }
     .block-container { padding-top: 1.4rem; }
+    .pipeline-card {
+        border: 1px solid #E2E8F0;
+        background: #F8FAFC;
+        border-radius: 12px;
+        padding: 14px 16px;
+        margin-bottom: 10px;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.4; public-list-metadata-only"
+USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.5; public-list-metadata-only"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 
@@ -83,15 +113,13 @@ DOMESTIC_SOURCES = [
     {"site": "블라인드", "category": "직장 썰", "status": "제외/보류", "note": "로그인 기반, 자동 수집 부적합 가능성 높음"},
 ]
 
-STATUS_OPTIONS = ["collected", "analyzed", "candidate", "approved", "scripted_longform", "expanded_shorts", "expanded_threads", "expanded_cardnews", "rejected", "archived"]
-
 REWRITE_PRINCIPLES = [
     "원문 문장 구조를 그대로 복제하지 않는다.",
     "댓글 원문과 사용자 식별 정보를 대량 저장하지 않는다.",
     "이름, 회사, 지역, 학교, 계정명 등 식별 가능한 정보는 일반화한다.",
-    "사주/점성술은 전면에 내세우지 않고 pattern, timing, karma 표현으로 치환한다.",
-    "구성 비율은 썰 80%, 패턴 분석 15%, 타이밍/카르마 인사이트 5%를 기준으로 한다.",
-    "롱폼 대본을 먼저 만들고, 쇼츠/쓰레드/카드뉴스는 파생물로 확장한다.",
+    "사주/점성술/작두/기운 표현은 허용하되, 단정적 점술 판단은 피한다.",
+    "대본은 라이브 상담형 1인칭 여성 유튜버 말투를 기준으로 한다.",
+    "존댓말 진행, 반말 리액션, 채팅 받아치기, 현실 조언이 모두 들어가야 한다.",
 ]
 
 
@@ -292,14 +320,8 @@ def collect_public_list(source_name: str, source_meta: dict[str, str], limit: in
     return items, f"{source_name} 수집 완료: {len(items)}개"
 
 
-def pseudo_translate(text: str) -> str:
-    if not text:
-        return "번역할 원문 요약이 없습니다. LLM API 생성 버튼을 눌러 번역/요약을 생성하세요."
-    return "[운영자 확인용 번역은 LLM API 생성 후 제공됩니다] " + text[:600]
-
-
 def infer_analysis(row: dict) -> dict[str, str]:
-    return {"core_summary": f"이 소재는 '{row['title']}'에서 시작되는 {row['angle']} 유형의 사연입니다.", "core_conflict": "주인공이 불편함을 감지했지만 주변 인물의 반응 때문에 스스로를 의심하게 되는 구조입니다.", "relationship_map": "주인공 / 갈등 유발 인물 / 주변 압박 인물의 삼각 구도로 재구성할 수 있습니다.", "red_flag": "문제의 사건 자체보다, 사건 이후 상대가 책임을 회피하거나 감정을 축소하는 태도가 핵심 레드플래그입니다.", "comment_trigger": "시청자는 '예민한 반응인가, 조기 경고를 본 것인가'로 갈릴 가능성이 높습니다.", "pattern_insight": "Most people saw drama. She saw the pattern. 이 방향으로 관계 패턴을 해석합니다.", "risk_note": "원문 표현을 그대로 쓰지 않고, 인물·장소·관계 디테일을 일반화해서 재창작해야 합니다."}
+    return {"core_summary": f"이 소재는 '{row['title']}'에서 시작되는 {row['angle']} 유형의 사연입니다.", "core_conflict": "사연자가 느낀 찝찝함과 주변 반응 사이의 간극이 핵심 갈등입니다.", "relationship_map": "사연자 / 갈등 유발 인물 / 채팅이 갈릴 지점", "red_flag": "사건보다 이후 태도와 말투가 핵심 레드플래그입니다.", "comment_trigger": "시청자는 예민함인지 감지력인지로 갈릴 가능성이 높습니다.", "pattern_insight": "관계의 기운과 타이밍이 어긋나는 순간을 읽는 방향으로 해석합니다.", "risk_note": "원문 표현을 그대로 쓰지 않고, 인물·장소·관계 디테일을 일반화해서 재창작해야 합니다."}
 
 
 def status_badge(score: float) -> str:
@@ -311,111 +333,35 @@ def status_badge(score: float) -> str:
 
 
 def make_template_script(row: dict, analysis: dict[str, str]) -> str:
-    return f"""0:00 Cold Open
-She thought this was just one strange moment. But the pattern was already there.
+    return f"""00:00
+오늘 사연은요. 제목만 보면 그냥 {row['title']} 이 정도로 보일 수 있어요.
+근데 잠깐만. 이거는 그냥 웃고 넘길 문제가 아닐 수도 있어요.
+제가 이런 사연 볼 때 제일 먼저 보는 게 뭐냐면요. 말보다 타이밍이에요.
 
-0:30 Context Setup
-The story begins with this title: {row['title']}
+00:40
+사연자님이 보내주신 내용을 보면, 처음에는 본인도 자기가 예민한 줄 알았대요.
+근데 이상하게 마음이 계속 걸린 거죠.
 
-1:30 First Red Flag
-The first red flag is not always loud. Sometimes it is the moment someone makes the main character feel dramatic for noticing something uncomfortable.
+01:40
+아니 근데 여러분들, 마음이 계속 걸린다는 건 그냥 지나가는 감정이 아닐 때가 있어요.
+사주로 치면 이건 궁합이 나쁘다 이런 단정이 아니라, 기운이 딱 삐끗한 순간이 있는 거예요.
 
-3:00 Escalation
-As the situation grows, the audience starts looking for one thing: did the main character miss the warning signs, or were they trained to ignore them?
+02:30
+지금 채팅에서도 갈리죠. 손절이다, 아니다, 그냥 장난이다.
+아니 얘들아 잠깐만. 사람 관계를 그렇게 바로 시장가 매도하듯이 던지면 안 됩니다.
 
-5:00 Turning Point
-This is where the story reveals the real conflict. {analysis['core_conflict']}
+06:30
+사연자님, 제가 보기엔 바로 끊을 문제는 아니에요. 근데 그냥 넘길 문제도 아닙니다.
+한 번은 확인하세요. 대답보다 태도를 보세요.
 
-6:30 Hidden Pattern Analysis
-Most people will focus on the drama. But the stronger angle is this: {analysis['pattern_insight']}
-
-8:00 Emotional Climax
-The ending should not simply say who was right or wrong. It should show what this moment reveals about the relationship dynamic.
-
-9:30 Comment-Triggering Question
-Was this an overreaction, or did they see the pattern before everyone else?
+09:30
+여러분이라면 이 관계, 한 번 더 물어볼 것 같아요? 아니면 마음속으로 선을 그을 것 같아요?
 """
 
 
 def fallback_package(row: dict, analysis: dict[str, str]) -> dict:
     script = make_template_script(row, analysis)
-    return {"source": "template_fallback", "overview_ko": analysis["core_summary"], "translation_ko": pseudo_translate(row.get("original_excerpt") or row.get("title", "")), "analysis": analysis, "risk_filter": ["원문 직접 복제 금지", "인물/장소/직장명 일반화", "댓글 원문 대량 저장 금지"], "longform_script": script, "shorts": {"30s": f"Everyone focused on the drama.\nBut the real story was the pattern behind it.\n{row['title']}\nWould you walk away?", "60s": f"She thought it was one small problem.\nBut it started with this: {row['title']}\nMost people saw drama. She saw the pattern.\nWas it an overreaction, or an early warning?", "90s": script[:900]}, "threads": {"5_post": "1. Most people saw this as drama.\n2. But the pattern was louder.\n3. The first red flag was subtle.\n4. The conflict escalated because nobody named it.\n5. Would you have noticed it earlier?", "10_post": "템플릿 기반 Threads 초안입니다. LLM API 연결 후 확장됩니다."}, "card_news": {"8_cards": [{"title": "The First Moment", "body": row["title"], "image_prompt": "cinematic storytime thumbnail, tense domestic drama", "design_note": "dark text on clean background"}]}, "titles": ["Everyone Saw Drama. She Saw the Pattern.", "They Called Her Dramatic Until the Truth Came Out", "This Was Not the Real Problem", "She Noticed the Red Flag Early", "The Pattern Was There the Whole Time"], "thumbnail_text": ["SHE WAS RIGHT", "NOT JUST DRAMA", "THE PATTERN", "RED FLAG?"], "comment_question": "Was this an overreaction, or did they see the pattern before everyone else?"}
-
-
-def build_llm_messages(row: dict, analysis: dict[str, str], tone: str, structure: str, voice: str, output_language: str, pattern_pct: int) -> list[dict[str, str]]:
-    safe_excerpt = clean_html(row.get("original_excerpt", ""))[:900]
-    schema = {"overview_ko": "운영자용 한글 요약 3문장", "translation_ko": "원문/요약의 운영자용 한글 번역", "analysis": {"story_summary": "짧은 요약", "core_conflict": "핵심 갈등", "emotional_trigger": "감정 트리거", "hidden_pattern": "숨겨진 관계 패턴", "red_flags": ["레드플래그 1"], "timeline": ["사건 순서 1"], "character_roles": ["주인공", "갈등 유발 인물"], "audience_reaction": "시청자가 댓글을 달 이유", "cultural_localization": "해외 시청자 유의점", "risk_notes": ["비식별화/저작권/명예훼손 유의점"], "production_recommendation": "제작 추천/보류 이유"}, "risk_filter": ["원문 재사용 방지 규칙"], "longform_script": "10-minute YouTube storytime script with time markers", "shorts": {"30s": "30-second short script", "60s": "60-second short script", "90s": "90-second short script"}, "threads": {"5_post": "5-post thread", "10_post": "10-post thread", "controversy_version": "controversy hook version", "question_led_version": "question-led version"}, "card_news": {"8_cards": [{"title": "card title", "body": "card body", "image_prompt": "image prompt", "design_note": "design note"}]}, "titles": ["title option 1", "title option 2"], "thumbnail_text": ["thumbnail phrase 1"], "comment_question": "comment question"}
-    system = f"""You are a senior YouTube storytime producer and safety-aware rewriting editor.
-Create a production package from a public story candidate.
-The final content must be transformed and original. Do not copy source sentence structure.
-Do not store or reproduce names, account IDs, workplaces, schools, exact locations, or identifying details.
-Use astrology/saju only as a subtle pattern/timing lens. Do not make it the main topic.
-Target overseas storytime viewers.
-Story ratio: story 80%, relationship/pattern analysis {pattern_pct}%, timing/karma insight minimal.
-Output language for final scripts: {output_language}.
-Return ONLY valid JSON. No markdown fences."""
-    user = {"source": row.get("source"), "region": row.get("region"), "url": row.get("url"), "title": row.get("title"), "angle": row.get("angle"), "excerpt": safe_excerpt, "metric_hint": {"production_score": row.get("production_score"), "viral_score": row.get("viral_score"), "debate_score": row.get("debate_score"), "comment_count": row.get("comment_count"), "like_count": row.get("like_count")}, "draft_analysis": analysis, "desired_tone": tone, "desired_structure": structure, "desired_voice": voice, "required_longform_structure": ["Cold open", "Context setup", "First red flag", "Escalation", "Turning point", "Hidden pattern analysis", "Emotional climax", "Comment-triggering question", "Closing line"], "json_schema": schema}
-    return [{"role": "system", "content": system.strip()}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}]
-
-
-def openai_chat(messages: list[dict[str, str]], model: str, temperature: float, max_tokens: int) -> tuple[Optional[str], Optional[str]]:
-    api_key = get_secret("OPENAI_API_KEY")
-    if not api_key:
-        return None, "OPENAI_API_KEY가 Streamlit secrets 또는 환경변수에 없습니다."
-    base_url = (get_secret("OPENAI_API_BASE", DEFAULT_OPENAI_BASE_URL) or DEFAULT_OPENAI_BASE_URL).rstrip("/")
-    endpoint = f"{base_url}/chat/completions"
-    payload = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
-    request = Request(endpoint, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}, method="POST")
-    try:
-        with urlopen(request, timeout=120) as response:
-            result = json.loads(response.read().decode("utf-8"))
-        return result["choices"][0]["message"]["content"], None
-    except HTTPError as error:
-        try:
-            body = error.read().decode("utf-8")
-        except Exception:
-            body = str(error)
-        return None, f"OpenAI HTTP 오류: {error.code} / {body[:1200]}"
-    except URLError as error:
-        return None, f"OpenAI 네트워크 오류: {error}"
-    except Exception as error:
-        return None, f"OpenAI 호출 오류: {error}"
-
-
-def extract_json_object(text: str) -> Optional[dict]:
-    cleaned = text.strip()
-    cleaned = re.sub(r"^```(?:json)?", "", cleaned).strip()
-    cleaned = re.sub(r"```$", "", cleaned).strip()
-    try:
-        return json.loads(cleaned)
-    except Exception:
-        pass
-    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except Exception:
-            return None
-    return None
-
-
-def generate_llm_package(row: dict, analysis: dict[str, str], tone: str, structure: str, voice: str, output_language: str, pattern_pct: int, model: str, temperature: float) -> tuple[dict, Optional[str]]:
-    messages = build_llm_messages(row, analysis, tone, structure, voice, output_language, pattern_pct)
-    raw, error = openai_chat(messages, model=model, temperature=temperature, max_tokens=6500)
-    if error:
-        package = fallback_package(row, analysis)
-        package["source"] = "template_fallback_after_api_error"
-        package["api_error"] = error
-        return package, error
-    parsed = extract_json_object(raw or "")
-    if not parsed:
-        package = fallback_package(row, analysis)
-        package["source"] = "raw_llm_unparsed"
-        package["raw_llm_output"] = raw
-        return package, "LLM 응답을 JSON으로 파싱하지 못해 원문 응답을 보관했습니다."
-    parsed["source"] = "openai_api"
-    parsed["generated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    return parsed, None
+    return {"source": "template_fallback_live_advice", "overview_ko": analysis["core_summary"], "analysis": analysis, "risk_filter": ["원문 직접 복제 금지", "인물/장소/직장명 일반화", "댓글 원문 대량 저장 금지"], "longform_script": script, "shorts": {"30s": "좋은 소식에 이상한 반응을 본 적 있나요? 아니 근데 이건 웃음보다 그 다음 공기가 문제예요.", "60s": "사연자님이 예민한 게 아니라, 관계의 기운이 삐끗한 순간을 감지한 걸 수도 있어요. 바로 손절 말고 한 번은 확인하세요.", "90s": script[:900]}, "threads": {"5_post": "1. 사연자님은 이상한 반응 하나 때문에 마음이 걸렸습니다.\n2. 문제는 사건보다 그 뒤의 태도입니다.\n3. 바로 손절은 빠릅니다.\n4. 하지만 그냥 넘기는 것도 아닙니다.\n5. 한 번은 확인하고, 대답보다 태도를 보세요."}, "card_news": {"8_cards": [{"title": "이상한 반응", "body": row["title"], "image_prompt": "live advice storytime scene", "design_note": "clean and emotional"}]}, "titles": ["사연자님, 이건 예민한 게 아닐 수도 있어요", "좋은 소식에 웃은 친구, 문제는 그 다음 공기였어요"], "thumbnail_text": ["이건 좀 이상한데?", "예민한 게 아니야"], "comment_question": "여러분이라면 한 번 더 물어보실 건가요?"}
 
 
 def package_to_text(package: dict, key: str, default: str = "") -> str:
@@ -425,8 +371,8 @@ def package_to_text(package: dict, key: str, default: str = "") -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-def package_key(row: dict, tone: str, structure: str, voice: str, output_language: str, pattern_pct: int, model: str) -> str:
-    return "|".join([row.get("url", row.get("id", row.get("title", ""))), tone, structure, voice, output_language, str(pattern_pct), model])
+def package_key(row: dict) -> str:
+    return row.get("url", row.get("id", row.get("title", "")))
 
 
 def expansions_from_package(package: dict) -> dict[str, str]:
@@ -435,10 +381,40 @@ def expansions_from_package(package: dict) -> dict[str, str]:
     return {"30초 쇼츠": shorts.get("30s", ""), "60초 쇼츠": shorts.get("60s", ""), "90초 쇼츠": shorts.get("90s", ""), "Threads 5": threads.get("5_post", ""), "Threads 10": threads.get("10_post", ""), "카드뉴스": json.dumps(package.get("card_news", {}), ensure_ascii=False, indent=2), "썸네일": "\n".join(package.get("thumbnail_text", [])) if isinstance(package.get("thumbnail_text"), list) else str(package.get("thumbnail_text", "")), "제목": "\n".join(package.get("titles", [])) if isinstance(package.get("titles"), list) else str(package.get("titles", ""))}
 
 
-st.title("Story Pattern Lab")
-st.caption("실시간 점수 · 소재 확정 · LLM 제작 패키지 · Supabase 히스토리")
+def render_quality(quality: dict) -> None:
+    if not quality:
+        st.info("아직 품질검사가 없습니다.")
+        return
+    st.metric("종합 점수", quality.get("overall_score", 0))
+    score_cols = st.columns(4)
+    scores = quality.get("scores", {})
+    for idx, (name, value) in enumerate(scores.items()):
+        score_cols[idx % 4].metric(name, value)
+    warnings = quality.get("warnings", [])
+    if warnings:
+        st.warning("\n".join([f"- {item}" for item in warnings]))
+    else:
+        st.success("품질 기준을 통과했습니다.")
 
-for key, value in {"stories": [], "approved": [], "statuses": {}, "collection_logs": [], "rows": [], "production_packages": {}, "history_rows": []}.items():
+
+st.title("Story Pattern Lab")
+st.caption("자동 본문 수집 · 라이브 사연 상담형 반존대 대본 · 사주/점성술 화자성 · Supabase 히스토리")
+
+initial_state = {
+    "stories": [],
+    "approved": [],
+    "collection_logs": [],
+    "rows": [],
+    "history_rows": [],
+    "source_texts": {},
+    "story_analyses": {},
+    "live_blueprints": {},
+    "longform_scripts": {},
+    "quality_checks": {},
+    "derivative_assets": {},
+    "production_packages": {},
+}
+for key, value in initial_state.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
@@ -453,13 +429,11 @@ with st.sidebar:
     st.caption(f"OpenAI: {'ON' if openai_is_configured() else 'OFF'}")
     st.caption(f"Supabase: {'ON' if db_is_configured() else 'OFF'}")
     llm_model = st.text_input("모델명", value=get_secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL) or DEFAULT_OPENAI_MODEL)
-    temperature = st.slider("창의성", 0.1, 1.2, 0.75, 0.05)
-    if st.button("OpenAI 테스트", use_container_width=True):
-        with st.spinner("OpenAI API 테스트 중..."):
-            raw, err = openai_chat([{"role": "user", "content": "Return exactly OK."}], model=llm_model, temperature=0.1, max_tokens=8)
-        st.error(err) if err else st.success(f"응답: {raw}")
+    temperature = st.slider("창의성", 0.1, 1.2, 0.78, 0.05)
+    if LLM_PIPELINE_IMPORT_ERROR:
+        st.error(f"LLM 파이프라인 로드 실패: {LLM_PIPELINE_IMPORT_ERROR}")
     if st.button("Supabase 테스트", use_container_width=True):
-        rows, err = load_packages(1)
+        _, err = load_packages(1)
         st.error(err) if err else st.success("Supabase 연결 성공")
 
 if collect_button:
@@ -484,7 +458,7 @@ col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("수집 소재", len(stories))
 col2.metric("활성 소스", source_count)
 col3.metric("평균 Viral", avg_score)
-col4.metric("확정 소재", len(st.session_state.approved))
+col4.metric("본문 확보", len(st.session_state.source_texts))
 col5.metric("히스토리", len(st.session_state.history_rows))
 
 if st.session_state.collection_logs:
@@ -492,7 +466,7 @@ if st.session_state.collection_logs:
         for log in st.session_state.collection_logs:
             st.write(f"- {log}")
 
-tabs = st.tabs(["📡 소스", "🏆 리더보드", "🎬 제작 패키지", "🗂️ 히스토리", "🧪 원칙/DB"])
+tabs = st.tabs(["📡 소스", "🏆 리더보드", "🎙️ 라이브 제작실", "🗂️ 히스토리", "🧪 원칙/DB"])
 
 with tabs[0]:
     st.subheader("소스 목록")
@@ -510,7 +484,7 @@ with tabs[1]:
             scores = calculate_scores(item)
             minutes_posted = minutes_since(item.posted_at)
             posted_at_str = item.posted_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if item.posted_at else None
-            rows.append({"id": f"{item.source}-{item.rank_position}-{abs(hash(item.url))}", "badge": status_badge(scores["production_score"]), "region": item.region, "source": item.source, "angle": story_angle(item.title), "title": item.title, "url": item.url, "rank": item.rank_position, "posted_at": posted_at_str, "collected_at": item.collected_at.strftime("%Y-%m-%d %H:%M:%S UTC"), "fresh_min": minutes_posted, "like_count": item.like_count, "comment_count": item.comment_count, "view_count": item.view_count, "original_excerpt": item.original_excerpt, **scores})
+            rows.append({"id": f"{item.source}-{item.rank_position}-{abs(hash(item.url))}", "badge": status_badge(scores["production_score"]), "region": item.region, "source": item.source, "angle": story_angle(item.title), "title": item.title, "url": item.url, "rank": item.rank_position, "posted_at": posted_at_str, "fresh_min": minutes_posted, "like_count": item.like_count, "comment_count": item.comment_count, "view_count": item.view_count, "original_excerpt": item.original_excerpt, **scores})
         rows = sorted(rows, key=lambda row: row["production_score"], reverse=True)
         st.session_state.rows = rows
         c1, c2, c3 = st.columns([2, 1, 1])
@@ -523,83 +497,167 @@ with tabs[1]:
         st.dataframe(filtered, use_container_width=True, hide_index=True, column_order=["badge", "region", "production_score", "viral_score", "velocity_score", "debate_score", "risk_score", "fresh_min", "rank", "source", "angle", "title", "url"])
 
 with tabs[2]:
-    st.subheader("소재 선택 → LLM 제작 패키지")
+    st.subheader("라이브 사연 상담 제작실")
     rows = st.session_state.get("rows", [])
     if not rows:
         st.info("먼저 리더보드에서 소재를 수집/생성해주세요.")
     else:
         idx = st.radio("제작할 소재", options=list(range(len(rows))), format_func=lambda i: f"{i + 1}. {rows[i]['title'][:60]} | {rows[i]['source']} | {rows[i]['region']}")
         selected = rows[idx]
-        analysis = infer_analysis(selected)
+        key = package_key(selected)
+        source_text = st.session_state.source_texts.get(key, selected.get("original_excerpt", ""))
+        analysis = st.session_state.story_analyses.get(key, infer_analysis(selected))
+        blueprint = st.session_state.live_blueprints.get(key, {})
+        longform = st.session_state.longform_scripts.get(key, "")
+        quality = st.session_state.quality_checks.get(key, {})
+        derivatives = st.session_state.derivative_assets.get(key, {})
+        package = st.session_state.production_packages.get(key)
+
         metric_cols = st.columns(6)
         metric_cols[0].metric("Production", selected.get("production_score", 0))
         metric_cols[1].metric("Viral", selected.get("viral_score", 0))
         metric_cols[2].metric("Debate", selected.get("debate_score", 0))
-        metric_cols[3].metric("댓글", selected.get("comment_count", 0) or "N/A")
-        metric_cols[4].metric("좋아요", selected.get("like_count", 0) or "N/A")
+        metric_cols[3].metric("본문 길이", len(source_text or ""))
+        metric_cols[4].metric("댓글", selected.get("comment_count", 0) or "N/A")
         metric_cols[5].metric("조회수", selected.get("view_count", 0) or "N/A")
-        with st.expander("원문 개요 / 안전 확인", expanded=True):
-            st.write(f"**원문 제목:** {selected['title']}")
-            st.write(f"**소스:** {selected['source']} / {selected['region']}")
-            st.write(f"**URL:** {selected['url']}")
-            st.text_area("원문 요약 또는 공개목록 excerpt", selected.get("original_excerpt", ""), height=120)
-            st.json(analysis)
-        option_cols = st.columns(5)
-        tone = option_cols[0].selectbox("톤", ["Drama", "Suspense", "Comical", "Documentary"], index=0)
-        structure = option_cols[1].selectbox("구조", ["Classic", "Twist", "Parallel"], index=0)
-        voice = option_cols[2].selectbox("시점", ["Third Person", "First Person", "Second Person"], index=0)
-        output_language = option_cols[3].selectbox("출력 언어", ["English", "Korean"], index=0)
-        pattern_pct = option_cols[4].slider("패턴 비중", 0, 30, 10, 5)
-        key = package_key(selected, tone, structure, voice, output_language, pattern_pct, llm_model)
-        col_a, col_b, col_c = st.columns(3)
-        if col_a.button("LLM API로 제작 패키지 생성", type="primary", use_container_width=True):
-            with st.spinner("LLM 제작 패키지 생성 중..."):
-                package, error = generate_llm_package(selected, analysis, tone, structure, voice, output_language, pattern_pct, llm_model, temperature)
-            st.session_state.production_packages[key] = package
-            st.warning(error) if error else st.success("LLM 제작 패키지 생성 완료")
-        package = st.session_state.production_packages.get(key)
-        if package and col_b.button("Supabase에 저장", use_container_width=True):
-            result, error = save_package(selected, package)
+
+        st.markdown("### ① 소재 카드")
+        st.write(f"**제목:** {selected['title']}")
+        st.write(f"**소스:** {selected['source']} / {selected['region']}")
+        st.write(f"**URL:** {selected['url']}")
+
+        st.markdown("### ② 본문 자동 가져오기")
+        fetch_col1, fetch_col2 = st.columns([1, 2])
+        if fetch_col1.button("본문 자동 가져오기", type="primary", use_container_width=True):
+            if fetch_article_body is None:
+                st.error("source_fetcher.py를 불러오지 못했습니다.")
+            else:
+                with st.spinner("본문을 자동으로 가져오는 중..."):
+                    result = fetch_article_body(selected["url"], selected.get("source", ""))
+                if result.ok:
+                    st.session_state.source_texts[key] = result.body
+                    source_text = result.body
+                    st.success(f"본문 확보 완료: {result.length}자 / {result.method}")
+                else:
+                    st.session_state.source_texts[key] = result.body or selected.get("original_excerpt", "")
+                    source_text = st.session_state.source_texts[key]
+                    st.warning(result.error or "본문 추출 실패")
+        allow_title_mode = fetch_col2.checkbox("본문 부족해도 제목 기반 테스트 허용", value=False)
+        source_text = st.text_area("제작 재료 본문 / 요약", value=source_text, height=220)
+        st.session_state.source_texts[key] = source_text
+
+        ready_for_llm = len(source_text or "") >= 500 or allow_title_mode
+        if not ready_for_llm:
+            st.warning("본문이 500자 미만입니다. 자동 본문 가져오기를 먼저 실행하거나 테스트 모드를 켜세요.")
+
+        st.markdown("### ③ 사연 해부")
+        if st.button("1차 LLM: 사연 해부하기", disabled=not ready_for_llm or analyze_story is None, use_container_width=True):
+            with st.spinner("사연의 핵심 갈등, 채팅 포인트, 사주/점성술 렌즈를 해부 중..."):
+                result, error = analyze_story(source_text, selected, llm_model, temperature)
             if error:
                 st.error(error)
             else:
-                st.success("Supabase 저장 완료")
-                if isinstance(result, list):
-                    st.session_state.history_rows = result + st.session_state.history_rows
-        col_c.download_button("원문 링크 저장", selected["url"], file_name="source_url.txt", use_container_width=True)
-        if not package:
-            st.info("아직 제작 패키지가 없습니다. 생성 버튼을 누르세요.")
-            st.text_area("템플릿 초안", make_template_script(selected, analysis), height=360)
-        else:
-            if package.get("api_error"):
-                st.error(package["api_error"])
-            tabs_pkg = st.tabs(["개요/분석", "10분 롱폼", "쇼츠", "Threads", "카드뉴스", "제목/썸네일", "JSON"])
-            with tabs_pkg[0]:
-                st.text_area("운영자용 한글 요약", package_to_text(package, "overview_ko"), height=120)
-                st.text_area("운영자용 한글 번역", package_to_text(package, "translation_ko"), height=160)
-                st.text_area("LLM 추론 분석", package_to_text(package, "analysis"), height=260)
-            with tabs_pkg[1]:
-                edited = st.text_area("10분 롱폼 대본", package_to_text(package, "longform_script"), height=520)
-                if st.button("수정한 롱폼 저장", use_container_width=True):
-                    package["longform_script"] = edited
-                    st.session_state.production_packages[key] = package
-                    st.success("수정본 저장 완료")
-            exp = expansions_from_package(package)
-            with tabs_pkg[2]:
-                st.text_area("30초 쇼츠", exp["30초 쇼츠"], height=160)
-                st.text_area("60초 쇼츠", exp["60초 쇼츠"], height=220)
-                st.text_area("90초 쇼츠", exp["90초 쇼츠"], height=260)
-            with tabs_pkg[3]:
+                st.session_state.story_analyses[key] = result
+                analysis = result
+                st.success("사연 해부 완료")
+        st.json(analysis)
+
+        st.markdown("### ④ 라이브 상담 구조 설계")
+        if st.button("2차 LLM: 라이브 구조 설계하기", disabled=not bool(analysis) or build_live_blueprint is None, use_container_width=True):
+            with st.spinner("반말/존댓말 혼합 라이브 상담 구조를 설계 중..."):
+                result, error = build_live_blueprint(analysis, selected, llm_model, temperature)
+            if error:
+                st.error(error)
+            else:
+                st.session_state.live_blueprints[key] = result
+                blueprint = result
+                st.success("라이브 구조 설계 완료")
+        if blueprint:
+            st.json(blueprint)
+
+        st.markdown("### ⑤ 10분 롱폼 대본")
+        if st.button("3차 LLM: 10분 대본 쓰기", disabled=not bool(blueprint) or write_live_longform is None, type="primary", use_container_width=True):
+            with st.spinner("라이브 사연 상담형 반존대 대본을 작성 중..."):
+                script, error = write_live_longform(source_text, analysis, blueprint, selected, llm_model, temperature)
+            if error:
+                st.error(error)
+            else:
+                st.session_state.longform_scripts[key] = script
+                longform = script
+                if quality_check_live_script:
+                    st.session_state.quality_checks[key] = quality_check_live_script(script)
+                    quality = st.session_state.quality_checks[key]
+                st.success("10분 대본 생성 완료")
+        edited_longform = st.text_area("10분 롱폼 대본", value=longform, height=520)
+        if edited_longform != longform:
+            st.session_state.longform_scripts[key] = edited_longform
+            longform = edited_longform
+
+        st.markdown("### ⑥ 품질검사")
+        if st.button("대본 품질검사", disabled=not bool(longform) or quality_check_live_script is None, use_container_width=True):
+            st.session_state.quality_checks[key] = quality_check_live_script(longform)
+            quality = st.session_state.quality_checks[key]
+        render_quality(quality)
+
+        st.markdown("### ⑦ 파생 콘텐츠")
+        if st.button("4차 LLM: 쇼츠/Threads/카드뉴스 만들기", disabled=not bool(longform) or generate_derivatives is None, use_container_width=True):
+            with st.spinner("롱폼 대본 기반으로 파생 콘텐츠 생성 중..."):
+                result, error = generate_derivatives(longform, analysis, selected, llm_model, temperature)
+            if error:
+                st.error(error)
+            else:
+                st.session_state.derivative_assets[key] = result
+                derivatives = result
+                st.success("파생 콘텐츠 생성 완료")
+        if derivatives:
+            exp = expansions_from_package(derivatives)
+            der_tabs = st.tabs(["쇼츠", "Threads", "카드뉴스", "제목/썸네일", "JSON"])
+            with der_tabs[0]:
+                st.text_area("30초 쇼츠", exp["30초 쇼츠"], height=140)
+                st.text_area("60초 쇼츠", exp["60초 쇼츠"], height=180)
+                st.text_area("90초 쇼츠", exp["90초 쇼츠"], height=220)
+            with der_tabs[1]:
                 st.text_area("5-post Thread", exp["Threads 5"], height=220)
                 st.text_area("10-post Thread", exp["Threads 10"], height=320)
-            with tabs_pkg[4]:
-                st.text_area("카드뉴스 패키지", exp["카드뉴스"], height=420)
-            with tabs_pkg[5]:
-                st.text_area("썸네일 문구", exp["썸네일"], height=140)
-                st.text_area("제목 후보", exp["제목"], height=240)
-                st.text_area("댓글 질문", package_to_text(package, "comment_question"), height=100)
-            with tabs_pkg[6]:
-                st.download_button("제작 패키지 JSON 다운로드", data=json.dumps(package, ensure_ascii=False, indent=2), file_name="story_production_package.json", mime="application/json", use_container_width=True)
+            with der_tabs[2]:
+                cards = derivatives.get("card_news", {}).get("8_cards", []) if isinstance(derivatives.get("card_news"), dict) else []
+                if cards:
+                    for i, card in enumerate(cards, start=1):
+                        with st.expander(f"{i}장 · {card.get('title', '제목 없음')}", expanded=i == 1):
+                            st.write(card.get("body", ""))
+                            st.caption(card.get("design_note", ""))
+                            st.text_area(f"{i}장 이미지 프롬프트", card.get("image_prompt", ""), height=90)
+                else:
+                    st.text_area("카드뉴스 JSON", exp["카드뉴스"], height=360)
+            with der_tabs[3]:
+                st.text_area("썸네일 문구", exp["썸네일"], height=120)
+                st.text_area("제목 후보", exp["제목"], height=200)
+                st.text_area("댓글 질문", derivatives.get("comment_question", ""), height=100)
+            with der_tabs[4]:
+                st.json(derivatives)
+
+        st.markdown("### ⑧ 저장")
+        if st.button("제작 패키지 조립", disabled=not bool(longform), use_container_width=True):
+            if build_package:
+                package = build_package(selected, source_text, analysis, blueprint, longform, quality, derivatives)
+            else:
+                package = fallback_package(selected, analysis)
+                package["longform_script"] = longform
+            st.session_state.production_packages[key] = package
+            st.success("제작 패키지 조립 완료")
+        package = st.session_state.production_packages.get(key)
+        if package:
+            save_col, down_col = st.columns(2)
+            if save_col.button("Supabase에 저장", use_container_width=True):
+                result, error = save_package(selected, package)
+                if error:
+                    st.error(error)
+                else:
+                    st.success("Supabase 저장 완료")
+                    if isinstance(result, list):
+                        st.session_state.history_rows = result + st.session_state.history_rows
+            down_col.download_button("패키지 JSON 다운로드", json.dumps(package, ensure_ascii=False, indent=2), file_name="live_advice_package.json", mime="application/json", use_container_width=True)
+            with st.expander("최종 패키지 JSON"):
                 st.json(package)
 
 with tabs[3]:
@@ -641,7 +699,7 @@ with tabs[4]:
   package_json jsonb,
   created_at timestamptz default now()
 );""", language="sql")
-    st.markdown("### 앱 설정")
-    st.write("OpenAI와 Supabase 값은 Streamlit Secrets 또는 환경변수에서 읽습니다. 키는 코드에 저장하지 않습니다.")
+    st.markdown("### v0.5 제작 플로우")
+    st.write("본문 자동 가져오기 → 사연 해부 → 라이브 구조 설계 → 10분 대본 → 품질검사 → 파생 콘텐츠 → 저장")
 
-st.caption("Story Pattern Lab v0.4 · OpenAI + Supabase 연결형 Streamlit 제작 대시보드")
+st.caption("Story Pattern Lab v0.5 · 라이브 사연 상담형 반존대 대본 제작기")
