@@ -10,6 +10,17 @@ from urllib.request import Request, urlopen
 
 import streamlit as st
 
+try:
+    from localization_rules import localization_prompt
+except Exception:
+    def localization_prompt() -> str:
+        return """
+로컬라이징 원칙:
+- 직역하지 말고 원문의 관계 맥락과 사회적 맥락을 자연스러운 한국어/영어로 옮긴다.
+- 민감 주제는 단정하지 않는다. 성 정체성, 성적 지향, 사생활, 아웃팅 표현은 특히 정확하게 쓴다.
+- '사생활이 터졌다', 'privacy exploded' 같은 어색한 표현 금지.
+"""
+
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 
@@ -89,20 +100,27 @@ STYLE_REFERENCE_BLOCK = """
 말투 기준:
 - 좋은 예: 아니 잠깐만. 이건 생일을 챙겼냐 안 챙겼냐 문제가 아니야. 사연자님이 그날 자기 기분을 자기가 수습하고 있었단 말이에요.
 - 좋은 예: 여러분들 지금 채팅에 이혼하라 올라오는데, 얘들아 잠깐만. 사람 관계를 그렇게 시장가 매도하듯이 던지면 안 됩니다.
-- 좋은 예: 제가 작두를 막 타자는 건 아닌데요. 이건 사주로 치면 기념일에 기대하는 기운이 완전히 다른 두 사람이 부딪힌 느낌이에요.
+- 좋은 예: 제가 작두를 막 타자는 건 아닌데요. 이건 사주로 치면 비밀의 자리가 갑자기 밝은 데로 끌려 나온 느낌이에요.
 - 좋은 예: 근데 또 남편이 악마다, 이렇게 박아버리면 상담이 안 돼요. 사연자님이 지금 해야 하는 건 처벌이 아니라 확인이에요.
 - 나쁜 예: 안녕하세요 여러분 오늘은 많은 분들이 공감할 수 있는 사연입니다. 함께 고민해볼까요?
 - 나쁜 예: 감정을 솔직하게 표현하는 것이 중요합니다. 깊은 대화를 나눠보세요.
 - 나쁜 예: 별자리가 맞지 않을 수 있으니 고려해보세요.
+- 나쁜 예: 사생활이 터졌다. 성 정체성이 드러났다. privacy exploded.
 """
 
 
 def analyze_story(source_text: str, row: dict, model: str, temperature: float) -> tuple[dict, Optional[str]]:
-    system = """너는 커뮤니티 사연을 유튜브 라이브 상담 콘텐츠로 개발하는 PD다.
+    system = f"""너는 커뮤니티 사연을 유튜브 라이브 상담 콘텐츠로 개발하는 PD다.
 원문을 복제하지 말고, 개인정보와 식별 요소를 일반화한다.
-대본을 쓰지 말고 사연의 구조만 해부한다. 반드시 JSON만 반환한다."""
+대본을 쓰지 말고 사연의 구조만 해부한다.
+
+{localization_prompt()}
+
+반드시 JSON만 반환한다."""
     schema = {
-        "story_summary": "사연 핵심 요약",
+        "story_summary": "사연 핵심 요약. 번역투 없이 자연스러운 한국어",
+        "localized_context": "원문 문화권/플랫폼 맥락을 한국 시청자가 이해할 수 있게 변환한 설명",
+        "translation_notes": ["직역하면 어색하거나 위험한 표현과 권장 표현"],
         "sender_problem": "사연자가 진짜 상담받고 싶은 문제",
         "main_conflict": "핵심 갈등",
         "relationship_map": ["인물 관계"],
@@ -117,7 +135,7 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
     raw, error = openai_chat([
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
-    ], model=model, temperature=temperature, max_tokens=3000)
+    ], model=model, temperature=temperature, max_tokens=3500)
     if error:
         return {}, error
     parsed, parse_error = extract_json_object(raw or "")
@@ -128,12 +146,14 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
     system = f"""너는 라이브 사연 상담형 유튜브 대본의 구성 작가다.
 {LIVE_NARRATOR_RULES}
 {STYLE_REFERENCE_BLOCK}
+{localization_prompt()}
 
 10분 분량 대본을 위한 비트시트를 만든다. 아직 최종 대본은 쓰지 않는다.
 각 비트에는 700자 이상으로 확장될 수 있는 장면/리액션/채팅/상담 내용을 구체적으로 설계한다.
 반드시 JSON만 반환한다."""
     schema = {
-        "opening_hook": "00:00에서 시작할 후킹",
+        "opening_hook": "00:00에서 시작할 후킹. 번역투 금지. 사건의 논점부터 시작",
+        "localization_strategy": "원문 표현을 어떤 한국어 맥락으로 바꿀지",
         "beats": [
             {"timecode": "00:00", "role": "라이브 오프닝", "purpose": "", "required_length_hint": "최종 대본 700자 이상", "tone_note": ""},
             {"timecode": "00:50", "role": "사연 읽기", "purpose": "", "required_length_hint": "최종 대본 800자 이상", "tone_note": ""},
@@ -149,13 +169,13 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
         ],
         "must_use_phrases": ["여러분들", "아니 잠깐만", "사연자님", "제가 보기엔요", "작두 살짝만 탈게요", "야 이건 좀", "저기요 그러지 마세요"],
         "advice_steps": ["해결 방법 1", "해결 방법 2", "해결 방법 3"],
-        "forbidden_generic_phrases": ["함께 고민해보면 좋을 것 같아요", "그럼 시작해볼까요", "정말 다양한 시각이 있는 것 같아요"],
+        "forbidden_generic_phrases": ["함께 고민해보면 좋을 것 같아요", "그럼 시작해볼까요", "정말 다양한 시각이 있는 것 같아요", "사생활이 터졌다"],
     }
     user = {"title": row.get("title"), "analysis": analysis, "required_schema": schema}
     raw, error = openai_chat([
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
-    ], model=model, temperature=temperature, max_tokens=4200)
+    ], model=model, temperature=temperature, max_tokens=4500)
     if error:
         return {}, error
     parsed, parse_error = extract_json_object(raw or "")
@@ -163,9 +183,10 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
 
 
 def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: dict, model: str, temperature: float) -> tuple[str, Optional[str]]:
-    system = f"""너는 실제 한국 라이브 유튜버 말투를 잘 쓰는 대본 작가다.
+    system = f"""너는 실제 한국 라이브 유튜버 말투를 잘 쓰는 대본 작가이자 고급 로컬라이징 에디터다.
 {LIVE_NARRATOR_RULES}
 {STYLE_REFERENCE_BLOCK}
+{localization_prompt()}
 
 절대 조건:
 - 10분 롱폼 내레이션 대본을 쓴다.
@@ -174,6 +195,7 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
 - 각 타임코드마다 최소 600자 이상 실제 말로 작성한다. 제목/요약/목차만 쓰면 실패다.
 - 오프닝은 흔한 인사 금지. 바로 사연의 이상한 지점으로 들어간다.
 - "안녕하세요 여러분", "함께 고민해볼까요", "다양한 시각이 있네요", "정말 서운하셨겠어요" 같은 AI식 문장 금지.
+- "사생활이 터졌다", "성 정체성이 드러났다"처럼 과격하거나 부정확한 번역투 금지. 맥락에 따라 "개인적인 일이 원치 않게 알려졌다", "아웃팅처럼 받아들여질 수 있었다", "사적인 부분이 사람들 입에 오르내리게 됐다"처럼 쓴다.
 - 존댓말 진행 50%, 반말 리액션 30%, 채팅 받아치기 10%, 혼잣말/자기정정 10% 정도로 섞는다.
 - "사연자님" 7회 이상, "여러분" 8회 이상, "채팅" 또는 "댓글" 반응 3회 이상, 현실 조언 3개 이상 포함한다.
 - "아니 잠깐만", "야 이건", "근데", "제가 보기엔요", "저기요", "작두 살짝만", "사주로 치면", "기운", "궁합", "운의 흐름" 중 여러 개를 자연스럽게 사용한다.
@@ -191,7 +213,7 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
         "source_text_for_context_only": clean_text(source_text, 16000),
         "analysis": analysis,
         "blueprint": blueprint,
-        "mission": "짧고 점잖은 상담 대본이 아니라, 진짜 라이브 유튜버가 사연 읽으며 채팅과 티키타카하고 사주/점성술 감각으로 풀이하는 10분짜리 장문 대본을 작성하라.",
+        "mission": "짧고 점잖은 상담 대본이 아니라, 진짜 라이브 유튜버가 사연 읽으며 채팅과 티키타카하고 사주/점성술 감각으로 풀이하는 10분짜리 장문 대본을 작성하라. 번역투를 없애고 현지화 수준을 최대로 끌어올려라.",
         "minimum_length_reminder": "8,000자 미만이면 실패다. 모든 타임코드를 충분히 확장하라.",
     }
     raw, error = openai_chat([
@@ -202,10 +224,11 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
 
 
 def generate_derivatives(longform_script: str, analysis: dict, row: dict, model: str, temperature: float) -> tuple[dict, Optional[str]]:
-    system = f"""너는 롱폼 대본을 쇼츠, Threads, 카드뉴스로 재가공하는 콘텐츠 편집자다.
+    system = f"""너는 롱폼 대본을 쇼츠, Threads, 카드뉴스로 재가공하는 콘텐츠 편집자이자 고급 로컬라이징 에디터다.
 {LIVE_NARRATOR_RULES}
 {STYLE_REFERENCE_BLOCK}
-롱폼의 화자 말투를 유지한다. 반드시 JSON만 반환한다."""
+{localization_prompt()}
+롱폼의 화자 말투와 로컬라이징 수준을 유지한다. 반드시 JSON만 반환한다."""
     schema = {
         "shorts": {"30s": "", "60s": "", "90s": ""},
         "threads": {"5_post": "", "10_post": ""},
@@ -235,6 +258,8 @@ def build_package(row: dict, source_text: str, analysis: dict, blueprint: dict, 
             "body_saved": False,
         },
         "overview_ko": analysis.get("story_summary", ""),
+        "localized_context": analysis.get("localized_context", ""),
+        "translation_notes": analysis.get("translation_notes", []),
         "analysis": analysis,
         "live_blueprint": blueprint,
         "longform_script": longform_script,
