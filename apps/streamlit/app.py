@@ -442,6 +442,18 @@ with tabs[1]:
         for item in stories:
             scores = calculate_scores(item)
             row_id = f"{item.source}-{item.rank_position}-{abs(hash(item.url))}"
+            # compute posted time string and per-hour metrics
+            posted_at_str = None
+            comments_per_hour = None
+            score_per_hour = None
+            minutes_posted = minutes_since(item.posted_at)
+            if item.posted_at:
+                posted_at_str = item.posted_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                if minutes_posted and minutes_posted > 0:
+                    hours_elapsed = minutes_posted / 60.0
+                    comments_per_hour = round(item.comment_count / hours_elapsed, 2) if item.comment_count else 0
+                    score_per_hour = round(item.like_count / hours_elapsed, 2) if item.like_count else 0
+            # build row dictionary with extended metrics
             rows.append(
                 {
                     "id": row_id,
@@ -452,27 +464,71 @@ with tabs[1]:
                     "debate_score": scores["debate_score"],
                     "production_score": scores["production_score"],
                     "risk_score": scores["risk_score"],
-                    "fresh_min": minutes_since(item.posted_at),
+                    "fresh_min": minutes_posted,
                     "rank": item.rank_position,
                     "source": item.source,
                     "angle": story_angle(item.title),
                     "title": item.title,
                     "url": item.url,
                     "collected_at": item.collected_at.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                    "posted_at": posted_at_str,
+                    "like_count": item.like_count,
+                    "comment_count": item.comment_count,
+                    "view_count": item.view_count,
+                    "comments_per_hour": comments_per_hour,
+                    "score_per_hour": score_per_hour,
                     "original_excerpt": item.original_excerpt,
                 }
             )
-        rows = sorted(rows, key=lambda row: row["production_score"], reverse=True)
+        # store for later use
+        rows = sorted(rows, key=lambda row: row["production_score"] if row["production_score"] is not None else 0, reverse=True)
         st.session_state.rows = rows
 
-        sort_key = st.selectbox("정렬 기준", ["production_score", "viral_score", "velocity_score", "debate_score", "risk_score", "fresh_min"], index=0)
-        reverse = sort_key != "risk_score" and sort_key != "fresh_min"
-        rows_sorted = sorted(rows, key=lambda row: row[sort_key] if row[sort_key] is not None else 999999, reverse=reverse)
+        # allow sorting by additional columns
+        sort_options = [
+            "production_score",
+            "viral_score",
+            "velocity_score",
+            "debate_score",
+            "risk_score",
+            "fresh_min",
+            "like_count",
+            "comment_count",
+            "view_count",
+            "comments_per_hour",
+            "score_per_hour",
+        ]
+        sort_key = st.selectbox("정렬 기준", sort_options, index=0)
+        reverse = sort_key not in ["risk_score", "fresh_min"]
+        rows_sorted = sorted(
+            rows,
+            key=lambda row: row[sort_key] if row[sort_key] is not None else -1,
+            reverse=reverse,
+        )
         st.dataframe(
             rows_sorted,
             use_container_width=True,
             hide_index=True,
-            column_order=["badge", "region", "production_score", "viral_score", "velocity_score", "debate_score", "risk_score", "fresh_min", "rank", "source", "angle", "title", "url"],
+            column_order=[
+                "badge",
+                "region",
+                "production_score",
+                "viral_score",
+                "velocity_score",
+                "debate_score",
+                "risk_score",
+                "fresh_min",
+                "like_count",
+                "comment_count",
+                "view_count",
+                "comments_per_hour",
+                "score_per_hour",
+                "rank",
+                "source",
+                "angle",
+                "title",
+                "url",
+            ],
         )
 
 with tabs[2]:
