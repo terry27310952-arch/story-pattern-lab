@@ -413,9 +413,29 @@ if st.session_state.collection_logs:
         for log in st.session_state.collection_logs:
             st.write(f"- {log}")
 
-tabs = st.tabs(["📡 사이트별 소스", "🏆 스코어 리더보드", "🔎 소재 상세", "✅ 제작 확정", "🧪 재가공 원칙"])
+# Define tabs with step numbers, icons and descriptive names
+tabs = st.tabs([
+    "📡 Step 1: 소스 설정",
+    "🏆 Step 2: 리더보드",
+    "🔎 Step 3: 소재 상세",
+    "✅ Step 4: 제작 확정",
+    "🧪 Step 5: 재가공/원칙",
+])
 
 with tabs[0]:
+    # Step instructions for source selection
+    st.markdown(
+        """
+        **Step 1. 소스 설정**
+
+        아래에서 수집할 **해외 RSS 소스**와 **국내 공개 목록 소스**를 선택하고, 좌측 사이드바의 `소스당 수집 개수`를 조절합니다. 그런 다음 **`실시간 후보 수집`** 버튼을 눌러 실시간 후보 목록을 만듭니다.
+
+        - **해외 소스 리스트**: Reddit 기반 RSS 피드를 통해 인기/신고 사연을 가져옵니다.
+        - **국내 소스 후보**: 국내 커뮤니티의 후보 소스를 나열하고 있으며, 현재 실험 수집이 가능한 사이트는 별도로 표시됩니다.
+        
+        선택을 완료했으면 **Step 2. 리더보드** 탭에서 점수를 기반으로 소재를 정렬하고 탐색해 보세요.
+        """
+    )
     st.subheader("해외 소스 리스트")
     overseas_rows = []
     for name, meta in OVERSEAS_SOURCES.items():
@@ -434,6 +454,22 @@ with tabs[0]:
     )
 
 with tabs[1]:
+    # Step instructions for leaderboard
+    st.markdown(
+        """
+        **Step 2. 리더보드**
+
+        수집된 소재를 **Viral Score**, **Velocity Score**, **Debate Score**, **Production Score** 등 다양한 지표로 정렬하고 필터링할 수 있습니다.
+
+        - **제목 검색**: 키워드를 입력하면 해당 단어를 포함한 소재만 표시됩니다.
+        - **지역 필터**: 해외/국내 소재를 선택하여 원하는 지역만 볼 수 있습니다.
+        - **각도 필터**: 연애·가족·직장·친구 등 각도(Angle)별로 선호하는 소재를 선택합니다.
+        - **위험 점수 상한**: 위험도가 높은 소재를 제외하고 볼 수 있습니다.
+        - **정렬 기준 선택**: 생산성 점수, 바이럴 점수, 댓글수 등 다양한 기준으로 순위를 조정합니다.
+        
+        원하는 소재를 찾았으면 **Step 3. 소재 상세** 탭으로 이동해 구체적인 정보를 확인하고 제작 여부를 결정하세요.
+        """
+    )
     st.subheader("스코어 리더보드")
     if not stories:
         st.info("왼쪽에서 소스를 고르고 '실시간 후보 수집'을 눌러주세요.")
@@ -484,7 +520,37 @@ with tabs[1]:
         rows = sorted(rows, key=lambda row: row["production_score"] if row["production_score"] is not None else 0, reverse=True)
         st.session_state.rows = rows
 
-        # allow sorting by additional columns
+        # -- Filtering & Searching -------------------------------------
+        # Offer simple keyword search across titles
+        search_query = st.text_input("제목 검색", value="", help="키워드를 입력하면 해당 단어를 포함하는 제목만 표시합니다.")
+
+        # Filter by region (domestic vs overseas)
+        region_options = sorted(set(row["region"] for row in rows))
+        selected_regions = st.multiselect(
+            "지역 필터", region_options, default=region_options, help="해외와 국내 소재를 선택하여 필터링합니다."
+        )
+
+        # Filter by angle/category for more precise browsing
+        angle_options = sorted(set(row["angle"] for row in rows))
+        selected_angles = st.multiselect(
+            "각도 필터", angle_options, default=angle_options, help="사연 각도별로 필터링합니다."
+        )
+
+        # Filter by risk score threshold
+        max_risk = st.slider(
+            "위험 점수 상한", 0, 100, 80, step=5, help="이 값보다 높은 위험 점수를 가진 소재는 제외합니다."
+        )
+
+        filtered_rows = [
+            row
+            for row in rows
+            if (not search_query or search_query.lower() in row["title"].lower())
+            and row["region"] in selected_regions
+            and row["angle"] in selected_angles
+            and row["risk_score"] <= max_risk
+        ]
+
+        # -- Sorting -----------------------------------------------------
         sort_options = [
             "production_score",
             "viral_score",
@@ -498,13 +564,16 @@ with tabs[1]:
             "comments_per_hour",
             "score_per_hour",
         ]
-        sort_key = st.selectbox("정렬 기준", sort_options, index=0)
+        sort_key = st.selectbox("정렬 기준", sort_options, index=0, help="리더보드를 정렬할 기준을 선택하세요.")
+        # For risk_score and fresh_min smaller values are better; for others, larger is better
         reverse = sort_key not in ["risk_score", "fresh_min"]
         rows_sorted = sorted(
-            rows,
+            filtered_rows,
             key=lambda row: row[sort_key] if row[sort_key] is not None else -1,
             reverse=reverse,
         )
+
+        # -- Display -----------------------------------------------------
         st.dataframe(
             rows_sorted,
             use_container_width=True,
@@ -532,63 +601,174 @@ with tabs[1]:
         )
 
 with tabs[2]:
-    st.subheader("행 클릭 대체: 소재 선택 상세 패널")
+    # Step instructions for material detail
+    st.markdown(
+        """
+        **Step 3. 소재 상세**
+
+        리더보드에서 마음에 드는 소재가 있다면 여기에서 상세 정보를 확인할 수 있습니다.
+
+        - 상단의 **소재를 선택하세요** 목록에서 분석할 소재를 선택하세요.
+        - 좌측에는 핵심 점수와 상태 변경·저장 버튼이 표시됩니다.
+        - **게시물 개요**: 원문 링크와 한글 번역(예정)을 볼 수 있습니다.
+        - **LLM 추론 분석**: 핵심 갈등, 관계도, 패턴 분석 등의 AI 분석 결과를 미리 확인합니다.
+        - **10분 롱폼 대본**과 **60초/30초 쇼츠**, **Threads**, **카드뉴스/제목** 등 확장된 제작물을 확인할 수 있습니다.
+        
+        제작을 결정했다면 **이 소재 제작 확정** 버튼을 눌러 Step 4로 이동하세요.
+        """
+    )
+    st.subheader("소재 선택 및 상세 확인")
     rows = st.session_state.get("rows", [])
     if not rows:
         st.info("먼저 리더보드에서 소재를 수집/생성해주세요.")
     else:
-        selected_title = st.selectbox("상세 확인할 게시물", [row["title"] for row in rows])
-        selected = next(row for row in rows if row["title"] == selected_title)
+        # Display a more intuitive selection using radio buttons with index and truncated title
+        indices = list(range(len(rows)))
+        # Use a richer label showing title, source/platform and region to help users choose
+        selected_index = st.radio(
+            "소재를 선택하세요:",
+            options=indices,
+            format_func=lambda i: (
+                f"{i + 1}. "
+                + (
+                    rows[i]["title"][:40] + ("…" if len(rows[i]["title"]) > 40 else "")
+                )
+                + (f" | {rows[i].get('source', rows[i].get('platform', ''))}" if rows[i].get('source', rows[i].get('platform', '')) else "")
+                + (f" | {rows[i].get('region', '')}" if rows[i].get('region', '') else "")
+            ),
+            key="detail_selection",
+        )
+        selected = rows[selected_index]
+        # Perform analysis only once per selection
         analysis = infer_analysis(selected)
 
-        left, right = st.columns([1, 1])
-        with left:
-            st.markdown("### 게시물 개요")
+        # Layout: show key metrics and actions on the left, analysis on the right
+        top_cols = st.columns([1, 1, 1])
+        with top_cols[0]:
+            st.metric("Viral Score", calculate_scores(StoryItem(
+                source=selected['source'],
+                region=selected['region'],
+                category=selected['angle'],
+                title=selected['title'],
+                url=selected['url'],
+                original_excerpt=selected['original_excerpt'],
+                posted_at=parse_datetime(selected['posted_at']) if selected.get('posted_at') else None,
+                collected_at=parse_datetime(selected['collected_at']),
+                rank_position=selected['rank'],
+                like_count=selected.get('like_count', 0),
+                comment_count=selected.get('comment_count', 0),
+                view_count=selected.get('view_count', 0),
+            ))['viral_score'])
+            st.metric("Debate Score", calculate_scores(StoryItem(
+                source=selected['source'],
+                region=selected['region'],
+                category=selected['angle'],
+                title=selected['title'],
+                url=selected['url'],
+                original_excerpt=selected['original_excerpt'],
+                posted_at=parse_datetime(selected['posted_at']) if selected.get('posted_at') else None,
+                collected_at=parse_datetime(selected['collected_at']),
+                rank_position=selected['rank'],
+                like_count=selected.get('like_count', 0),
+                comment_count=selected.get('comment_count', 0),
+                view_count=selected.get('view_count', 0),
+            ))['debate_score'])
+        with top_cols[1]:
+            st.metric("Velocity Score", calculate_scores(StoryItem(
+                source=selected['source'],
+                region=selected['region'],
+                category=selected['angle'],
+                title=selected['title'],
+                url=selected['url'],
+                original_excerpt=selected['original_excerpt'],
+                posted_at=parse_datetime(selected['posted_at']) if selected.get('posted_at') else None,
+                collected_at=parse_datetime(selected['collected_at']),
+                rank_position=selected['rank'],
+                like_count=selected.get('like_count', 0),
+                comment_count=selected.get('comment_count', 0),
+                view_count=selected.get('view_count', 0),
+            ))['velocity_score'])
+            st.metric("Production Score", calculate_scores(StoryItem(
+                source=selected['source'],
+                region=selected['region'],
+                category=selected['angle'],
+                title=selected['title'],
+                url=selected['url'],
+                original_excerpt=selected['original_excerpt'],
+                posted_at=parse_datetime(selected['posted_at']) if selected.get('posted_at') else None,
+                collected_at=parse_datetime(selected['collected_at']),
+                rank_position=selected['rank'],
+                like_count=selected.get('like_count', 0),
+                comment_count=selected.get('comment_count', 0),
+                view_count=selected.get('view_count', 0),
+            ))['production_score'])
+        with top_cols[2]:
+            st.metric("댓글/시간", selected.get('comments_per_hour', 0) or 0)
+            st.metric("좋아요/시간", selected.get('score_per_hour', 0) or 0)
+
+        # Detail sections in expanders for better organization
+        with st.expander("📄 게시물 개요", expanded=True):
             st.write(f"**원문 제목:** {selected['title']}")
             st.write(f"**지역/소스:** {selected['region']} · {selected['source']}")
             st.write(f"**분류:** {selected['angle']}")
             st.write(f"**수집 시각:** {selected['collected_at']}")
+            if selected.get('posted_at'):
+                st.write(f"**게시 시각:** {selected['posted_at']}")
             st.write(f"**원문 링크:** {selected['url']}")
-            st.text_area("원문 요약 / 공개목록 excerpt", selected["original_excerpt"] or "RSS/공개목록에서 제공한 요약이 없습니다.", height=160)
-            st.text_area("한글 번역", pseudo_translate(selected["original_excerpt"] or selected["title"]), height=160)
+            st.text_area("원문 요약 / 공개목록 excerpt", selected.get("original_excerpt") or "RSS/공개목록에서 제공한 요약이 없습니다.", height=160)
+            st.text_area("한글 번역", pseudo_translate(selected.get("original_excerpt") or selected["title"]), height=160)
 
-        with right:
-            st.markdown("### LLM 추론 분석 초안")
+        with st.expander("🔍 LLM 추론 분석", expanded=False):
             for key, value in analysis.items():
                 st.write(f"**{key}:** {value}")
 
-        status = st.selectbox("제작 상태", STATUS_OPTIONS, index=STATUS_OPTIONS.index(st.session_state.statuses.get(selected["id"], "Candidate")))
-        st.session_state.statuses[selected["id"]] = status
+        # Status selection and actions
+        status = st.selectbox(
+            "제작 상태", STATUS_OPTIONS,
+            index=STATUS_OPTIONS.index(st.session_state.statuses.get(selected.get("id", selected['url']), "Candidate")),
+        )
+        st.session_state.statuses[selected.get("id", selected['url'])] = status
 
-        approve_col, script_col = st.columns(2)
-        with approve_col:
-            if st.button("이 소재 제작 확정", type="primary"):
+        actions_cols = st.columns(2)
+        with actions_cols[0]:
+            if st.button("이 소재 제작 확정", key=f"approve_{selected_index}", type="primary"):
                 if selected not in st.session_state.approved:
                     st.session_state.approved.append(selected)
-                st.session_state.statuses[selected["id"]] = "Approved"
+                st.session_state.statuses[selected.get("id", selected['url'])] = "Approved"
                 st.success("제작 소재로 확정했습니다.")
-        with script_col:
-            st.download_button("원문 링크 저장", selected["url"], file_name="source_url.txt")
+        with actions_cols[1]:
+            st.download_button("원문 링크 저장", selected["url"], file_name="source_url.txt", key=f"download_{selected_index}")
 
-        st.markdown("### 10분 롱폼 대본 초안")
-        st.text_area("10분 대본", make_10min_script(selected, analysis), height=420)
+        # Longform script and expansions in expanders
+        with st.expander("📝 10분 롱폼 대본", expanded=False):
+            st.text_area("10분 대본", make_10min_script(selected, analysis), height=420)
 
-        st.markdown("### 확장 제작물")
-        expansion_tabs = st.tabs(["60초 쇼츠", "30초 쇼츠", "Threads", "카드뉴스", "썸네일/제목"])
-        expansions = make_expansions(selected)
-        with expansion_tabs[0]:
-            st.text_area("60초 쇼츠", expansions["60초 쇼츠"], height=180)
-        with expansion_tabs[1]:
-            st.text_area("30초 쇼츠", expansions["30초 쇼츠"], height=150)
-        with expansion_tabs[2]:
-            st.text_area("Threads", expansions["Threads"], height=180)
-        with expansion_tabs[3]:
-            st.text_area("카드뉴스 8장", expansions["카드뉴스 8장"], height=220)
-        with expansion_tabs[4]:
-            st.text_area("썸네일 문구", expansions["썸네일 문구"], height=100)
-            st.text_area("제목 10개", expansions["제목 10개"], height=180)
+        with st.expander("🎬 확장 제작물", expanded=False):
+            expansions = make_expansions(selected)
+            sub_tabs = st.tabs(["60초 쇼츠", "30초 쇼츠", "Threads", "카드뉴스", "썸네일/제목"])
+            with sub_tabs[0]:
+                st.text_area("60초 쇼츠", expansions["60초 쇼츠"], height=180)
+            with sub_tabs[1]:
+                st.text_area("30초 쇼츠", expansions["30초 쇼츠"], height=150)
+            with sub_tabs[2]:
+                st.text_area("Threads", expansions["Threads"], height=180)
+            with sub_tabs[3]:
+                st.text_area("카드뉴스 8장", expansions["카드뉴스 8장"], height=220)
+            with sub_tabs[4]:
+                st.text_area("썸네일 문구", expansions["썸네일 문구"], height=100)
+                st.text_area("제목 10개", expansions["제목 10개"], height=180)
 
 with tabs[3]:
+    # Step instructions for approval board
+    st.markdown(
+        """
+        **Step 4. 제작 확정**
+
+        여기에는 **확정된 소재**가 목록으로 나옵니다. Step 3에서 `이 소재 제작 확정`을 클릭하면 해당 소재가 이 보드로 이동합니다.
+
+        나중에 콘텐츠를 제작하거나 파일로 내보낼 때 이 보드를 기반으로 작업할 수 있습니다.
+        """
+    )
     st.subheader("제작 소재 확정 보드")
     if not st.session_state.approved:
         st.info("아직 확정된 소재가 없습니다. 상세 패널에서 '이 소재 제작 확정'을 눌러주세요.")
@@ -596,6 +776,16 @@ with tabs[3]:
         st.dataframe(st.session_state.approved, use_container_width=True, hide_index=True, column_order=["production_score", "viral_score", "source", "angle", "title", "url"])
 
 with tabs[4]:
+    # Step instructions for rewriting principles
+    st.markdown(
+        """
+        **Step 5. 원칙 및 향후 개발**
+
+        여기에는 **원문 LLM 추론 분석 및 재가공 원칙**을 정리했습니다. 제작 과정을 진행할 때 반드시 아래 원칙을 준수해 주세요.
+
+        또한 향후 개발 우선순위를 확인할 수 있습니다. 이후 버전에서는 Reddit API 연결, 국내 수집기 개선, 실시간 변화량 계산, LLM 기반 요약/번역/스크립트 자동화 등이 예정되어 있습니다.
+        """
+    )
     st.subheader("원문 LLM 추론분석 및 재가공 원칙")
     for principle in REWRITE_PRINCIPLES:
         st.write(f"- {principle}")
