@@ -5,10 +5,17 @@ import json
 import streamlit as st
 
 try:
-    from script_improver import build_rewrite_brief, improve_failed_script
+    from script_improver import (
+        build_rewrite_brief,
+        generate_directed_addition,
+        improve_failed_script,
+        merge_addition,
+    )
 except Exception as error:
     build_rewrite_brief = None
     improve_failed_script = None
+    generate_directed_addition = None
+    merge_addition = None
     IMPORT_ERROR = str(error)
 else:
     IMPORT_ERROR = None
@@ -42,6 +49,7 @@ def run_improvement_once(
     model: str,
     temperature: float,
     mode: str,
+    user_direction: str = "",
 ) -> tuple[str, dict, str | None]:
     if not improve_failed_script:
         return script, quality, "script_improver.py를 불러오지 못했습니다."
@@ -57,6 +65,7 @@ def run_improvement_once(
         model=model,
         temperature=temperature,
         improvement_mode=mode,
+        user_direction=user_direction,
     )
     if error:
         return script, quality, error
@@ -68,7 +77,7 @@ def run_improvement_once(
 
 st.set_page_config(page_title="품질개선", page_icon="🛠️", layout="wide")
 st.title("품질개선 워크벤치")
-st.caption("품질검사에서 탈락한 10분 롱폼을 실패 리포트 기반으로 재작성합니다.")
+st.caption("품질검사에서 탈락한 10분 롱폼을 실패 리포트와 사용자 디렉션 기반으로 재작성/추가 생성합니다.")
 
 if IMPORT_ERROR:
     st.error(f"script_improver.py 로드 실패: {IMPORT_ERROR}")
@@ -128,7 +137,6 @@ if not quality:
         st.session_state.quality_checks[selected_key] = quality
         st.rerun()
 else:
-    status = "통과" if quality.get("passed") else "개선 필요"
     if quality.get("passed"):
         st.success(f"현재 대본은 품질검사를 통과했습니다. 등급: {quality.get('grade')}")
     else:
@@ -147,10 +155,21 @@ else:
     if build_rewrite_brief:
         st.text_area("재작성 브리프", build_rewrite_brief(quality), height=220)
 
+st.markdown("### 디렉션")
+st.caption("자동개선이 애매할 때, PD 디렉션을 직접 넣어서 다시 쓰거나 필요한 구간만 추가 생성할 수 있습니다.")
+user_direction = st.text_area(
+    "내 디렉션",
+    value=st.session_state.get("user_direction", ""),
+    height=150,
+    placeholder="예: 오프닝을 더 세게. 스팀룸 사건의 쟁점을 3초 안에 박고, 사연자 책임과 상대 사생활 이슈를 동시에 보여줘. 상담 파트는 실제로 보낼 문장까지 넣어줘.",
+)
+st.session_state.user_direction = user_direction
+
 mode = st.selectbox(
     "개선 모드",
     [
         "품질검사 기준 통과용 전면 재작성",
+        "사용자 디렉션 최우선 전면 재작성",
         "후킹/라이브감 집중 개선",
         "상담 디테일 집중 개선",
         "캐릭터성/사주점성술 화자성 집중 개선",
@@ -163,8 +182,8 @@ st.text_area("개선 전", script, height=380)
 
 run_col1, run_col2 = st.columns(2)
 
-if run_col1.button("1회 개선하기", type="primary", disabled=improve_failed_script is None or not bool(script), use_container_width=True):
-    with st.spinner("품질검사 리포트를 반영해 1회 개선 중..."):
+if run_col1.button("디렉션 반영해서 1회 개선", type="primary", disabled=improve_failed_script is None or not bool(script), use_container_width=True):
+    with st.spinner("품질검사 리포트와 사용자 디렉션을 반영해 1회 개선 중..."):
         improved, new_quality, error = run_improvement_once(
             selected_key=selected_key,
             selected_row=selected_row,
@@ -176,6 +195,7 @@ if run_col1.button("1회 개선하기", type="primary", disabled=improve_failed_
             model=model,
             temperature=temperature,
             mode=mode,
+            user_direction=user_direction,
         )
     if error:
         st.error(error)
@@ -183,7 +203,7 @@ if run_col1.button("1회 개선하기", type="primary", disabled=improve_failed_
         st.success(f"1회 개선 완료. 새 점수: {new_quality.get('overall_score', 'N/A')} / 통과: {'YES' if new_quality.get('passed') else 'NO'}")
         st.rerun()
 
-if run_col2.button("통과할 때까지 자동 개선", disabled=improve_failed_script is None or not bool(script), use_container_width=True):
+if run_col2.button("디렉션 반영해서 통과할 때까지 자동 개선", disabled=improve_failed_script is None or not bool(script), use_container_width=True):
     current_script = script
     current_quality = quality
     logs: list[str] = []
@@ -200,6 +220,7 @@ if run_col2.button("통과할 때까지 자동 개선", disabled=improve_failed_
                 model=model,
                 temperature=temperature,
                 mode=mode,
+                user_direction=user_direction,
             )
             if error:
                 logs.append(f"{round_idx}회차 실패: {error}")
@@ -209,6 +230,55 @@ if run_col2.button("통과할 때까지 자동 개선", disabled=improve_failed_
                 break
     st.session_state.improvement_logs = logs
     st.rerun()
+
+st.markdown("### 추가 생성")
+add_cols = st.columns([1, 1, 1])
+target_section = add_cols[0].selectbox(
+    "추가할 위치/구간",
+    ["부족한 구간 자동 판단", "00:00 오프닝 보강", "02:50 채팅 반응 보강", "05:50 사주/점성술 해석 보강", "06:50 상담 디테일 보강", "09:00 최종 판단 보강"],
+)
+target_length = add_cols[1].selectbox("추가 분량", ["800~1,200자", "1,500~2,500자", "2,500~3,500자"], index=1)
+merge_mode = add_cols[2].selectbox("삽입 방식", ["append", "prepend", "preview_only"], format_func=lambda x: {"append": "대본 뒤에 붙이기", "prepend": "대본 앞에 붙이기", "preview_only": "미리보기만"}[x])
+
+if st.button("내 디렉션으로 추가 생성", disabled=generate_directed_addition is None or not bool(script) or not bool(user_direction.strip()), use_container_width=True):
+    with st.spinner("사용자 디렉션 기반 추가 블록 생성 중..."):
+        addition, error = generate_directed_addition(
+            source_text=source_text,
+            analysis=analysis,
+            blueprint=blueprint,
+            current_script=script,
+            quality=quality,
+            row=selected_row,
+            model=model,
+            temperature=temperature,
+            user_direction=user_direction,
+            target_section=target_section,
+            target_length=target_length,
+        )
+    if error:
+        st.error(error)
+    else:
+        st.session_state.last_addition = addition
+        if merge_mode != "preview_only" and merge_addition:
+            merged = merge_addition(script, addition, merge_mode)
+            st.session_state.longform_scripts[selected_key] = merged
+            if quality_check_live_script:
+                st.session_state.quality_checks[selected_key] = quality_check_live_script(merged)
+            st.success("추가 블록을 생성하고 현재 대본에 반영했습니다.")
+            st.rerun()
+        else:
+            st.success("추가 블록 미리보기를 생성했습니다.")
+
+if st.session_state.get("last_addition"):
+    with st.expander("마지막 추가 생성 블록", expanded=True):
+        st.text_area("추가 블록", st.session_state.last_addition, height=320)
+        if st.button("이 추가 블록을 현재 대본 뒤에 붙이기", use_container_width=True):
+            merged = merge_addition(st.session_state.longform_scripts.get(selected_key, script), st.session_state.last_addition, "append") if merge_addition else script + "\n\n" + st.session_state.last_addition
+            st.session_state.longform_scripts[selected_key] = merged
+            if quality_check_live_script:
+                st.session_state.quality_checks[selected_key] = quality_check_live_script(merged)
+            st.success("추가 블록을 대본 뒤에 붙였습니다.")
+            st.rerun()
 
 if st.session_state.get("improvement_logs"):
     with st.expander("자동 개선 로그", expanded=True):
