@@ -153,7 +153,7 @@ else:
         st.json(quality)
 
     if build_rewrite_brief:
-        st.text_area("재작성 브리프", build_rewrite_brief(quality), height=220)
+        st.text_area("재작성 브리프", build_rewrite_brief(quality, analysis=analysis, row=selected_row), height=320)
 
 st.markdown("### 디렉션")
 st.caption("자동개선이 애매할 때, PD 디렉션을 직접 넣어서 다시 쓰거나 필요한 구간만 추가 생성할 수 있습니다.")

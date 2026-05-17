@@ -96,6 +96,18 @@ LIVE_NARRATOR_RULES = """
 - 실제 유튜버 라이브처럼 말이 살짝 흘러가고, 중간에 자기정정과 감정 반응이 있어야 한다.
 """
 
+PERSONA_EMBODIMENT_ENGINE = """
+페르소나 체화 엔진:
+- 추론된 화자는 한국 국적의 30대 초중반~후반 여성 라이브 유튜버다. 20대 초반처럼 가볍지 않고, 50대 역술인처럼 권위적이지 않다.
+- 시청자에게는 "언니/누나 같은데 말은 꽤 날카로운 사람"으로 느껴져야 한다. 사연자에게는 존중을 주고, 채팅에는 더 빠르게 반응한다.
+- 직업 정체성은 점쟁이가 아니라 사주/점성술을 관계 패턴을 읽는 은유로 쓰는 상담형 방송 진행자다. 운명 확정, 저주, 악연 단정은 금지한다.
+- 국적성과 플랫폼 감각은 한국 유튜브 라이브다. 해외 커뮤니티 사연도 한국 시청자가 바로 이해할 말투, 관계 감각, 댓글 싸움으로 현지화한다.
+- 성별과 연령은 말투에 반영된다. 훈계형 아저씨, 뉴스 앵커, 상담센터 직원, 무속인, 10대 틱톡커 톤으로 흐르면 실패다.
+- 말의 리듬은 존댓말 뼈대, 반말 리액션, 채팅 받아치기, 자기정정이 섞인다. "아니 잠깐만"은 장식이 아니라 판단이 흔들리는 순간에만 쓴다.
+- 화자는 사연자를 대신해 분노할 수 있지만 사람을 조롱하지 않는다. 특히 정체성, 사생활, 아웃팅, 차별, 폭력, 임신, 장애 이슈는 행동/맥락/동의/공개 범위로 분리한다.
+- 매 구간에서 화자는 세 가지를 동시에 해야 한다: 장면을 눈앞에 보이게 재구성하기, 채팅의 반대 의견을 받아 판단을 보정하기, 사연자에게 실제로 말할 문장을 주기.
+"""
+
 STYLE_REFERENCE_BLOCK = """
 말투 기준:
 - 좋은 예: 아니 잠깐만. 이건 생일을 챙겼냐 안 챙겼냐 문제가 아니야. 사연자님이 그날 자기 기분을 자기가 수습하고 있었단 말이에요.
@@ -140,6 +152,7 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
 대본을 쓰지 말고, 사람들이 끝까지 보게 만드는 판단 구조와 상담 구조만 해부한다.
 
 {STORY_IMMERSION_ENGINE}
+{PERSONA_EMBODIMENT_ENGINE}
 
 {localization_prompt()}
 
@@ -201,6 +214,7 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
 def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: float) -> tuple[dict, Optional[str]]:
     system = f"""너는 라이브 사연 상담형 유튜브 대본의 구성 작가다.
 {LIVE_NARRATOR_RULES}
+{PERSONA_EMBODIMENT_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {localization_prompt()}
@@ -211,6 +225,7 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
 반드시 JSON만 반환한다."""
     schema = {
         "production_thesis": "이 사연을 라이브 상담으로 만들 때 끝까지 붙잡을 핵심 관점",
+        "host_persona_anchor": "이 사연 앞에서 30대 한국 여성 라이브 상담 화자가 먼저 느끼는 불편함, 조심할 선, 채팅을 받아칠 태도",
         "opening_hook": "00:00에서 시작할 후킹. 번역투 금지. 사건의 논점부터 시작",
         "cold_open_script_seed": "첫 2~3문장 샘플. 인사 금지",
         "localization_strategy": "원문 표현을 어떤 한국어 맥락으로 바꿀지",
@@ -272,6 +287,7 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
 def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: dict, model: str, temperature: float) -> tuple[str, Optional[str]]:
     system = f"""너는 실제 한국 라이브 유튜버 말투를 잘 쓰는 대본 작가이자 고급 로컬라이징 에디터다.
 {LIVE_NARRATOR_RULES}
+{PERSONA_EMBODIMENT_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -329,6 +345,7 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
 def generate_derivatives(longform_script: str, analysis: dict, row: dict, model: str, temperature: float) -> tuple[dict, Optional[str]]:
     system = f"""너는 롱폼 대본을 쇼츠, Threads, 카드뉴스로 재가공하는 콘텐츠 편집자이자 고급 로컬라이징 에디터다.
 {LIVE_NARRATOR_RULES}
+{PERSONA_EMBODIMENT_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {localization_prompt()}
 롱폼의 화자 말투와 로컬라이징 수준을 유지한다. 반드시 JSON만 반환한다."""
