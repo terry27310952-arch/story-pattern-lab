@@ -67,7 +67,19 @@ def post_chat_completion(endpoint: str, api_key: str, payload: dict) -> tuple[Op
     try:
         with urlopen(request, timeout=300) as response:
             result = json.loads(response.read().decode("utf-8"))
-        return result["choices"][0]["message"]["content"], None
+        choice = result["choices"][0]
+        message = choice.get("message", {})
+        content = message.get("content", "")
+        if isinstance(content, list):
+            content = "\n".join(str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in content)
+        if content is None:
+            content = ""
+        content = str(content).strip()
+        if not content:
+            finish_reason = choice.get("finish_reason", "unknown")
+            message_keys = ", ".join(sorted(message.keys()))
+            return None, f"OpenAI 응답 본문이 비었습니다. finish_reason={finish_reason}, message_keys={message_keys}"
+        return content, None
     except HTTPError as error:
         try:
             body = error.read().decode("utf-8")
@@ -125,23 +137,42 @@ def openai_chat(messages: list[dict[str, str]], model: str, temperature: float, 
         if not retry_error:
             return content, None
         error = retry_error
+    if "응답 본문이 비었습니다" in error:
+        empty_retry_payload = dict(payload)
+        if "reasoning_effort" in empty_retry_payload:
+            empty_retry_payload["reasoning_effort"] = "low"
+        empty_retry_payload["max_completion_tokens"] = max(max_tokens, 12000)
+        if json_mode:
+            empty_retry_payload.pop("response_format", None)
+        content, retry_error = post_chat_completion(endpoint, api_key, empty_retry_payload)
+        if not retry_error:
+            return content, None
+        error = retry_error
     return None, error
 
 
 def extract_json_object(text: str) -> tuple[Optional[dict], Optional[str]]:
     cleaned = (text or "").strip()
-    cleaned = re.sub(r"^```(?:json)?", "", cleaned).strip()
-    cleaned = re.sub(r"```$", "", cleaned).strip()
+    cleaned = cleaned.removeprefix("\ufeff").strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        cleaned = fenced.group(1).strip()
     try:
-        return json.loads(cleaned), None
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed, None
+        return None, "JSON 최상위가 객체가 아닙니다."
     except Exception:
         pass
-    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-    if match:
+    decoder = json.JSONDecoder()
+    for start_match in re.finditer(r"\{", cleaned):
+        candidate = cleaned[start_match.start():]
         try:
-            return json.loads(match.group(0)), None
-        except Exception as error:
-            return None, f"JSON 파싱 실패: {error}"
+            parsed, _ = decoder.raw_decode(candidate)
+            if isinstance(parsed, dict):
+                return parsed, None
+        except Exception:
+            continue
     return None, "JSON 객체를 찾지 못했습니다."
 
 
@@ -236,6 +267,49 @@ def repair_json_if_needed(
     repaired["_quality_warning"] = "구조화 JSON이 아직 얕을 수 있습니다."
     repaired["_quality_issues"] = repaired_issues
     return repaired, None
+
+
+def parse_or_regenerate_json(
+    stage: str,
+    raw: str,
+    context: dict,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+) -> tuple[dict, Optional[str]]:
+    parsed, parse_error = extract_json_object(raw or "")
+    if not parse_error and parsed:
+        return parsed, None
+
+    system = f"""너는 깨진 LLM 응답을 방송 제작용 JSON으로 복구하는 구조화 출력 전문가다.
+아래 원본 요청 맥락과 실패한 응답을 바탕으로, required_schema에 맞는 완성된 JSON 객체를 새로 작성한다.
+설명, 사과, 마크다운, 코드펜스 없이 JSON 객체만 반환한다.
+
+{STORY_BRAIN_ENGINE}
+{STRUCTURAL_OUTPUT_GUARD}
+{STYLE_REFERENCE_BLOCK}
+"""
+    user = {
+        "stage": stage,
+        "parse_error": parse_error,
+        "original_request_context": context,
+        "failed_raw_response_preview": (raw or "")[:4000],
+        "mission": "빈 응답/비JSON 응답/깨진 JSON을 버리고, 이 사연에 맞는 구체적인 방송 제작 JSON을 재생성하라.",
+    }
+    regenerated_raw, regenerate_error = openai_chat(
+        [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
+        model=model,
+        temperature=max(0.35, min(temperature, 0.65)),
+        max_tokens=max(max_tokens, 12000),
+        json_mode=True,
+    )
+    if regenerate_error:
+        return {}, f"{parse_error} / JSON 재생성 실패: {regenerate_error}"
+    regenerated, regenerated_parse_error = extract_json_object(regenerated_raw or "")
+    if regenerated_parse_error or not regenerated:
+        preview = (regenerated_raw or "")[:500].replace("\n", " ")
+        return {}, f"{parse_error} / JSON 재생성 결과 파싱 실패: {regenerated_parse_error} / 미리보기: {preview}"
+    return regenerated, None
 
 
 LIVE_NARRATOR_RULES = """
@@ -487,9 +561,9 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
     ], model=model, temperature=temperature, max_tokens=7500, json_mode=True)
     if error:
         return {}, error
-    parsed, parse_error = extract_json_object(raw or "")
+    parsed, parse_error = parse_or_regenerate_json("story_analysis", raw or "", user, model, temperature, 8500)
     if parse_error:
-        return parsed or {}, parse_error
+        return {}, parse_error
     return repair_json_if_needed("story_analysis", parsed or {}, raw or "", user, model, temperature, 8000)
 
 
@@ -611,9 +685,9 @@ role/purpose/tone_note만 있는 빈 설계는 실패다. 각 비트는 실제 �
     ], model=model, temperature=temperature, max_tokens=8500, json_mode=True)
     if error:
         return {}, error
-    parsed, parse_error = extract_json_object(raw or "")
+    parsed, parse_error = parse_or_regenerate_json("live_blueprint", raw or "", user, model, temperature, 9500)
     if parse_error:
-        return parsed or {}, parse_error
+        return {}, parse_error
     return repair_json_if_needed("live_blueprint", parsed or {}, raw or "", user, model, temperature, 9000)
 
 
@@ -724,7 +798,7 @@ def generate_derivatives(longform_script: str, analysis: dict, row: dict, model:
     ], model=model, temperature=temperature, max_tokens=5500, json_mode=True)
     if error:
         return {}, error
-    parsed, parse_error = extract_json_object(raw or "")
+    parsed, parse_error = parse_or_regenerate_json("derivatives", raw or "", user, model, temperature, 6500)
     return parsed or {}, parse_error
 
 
