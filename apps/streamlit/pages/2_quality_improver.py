@@ -133,7 +133,7 @@ cols[5].metric("치명 실패", len(quality.get("critical_failures", [])) if qua
 
 if not quality:
     st.warning("품질검사 결과가 없습니다. 먼저 아래에서 검사하거나 라이브 제작실에서 품질검사를 실행하세요.")
-    if st.button("현재 대본 품질검사", disabled=quality_check_live_script is None, use_container_width=True):
+    if st.button("현재 대본 품질검사", disabled=quality_check_live_script is None, width="stretch"):
         quality = quality_check_live_script(script)
         st.session_state.quality_checks[selected_key] = quality
         st.rerun()
@@ -183,7 +183,7 @@ st.text_area("개선 전", script, height=380)
 
 run_col1, run_col2 = st.columns(2)
 
-if run_col1.button("디렉션 반영해서 1회 개선", type="primary", disabled=improve_failed_script is None or not bool(script), use_container_width=True):
+if run_col1.button("디렉션 반영해서 1회 개선", type="primary", disabled=improve_failed_script is None or not bool(script), width="stretch"):
     with st.spinner("품질검사 리포트와 사용자 디렉션을 반영해 1회 개선 중..."):
         improved, new_quality, error = run_improvement_once(
             selected_key=selected_key,
@@ -204,7 +204,7 @@ if run_col1.button("디렉션 반영해서 1회 개선", type="primary", disable
         st.success(f"1회 개선 완료. 새 점수: {new_quality.get('overall_score', 'N/A')} / 통과: {'YES' if new_quality.get('passed') else 'NO'}")
         st.rerun()
 
-if run_col2.button("디렉션 반영해서 통과할 때까지 자동 개선", disabled=improve_failed_script is None or not bool(script), use_container_width=True):
+if run_col2.button("디렉션 반영해서 통과할 때까지 자동 개선", disabled=improve_failed_script is None or not bool(script), width="stretch"):
     current_script = script
     current_quality = quality
     logs: list[str] = []
@@ -241,7 +241,7 @@ target_section = add_cols[0].selectbox(
 target_length = add_cols[1].selectbox("추가 분량", ["800~1,200자", "1,500~2,500자", "2,500~3,500자"], index=1)
 merge_mode = add_cols[2].selectbox("삽입 방식", ["append", "prepend", "preview_only"], format_func=lambda x: {"append": "대본 뒤에 붙이기", "prepend": "대본 앞에 붙이기", "preview_only": "미리보기만"}[x])
 
-if st.button("내 디렉션으로 추가 생성", disabled=generate_directed_addition is None or not bool(script) or not bool(user_direction.strip()), use_container_width=True):
+if st.button("내 디렉션으로 추가 생성", disabled=generate_directed_addition is None or not bool(script) or not bool(user_direction.strip()), width="stretch"):
     with st.spinner("사용자 디렉션 기반 추가 블록 생성 중..."):
         addition, error = generate_directed_addition(
             source_text=source_text,
@@ -273,7 +273,7 @@ if st.button("내 디렉션으로 추가 생성", disabled=generate_directed_add
 if st.session_state.get("last_addition"):
     with st.expander("마지막 추가 생성 블록", expanded=True):
         st.text_area("추가 블록", st.session_state.last_addition, height=320)
-        if st.button("이 추가 블록을 현재 대본 뒤에 붙이기", use_container_width=True):
+        if st.button("이 추가 블록을 현재 대본 뒤에 붙이기", width="stretch"):
             merged = merge_addition(st.session_state.longform_scripts.get(selected_key, script), st.session_state.last_addition, "append") if merge_addition else script + "\n\n" + st.session_state.last_addition
             st.session_state.longform_scripts[selected_key] = merged
             if quality_check_live_script:
@@ -298,5 +298,6 @@ st.download_button(
     st.session_state.longform_scripts.get(selected_key, ""),
     file_name="improved_live_script.txt",
     mime="text/plain",
-    use_container_width=True,
+    width="stretch",
 )
+

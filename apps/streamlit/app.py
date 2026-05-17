@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import unescape
@@ -99,7 +100,7 @@ st.markdown(
 USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.5; public-list-metadata-only"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
-STREAMLIT_PATCH_VERSION = "2026-05-17 fetch-fallback-v8"
+STREAMLIT_PATCH_VERSION = "2026-05-17 autopilot-v9"
 TOKEN_PARAMETER_POLICY = "max_completion_tokens only"
 DEPLOYMENT_ENTRYPOINT = "streamlit_app.py -> apps/streamlit/app.py"
 
@@ -489,6 +490,162 @@ def run_quality_improvement(
     return improved, new_quality, None
 
 
+def fingerprint_text(value: str) -> str:
+    return hashlib.sha256((value or "").encode("utf-8", errors="ignore")).hexdigest()
+
+
+def clear_downstream_outputs(selected_key: str) -> None:
+    for state_key in ["story_analyses", "live_blueprints", "longform_scripts", "quality_checks", "derivative_assets", "production_packages"]:
+        st.session_state.setdefault(state_key, {}).pop(selected_key, None)
+
+
+def ensure_source_material(row: dict, selected_key: str, current_text: str, allow_short_material: bool) -> tuple[str, list[str], str | None]:
+    logs: list[str] = []
+    current_text = (current_text or "").strip()
+    if len(current_text) >= 500:
+        logs.append(f"본문 재료 확인: 기존 입력 {len(current_text)}자 사용")
+        return current_text, logs, None
+
+    fallback_text = (row.get("original_excerpt", "") or "").strip()
+    if fetch_article_body is not None:
+        result = fetch_article_body(row.get("url", ""), row.get("source", ""), fallback_text)
+        if result.ok and result.body.strip():
+            logs.append(f"본문 확보: {result.length}자 / {result.method}")
+            if result.method == "rss_excerpt_fallback" and result.error:
+                logs.append(f"원문 직접 요청 차단 감지: RSS 제작 재료로 대체 ({result.error})")
+            return result.body.strip(), logs, None
+        logs.append(f"본문 자동 수집 실패: {result.error or '원인 미상'}")
+    else:
+        logs.append("본문 수집 모듈 없음: RSS/제목 대체 재료 사용 시도")
+
+    if len(fallback_text) >= 500:
+        logs.append(f"RSS 요약 대체 사용: {len(fallback_text)}자")
+        return fallback_text, logs, None
+    if allow_short_material and len(fallback_text) >= 120:
+        logs.append(f"짧은 RSS 요약으로 자동 제작 진행: {len(fallback_text)}자")
+        return fallback_text, logs, None
+    if allow_short_material and row.get("title"):
+        material = f"제목: {row.get('title', '')}\n소스: {row.get('source', '')}\n요약: {fallback_text or '본문 없음'}".strip()
+        if len(material) >= 80:
+            logs.append("본문이 부족해 제목/RSS 요약 기반 테스트 재료로 진행")
+            return material, logs, None
+    return current_text or fallback_text, logs, "제작 재료가 너무 짧습니다. RSS 요약도 부족해서 자동 제작을 안전하게 진행할 수 없습니다."
+
+
+def run_autopilot_pipeline(
+    selected_key: str,
+    selected_row: dict,
+    current_source_text: str,
+    model: str,
+    temperature: float,
+    improve_rounds: int,
+    allow_short_material: bool,
+    build_derivative_assets: bool,
+    package_when_done: bool,
+    save_when_done: bool,
+) -> tuple[list[str], str | None]:
+    logs: list[str] = []
+    required_modules = {
+        "analyze_story": analyze_story,
+        "build_live_blueprint": build_live_blueprint,
+        "write_live_longform": write_live_longform,
+        "quality_check_live_script": quality_check_live_script,
+    }
+    missing = [name for name, value in required_modules.items() if value is None]
+    if missing:
+        return logs, f"필수 모듈 로드 실패: {', '.join(missing)}"
+    if not openai_is_configured():
+        return logs, "OPENAI_API_KEY가 설정되어 있지 않아 무인 제작을 실행할 수 없습니다."
+
+    source_text, material_logs, material_error = ensure_source_material(selected_row, selected_key, current_source_text, allow_short_material)
+    logs.extend(material_logs)
+    if material_error:
+        return logs, material_error
+
+    previous_fingerprint = st.session_state.setdefault("source_fingerprints", {}).get(selected_key)
+    next_fingerprint = fingerprint_text(source_text)
+    if previous_fingerprint and previous_fingerprint != next_fingerprint:
+        logs.append("제작 재료 변경 감지: 이전 분석/대본/패키지 캐시 초기화")
+        clear_downstream_outputs(selected_key)
+    else:
+        clear_downstream_outputs(selected_key)
+        logs.append("무인 제작 기준: 기존 LLM 결과를 재사용하지 않고 새로 생성")
+    st.session_state.source_texts[selected_key] = source_text
+    st.session_state.source_fingerprints[selected_key] = next_fingerprint
+
+    analysis, error = analyze_story(source_text, selected_row, model, temperature)
+    if error:
+        return logs, f"1차 사연 해부 실패: {error}"
+    st.session_state.story_analyses[selected_key] = analysis
+    logs.append("1차 사연 해부 완료")
+
+    blueprint, error = build_live_blueprint(analysis, selected_row, model, temperature)
+    if error:
+        return logs, f"2차 라이브 구조 설계 실패: {error}"
+    st.session_state.live_blueprints[selected_key] = blueprint
+    logs.append("2차 라이브 구조 설계 완료")
+
+    script, error = write_live_longform(source_text, analysis, blueprint, selected_row, model, temperature)
+    if error:
+        return logs, f"3차 10분 대본 생성 실패: {error}"
+    st.session_state.longform_scripts[selected_key] = script
+    logs.append(f"3차 10분 대본 생성 완료: {len(script)}자")
+
+    quality = quality_check_live_script(script)
+    st.session_state.quality_checks[selected_key] = quality
+    logs.append(f"품질검사: {quality.get('overall_score', 'N/A')}점 / 통과 {'YES' if quality.get('passed') else 'NO'}")
+
+    current_script = script
+    current_quality = quality
+    for round_idx in range(1, max(1, improve_rounds) + 1):
+        if current_quality.get("passed"):
+            break
+        current_script, current_quality, improve_error = run_quality_improvement(
+            selected_key=selected_key,
+            selected_row=selected_row,
+            source_text=source_text,
+            analysis=analysis,
+            blueprint=blueprint,
+            script=current_script,
+            quality=current_quality,
+            model=model,
+            temperature=temperature,
+            mode="품질검사 기준 통과용 전면 재작성",
+            user_direction="무인 자동 제작 모드입니다. 품질검사 critical_failures를 반드시 해결하고, 후킹/몰입/상담성/캐릭터성/민감주제 처리/분량을 통과 기준까지 끌어올리세요.",
+        )
+        if improve_error:
+            return logs, f"자동 품질개선 {round_idx}회차 실패: {improve_error}"
+        logs.append(f"자동 품질개선 {round_idx}회차: {current_quality.get('overall_score', 'N/A')}점 / 통과 {'YES' if current_quality.get('passed') else 'NO'}")
+
+    if not current_quality.get("passed"):
+        return logs, "자동 제작은 완료했지만 품질 기준 통과에 실패했습니다. 파생 콘텐츠/저장은 차단했습니다."
+
+    derivatives = {}
+    if build_derivative_assets:
+        if generate_derivatives is None:
+            logs.append("파생 콘텐츠 생성 모듈 없음: 건너뜀")
+        else:
+            derivatives, error = generate_derivatives(current_script, analysis, selected_row, model, temperature)
+            if error:
+                return logs, f"4차 파생 콘텐츠 생성 실패: {error}"
+            st.session_state.derivative_assets[selected_key] = derivatives
+            logs.append("4차 쇼츠/Threads/카드뉴스 생성 완료")
+
+    if package_when_done:
+        if build_package is None:
+            return logs, "제작 패키지 조립 모듈을 불러오지 못했습니다."
+        package = build_package(selected_row, source_text, analysis, blueprint, current_script, current_quality, derivatives)
+        st.session_state.production_packages[selected_key] = package
+        logs.append("제작 패키지 조립 완료")
+        if save_when_done:
+            saved, save_error = save_package(selected_row, package)
+            if save_error:
+                return logs, f"Supabase 자동 저장 실패: {save_error}"
+            logs.append(f"Supabase 자동 저장 완료: {saved}")
+
+    return logs, None
+
+
 st.title("Story Pattern Lab")
 st.caption("자동 본문 수집 · 라이브 사연 상담형 반존대 대본 · 사주/점성술 화자성 · Supabase 히스토리")
 
@@ -499,12 +656,14 @@ initial_state = {
     "rows": [],
     "history_rows": [],
     "source_texts": {},
+    "source_fingerprints": {},
     "story_analyses": {},
     "live_blueprints": {},
     "longform_scripts": {},
     "quality_checks": {},
     "derivative_assets": {},
     "production_packages": {},
+    "autopilot_logs": {},
 }
 for key, value in initial_state.items():
     if key not in st.session_state:
@@ -515,7 +674,7 @@ with st.sidebar:
     selected_sources = st.multiselect("해외 RSS 소스", options=list(OVERSEAS_SOURCES.keys()), default=["Reddit AITA", "Reddit Relationship Advice"])
     selected_domestic_sources = st.multiselect("국내 공개목록 실험 소스", options=list(DOMESTIC_COLLECTABLE_SOURCES.keys()), default=[])
     per_source_limit = st.slider("소스당 수집 개수", 5, 50, 15, 5)
-    collect_button = st.button("실시간 후보 수집", type="primary", use_container_width=True)
+    collect_button = st.button("실시간 후보 수집", type="primary", width="stretch")
     st.divider()
     st.header("API 상태")
     st.caption(f"OpenAI: {'ON' if openai_is_configured() else 'OFF'}")
@@ -529,7 +688,7 @@ with st.sidebar:
         st.code(app_source(), language="text")
         st.caption("실행 중인 LLM 파이프라인")
         st.code(llm_pipeline_source(), language="text")
-        if st.button("LLM 결과/이전 오류 초기화", use_container_width=True):
+        if st.button("LLM 결과/이전 오류 초기화", width="stretch"):
             clear_llm_outputs()
             st.success("이전 LLM 결과와 오류 표시를 비웠습니다.")
             st.rerun()
@@ -544,7 +703,7 @@ with st.sidebar:
         st.error(f"LLM 파이프라인 로드 실패: {LLM_PIPELINE_IMPORT_ERROR}")
     if SCRIPT_IMPROVER_IMPORT_ERROR:
         st.error(f"품질개선 모듈 로드 실패: {SCRIPT_IMPROVER_IMPORT_ERROR}")
-    if st.button("Supabase 테스트", use_container_width=True):
+    if st.button("Supabase 테스트", width="stretch"):
         _, err = load_packages(1)
         st.error(err) if err else st.success("Supabase 연결 성공")
 
@@ -582,9 +741,9 @@ tabs = st.tabs(["📡 소스", "🏆 리더보드", "🎙️ 라이브 제작실
 
 with tabs[0]:
     st.subheader("소스 목록")
-    st.dataframe([{"site": name, **meta} for name, meta in OVERSEAS_SOURCES.items()], use_container_width=True, hide_index=True)
-    st.dataframe(DOMESTIC_SOURCES, use_container_width=True, hide_index=True)
-    st.dataframe([{"site": name, **meta} for name, meta in DOMESTIC_COLLECTABLE_SOURCES.items()], use_container_width=True, hide_index=True)
+    st.dataframe([{"site": name, **meta} for name, meta in OVERSEAS_SOURCES.items()], width="stretch", hide_index=True)
+    st.dataframe(DOMESTIC_SOURCES, width="stretch", hide_index=True)
+    st.dataframe([{"site": name, **meta} for name, meta in DOMESTIC_COLLECTABLE_SOURCES.items()], width="stretch", hide_index=True)
 
 with tabs[1]:
     st.subheader("스코어 리더보드")
@@ -606,7 +765,7 @@ with tabs[1]:
         filtered = [row for row in rows if (not q or q.lower() in row["title"].lower()) and row["risk_score"] <= max_risk]
         reverse = sort_key not in ["risk_score", "fresh_min"]
         filtered = sorted(filtered, key=lambda row: row[sort_key] if row[sort_key] is not None else -1, reverse=reverse)
-        st.dataframe(filtered, use_container_width=True, hide_index=True, column_order=["badge", "region", "production_score", "viral_score", "velocity_score", "debate_score", "risk_score", "fresh_min", "rank", "source", "angle", "title", "url"])
+        st.dataframe(filtered, width="stretch", hide_index=True, column_order=["badge", "region", "production_score", "viral_score", "velocity_score", "debate_score", "risk_score", "fresh_min", "rank", "source", "angle", "title", "url"])
 
 with tabs[2]:
     st.subheader("라이브 사연 상담 제작실")
@@ -638,9 +797,56 @@ with tabs[2]:
         st.write(f"**소스:** {selected['source']} / {selected['region']}")
         st.write(f"**URL:** {selected['url']}")
 
+        st.markdown("### 🚀 무인 자동 제작")
+        st.caption("본문 확보 → 사연 해부 → 라이브 구조 → 10분 대본 → 품질검사/자동개선 → 파생 콘텐츠/패키지까지 한 번에 실행합니다.")
+        auto_col1, auto_col2, auto_col3 = st.columns(3)
+        allow_short_material_auto = auto_col1.checkbox("본문 짧아도 RSS/제목 기반 진행", value=True, key=f"allow_short_material_auto_{key}")
+        auto_derivatives = auto_col2.checkbox("통과 시 파생 콘텐츠까지 생성", value=True, key=f"auto_derivatives_{key}")
+        auto_package = auto_col3.checkbox("통과 시 패키지까지 조립", value=True, key=f"auto_package_{key}")
+        auto_save = st.checkbox("통과 시 Supabase 자동 저장", value=False, disabled=not db_is_configured(), key=f"auto_save_{key}")
+        autopilot_disabled = (
+            not openai_is_configured()
+            or analyze_story is None
+            or build_live_blueprint is None
+            or write_live_longform is None
+            or quality_check_live_script is None
+        )
+        if st.button("무인 자동 제작 실행", type="primary", disabled=autopilot_disabled, width="stretch", key=f"autopilot_run_{key}"):
+            with st.spinner("무인 자동 제작 실행 중... 본문 확보부터 품질 통과까지 순차 처리합니다."):
+                logs, autopilot_error = run_autopilot_pipeline(
+                    selected_key=key,
+                    selected_row=selected,
+                    current_source_text=source_text,
+                    model=llm_model,
+                    temperature=temperature,
+                    improve_rounds=max(3, int(auto_improve_rounds)),
+                    allow_short_material=allow_short_material_auto,
+                    build_derivative_assets=auto_derivatives,
+                    package_when_done=auto_package,
+                    save_when_done=auto_save,
+                )
+            st.session_state.autopilot_logs[key] = logs
+            source_text = st.session_state.source_texts.get(key, source_text)
+            analysis = st.session_state.story_analyses.get(key, {})
+            blueprint = st.session_state.live_blueprints.get(key, {})
+            longform = st.session_state.longform_scripts.get(key, "")
+            quality = st.session_state.quality_checks.get(key, {})
+            derivatives = st.session_state.derivative_assets.get(key, {})
+            package = st.session_state.production_packages.get(key)
+            if autopilot_error:
+                st.error(autopilot_error)
+            else:
+                st.success("무인 자동 제작 완료: 품질 통과 기준까지 확인했습니다.")
+        if autopilot_disabled:
+            st.warning("무인 자동 제작을 실행하려면 OpenAI 키와 LLM/품질검사 모듈이 모두 필요합니다.")
+        if st.session_state.autopilot_logs.get(key):
+            with st.expander("무인 자동 제작 로그", expanded=True):
+                for item in st.session_state.autopilot_logs[key]:
+                    st.write(f"- {item}")
+
         st.markdown("### ② 본문 자동 가져오기")
         fetch_col1, fetch_col2 = st.columns([1, 2])
-        if fetch_col1.button("본문 자동 가져오기", type="primary", use_container_width=True):
+        if fetch_col1.button("본문 자동 가져오기", type="primary", width="stretch"):
             if fetch_article_body is None:
                 st.error("source_fetcher.py를 불러오지 못했습니다.")
             else:
@@ -665,7 +871,7 @@ with tabs[2]:
             st.warning("본문이 500자 미만입니다. 자동 본문 가져오기를 먼저 실행하거나 테스트 모드를 켜세요.")
 
         st.markdown("### ③ 사연 해부")
-        if st.button("1차 LLM: 사연 해부하기", disabled=not ready_for_llm or analyze_story is None, use_container_width=True):
+        if st.button("1차 LLM: 사연 해부하기", disabled=not ready_for_llm or analyze_story is None, width="stretch"):
             with st.spinner("사연의 핵심 갈등, 채팅 포인트, 사주/점성술 렌즈를 해부 중..."):
                 result, error = analyze_story(source_text, selected, llm_model, temperature)
             if error:
@@ -684,7 +890,7 @@ with tabs[2]:
         st.json(analysis)
 
         st.markdown("### ④ 라이브 상담 구조 설계")
-        if st.button("2차 LLM: 라이브 구조 설계하기", disabled=not bool(analysis) or build_live_blueprint is None, use_container_width=True):
+        if st.button("2차 LLM: 라이브 구조 설계하기", disabled=not bool(analysis) or build_live_blueprint is None, width="stretch"):
             with st.spinner("반말/존댓말 혼합 라이브 상담 구조를 설계 중..."):
                 result, error = build_live_blueprint(analysis, selected, llm_model, temperature)
             if error:
@@ -702,7 +908,7 @@ with tabs[2]:
             st.json(blueprint)
 
         st.markdown("### ⑤ 10분 롱폼 대본")
-        if st.button("3차 LLM: 10분 대본 쓰기", disabled=not bool(blueprint) or write_live_longform is None, type="primary", use_container_width=True):
+        if st.button("3차 LLM: 10분 대본 쓰기", disabled=not bool(blueprint) or write_live_longform is None, type="primary", width="stretch"):
             with st.spinner("라이브 사연 상담형 반존대 대본을 작성 중..."):
                 script, error = write_live_longform(source_text, analysis, blueprint, selected, llm_model, temperature)
             if error:
@@ -755,7 +961,7 @@ with tabs[2]:
             st.info("대본이 수정되어 기존 품질검사 결과를 초기화했습니다. 다시 품질검사를 실행하세요.")
 
         st.markdown("### ⑥ 품질검사")
-        if st.button("대본 품질검사", disabled=not bool(longform) or quality_check_live_script is None, use_container_width=True):
+        if st.button("대본 품질검사", disabled=not bool(longform) or quality_check_live_script is None, width="stretch"):
             st.session_state.quality_checks[key] = quality_check_live_script(longform)
             quality = st.session_state.quality_checks[key]
         render_quality(quality)
@@ -792,7 +998,7 @@ with tabs[2]:
                 with st.expander("자동 재작성 브리프", expanded=False):
                     st.text_area("브리프", build_rewrite_brief(quality, analysis=analysis, row=selected), height=260, disabled=True)
             improve_cols = st.columns(2)
-            if improve_cols[0].button("품질 미달 대본 1회 개선", disabled=improve_failed_script is None, type="primary", use_container_width=True, key=f"improve_once_{key}"):
+            if improve_cols[0].button("품질 미달 대본 1회 개선", disabled=improve_failed_script is None, type="primary", width="stretch", key=f"improve_once_{key}"):
                 with st.spinner("품질검사 실패 항목을 반영해 대본을 1회 재작성 중..."):
                     longform, quality, improve_error = run_quality_improvement(
                         selected_key=key,
@@ -812,7 +1018,7 @@ with tabs[2]:
                 else:
                     st.success(f"1회 개선 완료. 새 점수: {quality.get('overall_score', 'N/A')} / 통과: {'YES' if quality.get('passed') else 'NO'}")
                     st.rerun()
-            if improve_cols[1].button("통과할 때까지 자동 개선", disabled=improve_failed_script is None, use_container_width=True, key=f"improve_until_pass_{key}"):
+            if improve_cols[1].button("통과할 때까지 자동 개선", disabled=improve_failed_script is None, width="stretch", key=f"improve_until_pass_{key}"):
                 current_script = longform
                 current_quality = quality
                 logs: list[str] = []
@@ -854,7 +1060,7 @@ with tabs[2]:
 
         st.markdown("### ⑦ 파생 콘텐츠")
         output_locked = bool(longform) and (quality_missing or (bool(quality) and not quality_passed and not force_failed_output))
-        if st.button("4차 LLM: 쇼츠/Threads/카드뉴스 만들기", disabled=not bool(longform) or generate_derivatives is None or output_locked, use_container_width=True):
+        if st.button("4차 LLM: 쇼츠/Threads/카드뉴스 만들기", disabled=not bool(longform) or generate_derivatives is None or output_locked, width="stretch"):
             with st.spinner("롱폼 대본 기반으로 파생 콘텐츠 생성 중..."):
                 result, error = generate_derivatives(longform, analysis, selected, llm_model, temperature)
             if error:
@@ -893,7 +1099,7 @@ with tabs[2]:
         st.markdown("### ⑧ 저장")
         if output_locked:
             st.warning("품질 미달 대본은 패키지 조립/Supabase 저장 전에 개선이 필요합니다.")
-        if st.button("제작 패키지 조립", disabled=not bool(longform) or output_locked, use_container_width=True):
+        if st.button("제작 패키지 조립", disabled=not bool(longform) or output_locked, width="stretch"):
             if build_package:
                 package = build_package(selected, source_text, analysis, blueprint, longform, quality, derivatives)
             else:
@@ -904,7 +1110,7 @@ with tabs[2]:
         package = st.session_state.production_packages.get(key)
         if package:
             save_col, down_col = st.columns(2)
-            if save_col.button("Supabase에 저장", disabled=output_locked, use_container_width=True):
+            if save_col.button("Supabase에 저장", disabled=output_locked, width="stretch"):
                 result, error = save_package(selected, package)
                 if error:
                     st.error(error)
@@ -912,7 +1118,7 @@ with tabs[2]:
                     st.success("Supabase 저장 완료")
                     if isinstance(result, list):
                         st.session_state.history_rows = result + st.session_state.history_rows
-            down_col.download_button("패키지 JSON 다운로드", json.dumps(package, ensure_ascii=False, indent=2), file_name="live_advice_package.json", mime="application/json", use_container_width=True)
+            down_col.download_button("패키지 JSON 다운로드", json.dumps(package, ensure_ascii=False, indent=2), file_name="live_advice_package.json", mime="application/json", width="stretch")
             with st.expander("최종 패키지 JSON"):
                 st.json(package)
 
@@ -920,7 +1126,7 @@ with tabs[3]:
     st.subheader("Supabase 히스토리")
     c1, c2 = st.columns([1, 1])
     limit = c1.slider("불러올 개수", 5, 100, 30, 5)
-    if c2.button("히스토리 불러오기", type="primary", use_container_width=True):
+    if c2.button("히스토리 불러오기", type="primary", width="stretch"):
         rows, error = load_packages(limit)
         if error:
             st.error(error)
@@ -931,12 +1137,12 @@ with tabs[3]:
     if not history:
         st.info("아직 불러온 히스토리가 없습니다.")
     else:
-        st.dataframe(history, use_container_width=True, hide_index=True, column_order=["created_at", "status", "source_name", "production_score", "viral_score", "title", "source_url"])
+        st.dataframe(history, width="stretch", hide_index=True, column_order=["created_at", "status", "source_name", "production_score", "viral_score", "title", "source_url"])
         selected_history_title = st.selectbox("상세 확인", [row.get("title", "제목 없음") for row in history])
         selected_history = next((row for row in history if row.get("title") == selected_history_title), history[0])
         pkg = selected_history.get("package_json", {})
         st.text_area("저장된 10분 롱폼", package_to_text(pkg, "longform_script"), height=420)
-        st.download_button("히스토리 JSON 다운로드", json.dumps(selected_history, ensure_ascii=False, indent=2), file_name="history_package.json", mime="application/json", use_container_width=True)
+        st.download_button("히스토리 JSON 다운로드", json.dumps(selected_history, ensure_ascii=False, indent=2), file_name="history_package.json", mime="application/json", width="stretch")
 
 with tabs[4]:
     st.subheader("원칙 / DB 세팅")
@@ -958,4 +1164,5 @@ with tabs[4]:
     st.markdown("### v0.5 제작 플로우")
     st.write("본문 자동 가져오기 → 사연 해부 → 라이브 구조 설계 → 10분 대본 → 품질검사 → 파생 콘텐츠 → 저장")
 
-st.caption("Story Pattern Lab v0.6 · 라이브 사연 상담형 반존대 대본 제작기 · fetch-fallback-v8")
+st.caption("Story Pattern Lab v0.6 · 라이브 사연 상담형 반존대 대본 제작기 · autopilot-v9")
+
