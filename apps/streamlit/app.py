@@ -99,8 +99,9 @@ st.markdown(
 USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.5; public-list-metadata-only"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
-STREAMLIT_PATCH_VERSION = "2026-05-17 token-param-v5"
+STREAMLIT_PATCH_VERSION = "2026-05-17 deploy-sanity-v6"
 TOKEN_PARAMETER_POLICY = "max_completion_tokens only"
+DEPLOYMENT_ENTRYPOINT = "streamlit_app.py -> apps/streamlit/app.py"
 
 OVERSEAS_SOURCES = {
     "Reddit AITA": {"url": "https://www.reddit.com/r/AmItheAsshole/.rss", "category": "AITA / Moral Debate", "status": "Active RSS", "region": "해외"},
@@ -204,6 +205,10 @@ def llm_pipeline_source() -> str:
         return os.path.abspath(str(analyze_story.__globals__.get("__file__", "")))
     except Exception:
         return "경로 확인 실패"
+
+
+def app_source() -> str:
+    return os.path.abspath(__file__)
 
 
 def clear_llm_outputs() -> None:
@@ -513,6 +518,10 @@ with st.sidebar:
     st.caption(f"토큰 파라미터: {TOKEN_PARAMETER_POLICY}")
     with st.expander("업데이트 진단", expanded=True):
         st.write("새 코드의 OpenAI 오류에는 `요청 token 파라미터:`가 함께 표시됩니다.")
+        st.caption(f"배포 엔트리포인트: {DEPLOYMENT_ENTRYPOINT}")
+        st.caption("실행 중인 앱 파일")
+        st.code(app_source(), language="text")
+        st.caption("실행 중인 LLM 파이프라인")
         st.code(llm_pipeline_source(), language="text")
         if st.button("LLM 결과/이전 오류 초기화", use_container_width=True):
             clear_llm_outputs()
@@ -929,4 +938,4 @@ with tabs[4]:
     st.markdown("### v0.5 제작 플로우")
     st.write("본문 자동 가져오기 → 사연 해부 → 라이브 구조 설계 → 10분 대본 → 품질검사 → 파생 콘텐츠 → 저장")
 
-st.caption("Story Pattern Lab v0.6 · 라이브 사연 상담형 반존대 대본 제작기 · token-param-v5")
+st.caption("Story Pattern Lab v0.6 · 라이브 사연 상담형 반존대 대본 제작기 · deploy-sanity-v6")
