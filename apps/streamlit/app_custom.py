@@ -474,15 +474,15 @@ with tabs[0]:
     overseas_rows = []
     for name, meta in OVERSEAS_SOURCES.items():
         overseas_rows.append({"site": name, "region": meta["region"], "category": meta["category"], "status": meta["status"], "url": meta["url"]})
-    st.dataframe(overseas_rows, use_container_width=True, hide_index=True)
+    st.dataframe(overseas_rows, width="stretch", hide_index=True)
 
     st.subheader("국내 소스 후보")
-    st.dataframe(DOMESTIC_SOURCES, use_container_width=True, hide_index=True)
+    st.dataframe(DOMESTIC_SOURCES, width="stretch", hide_index=True)
 
     st.subheader("국내 실험 수집 가능 소스")
     st.dataframe(
         [{"site": name, **meta} for name, meta in DOMESTIC_COLLECTABLE_SOURCES.items()],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_order=["site", "region", "category", "status", "note", "url"],
     )
@@ -610,7 +610,7 @@ with tabs[1]:
         # -- Display -----------------------------------------------------
         st.dataframe(
             rows_sorted,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_order=[
                 "badge",
@@ -819,7 +819,7 @@ with tabs[3]:
     if not st.session_state.approved:
         st.info("아직 확정된 소재가 없습니다. 상세 패널에서 '이 소재 제작 확정'을 눌러주세요.")
     else:
-        st.dataframe(st.session_state.approved, use_container_width=True, hide_index=True, column_order=["production_score", "viral_score", "source", "angle", "title", "url"])
+        st.dataframe(st.session_state.approved, width="stretch", hide_index=True, column_order=["production_score", "viral_score", "source", "angle", "title", "url"])
 
 with tabs[4]:
     # Step instructions for rewriting principles
@@ -845,3 +845,4 @@ with tabs[4]:
     st.write("6. 쇼츠, 쓰레드, 카드뉴스 확장 자동화")
 
 st.caption("현재 버전은 Phase 1 Streamlit 대시보드 고도화입니다. 국내 소스는 네이트판/보배드림 공개목록 실험 수집부터 시작합니다.")
+
