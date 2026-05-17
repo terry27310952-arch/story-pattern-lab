@@ -5,6 +5,7 @@ from typing import Optional
 
 from llm_pipeline import (
     EMBODIED_INSIGHT_ENGINE,
+    INTIMACY_BOUNDARY_ENGINE,
     LIVE_NARRATOR_RULES,
     LIVE_SCRIPT_CONTRACT,
     PERSONA_EMBODIMENT_ENGINE,
@@ -38,6 +39,8 @@ IMPROVEMENT_RULES = """
 17. 성향/궁합 인사이트가 부족하면 MBTI식 성향 충돌, 사주 궁합, 오행, 대운/세운 렌즈를 단정 없이 상담 문장에 녹인다.
 18. 후킹 장치가 부족하면 첫 5초 결과/논쟁, 첫 30초 시청 계약, 매 타임코드 리훅을 새로 설계한다.
 19. 리텐션 루프가 부족하면 최소 3개의 오픈루프와 3개의 회수 문장을 만든다. 던지기만 하고 회수하지 않으면 실패다.
+20. 친밀관계/기기/프라이버시 사연은 동의, 촬영·녹화·저장 가능성, 중단 기준, 삭제/확인 문장을 중심으로 재작성한다.
+21. 저품질 채팅 유도와 빈 마무리 멘트는 삭제한다. 후반부도 새 정보, 판단 변화, 현실 대응으로 채운다.
 """
 
 DIRECTION_GUIDE = """
@@ -59,6 +62,7 @@ PERSONA_REWRITE_CORE = """
 - 체화 방식: 사연을 바로 해설하지 않고, 화자가 겪은 비슷한 하루/작은 신호/몸의 감각으로 먼저 들어가 시청자가 공기를 느끼게 한다.
 - 인사이트 방식: MBTI와 사주 궁합은 정답지가 아니라 관계 리듬을 읽는 렌즈다. 성향을 말하면 바로 실제 상담 문장으로 이어야 한다.
 - 리텐션 방식: 첫 5초에는 결과나 논쟁, 첫 30초에는 시청 계약, 이후 매 타임코드에는 마이크로 후킹과 다음 궁금증이 있어야 한다.
+- 민감관계 방식: 친밀한 상황의 사연은 자극적 묘사 대신 동의, 프라이버시, 촬영 가능성, 기기 사용 설명, 중단 기준을 먼저 본다.
 """
 
 
@@ -167,6 +171,12 @@ def build_persona_rewrite_diagnostic(
         diagnosis.append("- 후킹 장치 밀도 낮음: 첫 5초 결과/논쟁, 첫 30초 시청 계약, 타임코드별 리훅이 부족하다.")
     if _score_value(scores, "리텐션_루프") < 65:
         diagnosis.append("- 리텐션 루프 낮음: 궁금증을 열고 회수하는 구조가 약하다. 오픈루프 3개와 회수 3개를 명시적으로 심어야 한다.")
+    if int(metrics.get("low_value_cta_markers", 0) or 0) >= 1:
+        diagnosis.append("- 저품질 CTA 감지: 채팅창에 써달라는 요청을 지우고, 찬반이 갈리는 실제 질문과 화자의 반응으로 바꿔야 한다.")
+    if int(metrics.get("generic_outro_markers", 0) or 0) >= 2:
+        diagnosis.append("- 빈 마무리 감지: 후반부가 종료 멘트로 분량을 채우고 있다. 새 정보, 판단 변화, 상대 반응별 대응으로 다시 채운다.")
+    if int(metrics.get("intimacy_topic_markers", 0) or 0) >= 1 and int(metrics.get("boundary_advice_markers", 0) or 0) < 3:
+        diagnosis.append("- 친밀관계 민감 처리 부족: 동의, 촬영/저장 가능성, 프라이버시, 중단 기준, 삭제 요구 문장을 중심으로 다시 써야 한다.")
 
     if metrics:
         metric_lines = []
@@ -183,6 +193,9 @@ def build_persona_rewrite_diagnostic(
             ("오픈루프 표식", "open_loop_markers"),
             ("회수 표식", "payoff_markers"),
             ("패턴 인터럽트 표식", "pattern_interrupt_markers"),
+            ("저품질 CTA", "low_value_cta_markers"),
+            ("빈 마무리", "generic_outro_markers"),
+            ("친밀관계 경계 문장", "boundary_advice_markers"),
             ("AI식 문장", "forbidden_ai_phrases"),
         ]:
             if key in metrics:
@@ -249,6 +262,7 @@ def improve_failed_script(
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
 {VIRAL_RETENTION_ENGINE}
+{INTIMACY_BOUNDARY_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -268,6 +282,8 @@ def improve_failed_script(
 - MBTI/사주 궁합/오행 인사이트를 은근히 넣되, 확정 진단·예언처럼 말하지 않는다.
 - 첫 5초는 결과/논쟁/책임 갈림으로 시작한다. 첫 30초 안에는 끝까지 봐야 하는 이유를 만든다.
 - 매 타임코드 첫 문장에 리훅을 넣고, 오픈루프 3개 이상과 회수 3개 이상을 설계한다.
+- 친밀관계/기기/프라이버시 사연이면 몸 평가나 노출 적응 조언을 버리고, 동의/촬영 가능성/저장 여부/삭제 요구/중단 기준을 실제 문장으로 넣는다.
+- "채팅창에 써보세요", "화이팅", "다음에 또 만나요" 같은 저품질 CTA와 빈 마무리는 삭제한다.
 - 서사 몰입도, 채팅 논쟁성, 상담성 점수가 낮으면 해당 항목을 구조적으로 보강한다.
 - 각 구간은 장면 재구성, 화자 리액션, 채팅 충돌, 사주/점성술 패턴 읽기, 현실 상담 문장 중 최소 4개 이상을 포함한다.
 - AI식 일반 멘트 금지: 안녕하세요 여러분, 함께 고민해볼까요, 다양한 시각이 있네요, 깊은 대화를 나눠보세요.
@@ -295,6 +311,7 @@ def improve_failed_script(
             "required_open_loops": 3,
             "required_loop_payoffs": 3,
             "required_micro_hooks_per_timecode": True,
+            "required_boundary_or_privacy_checks_when_relevant": 4,
             "forbidden_output": ["목차", "제작 메모", "분석 라벨", "요약형 비트"],
         },
     }
@@ -338,6 +355,7 @@ def generate_directed_addition(
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
 {VIRAL_RETENTION_ENGINE}
+{INTIMACY_BOUNDARY_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -351,6 +369,7 @@ def generate_directed_addition(
 - 재작성 브리프의 화자 페르소나를 먼저 체화한다. 추가 블록만 따로 튀는 문어체가 되면 실패다.
 - 부족한 부분이 체화/인사이트라면 화자의 개인 경험, 반복 상징, MBTI식 성향/사주 궁합 렌즈를 한 블록 안에 자연스럽게 넣는다.
 - 부족한 부분이 후킹/몰입이라면 해당 추가 블록 자체도 첫 문장에 마이크로 후킹, 중간에 패턴 인터럽트, 끝에 다음 궁금증을 넣는다.
+- 부족한 부분이 민감한 친밀관계 처리라면 동의/촬영 가능성/프라이버시/중단 기준/삭제 요구 문장을 넣는다.
 - 타임코드를 포함한다. 예: 04:20 추가 / 06:50 보강 / 09:10 보강.
 - 기존 대본에 자연스럽게 삽입될 수 있게 시작과 끝을 연결형 멘트로 쓴다.
 - 추상 조언 금지. 디테일한 방송 멘트와 실제 상담 문장을 넣는다.

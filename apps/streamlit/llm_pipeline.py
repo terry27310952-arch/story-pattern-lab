@@ -134,6 +134,18 @@ VIRAL_RETENTION_ENGINE = """
 - 결말 직전에는 댓글을 부르는 마지막 갈림 질문을 남긴다. 단순 정답 발표가 아니라 "여기서 여러분은 어디까지가 선이라고 보세요?"처럼 참여 욕구를 남긴다.
 """
 
+INTIMACY_BOUNDARY_ENGINE = """
+친밀관계/프라이버시 민감 사연 처리 엔진:
+- 성관계, 몸 노출, 기기 착용, 촬영·녹화 가능성, 사생활이 얽힌 사연은 자극적 묘사보다 동의·경계·프라이버시·중단 기준이 중심이다.
+- "성관계 중에 쫓아냈다"처럼 사건을 선정적으로 요약하지 않는다. "친밀한 상황에서 기기 착용과 공개/기록 가능성 때문에 경계가 무너진 사연"처럼 구조로 말한다.
+- 핵심 질문은 "누가 예민한가"가 아니라 "기기 사용에 대해 충분히 설명하고 동의를 받았나", "촬영/저장/공유 가능성을 확인했나", "불편하다고 느낀 순간 멈출 수 있었나"다.
+- 사연자가 10대 후반/어린 성인으로 나오면 더 조심한다. 미성숙함을 조롱하거나 성적 디테일을 반복하지 말고, 안전감과 동의의 언어를 준다.
+- 실제 상담 문장은 구체적이어야 한다. 예: "그 안경이 촬영이나 저장을 하는 상태였는지 지금 확인하고 싶어. 동의 없이 기록된 게 있다면 바로 삭제해줘."
+- 상대가 "그런 의도 아니었다"고 말할 때의 대응도 준다. 예: "의도보다 중요한 건 내가 그 순간 동의하지 않은 기기를 몸 가까이에 두었다는 점이야."
+- 채팅 유도는 응원 구걸이 아니라 경계 질문이어야 한다. 예: "여러분은 친밀한 상황에서 스마트 기기 착용, 어디까지 사전 설명이 필요하다고 보세요?"
+- 금지: 몸 평가, 성적 취향 훈수, 불 켜보기 같은 노출 적응 조언, "관계를 더 깊게" 같은 미화, "대화가 중요해요"로 끝내기.
+"""
+
 STYLE_REFERENCE_BLOCK = """
 말투 기준:
 - 좋은 예: 아니 잠깐만. 이건 생일을 챙겼냐 안 챙겼냐 문제가 아니야. 사연자님이 그날 자기 기분을 자기가 수습하고 있었단 말이에요.
@@ -144,6 +156,8 @@ STYLE_REFERENCE_BLOCK = """
 - 나쁜 예: 감정을 솔직하게 표현하는 것이 중요합니다. 깊은 대화를 나눠보세요.
 - 나쁜 예: 별자리가 맞지 않을 수 있으니 고려해보세요.
 - 나쁜 예: 사생활이 터졌다. 성 정체성이 드러났다. privacy exploded.
+- 나쁜 예: 채팅창에 "사연자님 화이팅"이라고 써주세요. 다음에 또 새로운 사연으로 만나요.
+- 나쁜 예: 작은 변화로 조명을 켜고 서로의 취향을 공유해보세요.
 """
 
 STORY_IMMERSION_ENGINE = """
@@ -181,6 +195,7 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
 {VIRAL_RETENTION_ENGINE}
+{INTIMACY_BOUNDARY_ENGINE}
 
 {localization_prompt()}
 
@@ -244,6 +259,11 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
             }
         ],
         "risk_notes": ["재가공 유의점"],
+        "intimacy_boundary_notes": {
+            "consent_question": "친밀관계/기기/사생활 이슈가 있다면 동의 여부를 어떻게 질문할지",
+            "privacy_or_recording_risk": "촬영/녹화/저장/공유 가능성을 안전하게 다루는 방식",
+            "boundary_sentences": ["사연자님이 실제로 말할 수 있는 중단/확인/삭제 요구 문장"],
+        },
         "do_not_say": ["민감하거나 번역투라 피해야 하는 문장"],
     }
     user = {"title": row.get("title"), "source": row.get("source"), "url": row.get("url"), "source_text": clean_text(source_text, 14000), "required_schema": schema}
@@ -263,6 +283,7 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
 {VIRAL_RETENTION_ENGINE}
+{INTIMACY_BOUNDARY_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {localization_prompt()}
@@ -277,6 +298,11 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
         "host_personal_entry": "00:00에서 화자가 자기 경험처럼 체화해서 꺼낼 도입. 일상 감각 3개 이상 포함",
         "motif_ladder": ["개인 경험 속 상징", "사연 속 같은 상징", "관계/사회 패턴으로 확장된 상징"],
         "implicit_profile_insights": ["MBTI/사주 궁합/오행 렌즈를 단정 없이 상담 멘트에 녹일 문장"],
+        "boundary_safety_plan": {
+            "consent_frame": "동의/사전 설명/중단 기준을 어떤 구간에 넣을지",
+            "device_or_privacy_checks": ["촬영/녹화/저장/공유 가능성 확인 문장"],
+            "what_not_to_advise": ["노출 적응, 몸 평가, 성적 취향 훈수처럼 피할 조언"],
+        },
         "first_5_second_cue": "대본 첫 1~2문장. 결과/논쟁/책임 갈림부터 시작",
         "first_30_second_contract": "30초 안에 줄 시청 보상과 남겨둘 반전",
         "retention_loop_plan": [
@@ -357,6 +383,7 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
 {VIRAL_RETENTION_ENGINE}
+{INTIMACY_BOUNDARY_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -373,6 +400,8 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
 - 00:00~01:35 안에 화자의 개인적 경험형 도입을 넣는다. "나도 그런 날이 있었거든" 수준이 아니라 몸에 남은 감각, 반복된 상징, 말이 꼬이는 순간을 구체적으로 보여준다.
 - "안녕하세요 여러분", "함께 고민해볼까요", "다양한 시각이 있네요", "정말 서운하셨겠어요" 같은 AI식 문장 금지.
 - "사생활이 터졌다", "성 정체성이 드러났다"처럼 과격하거나 부정확한 번역투 금지. 맥락에 따라 "개인적인 일이 원치 않게 알려졌다", "아웃팅처럼 받아들여질 수 있었다", "사적인 부분이 사람들 입에 오르내리게 됐다"처럼 쓴다.
+- 친밀관계/몸/기기/촬영 가능성이 있는 사연은 동의, 사전 설명, 촬영·녹화·저장 여부, 프라이버시, 즉시 중단 기준을 반드시 다룬다.
+- "불을 켜보세요", "취향을 공유해보세요", "관계를 더 깊게" 같은 노출 적응/미화 조언 금지. 불편함을 느낀 사람에게 적응을 요구하지 않는다.
 - 존댓말 진행 50%, 반말 리액션 30%, 채팅 받아치기 10%, 혼잣말/자기정정 10% 정도로 섞는다.
 - "사연자님" 8회 이상, "여러분" 10회 이상, "채팅" 또는 "댓글" 반응 5회 이상, 현실 조언 4개 이상 포함한다.
 - "아니 잠깐만", "야 이건", "근데", "제가 보기엔요", "저기요", "작두 살짝만", "사주로 치면", "기운", "궁합", "운의 흐름" 중 여러 개를 자연스럽게 사용한다.
@@ -415,6 +444,7 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
             "required_open_loops": 3,
             "required_loop_payoffs": 3,
             "required_micro_hooks_per_timecode": True,
+            "required_boundary_or_privacy_checks_when_relevant": 4,
         },
         "section_fill_rule": "각 타임코드는 마이크로 후킹, 장면 재구성, 화자 리액션, 채팅 충돌, 사주/점성술 패턴 읽기, 현실 상담 문장, 다음 궁금증 연결 중 최소 5개 이상을 포함해야 한다.",
         "minimum_length_reminder": "8,500자 미만이면 실패다. 모든 타임코드를 충분히 확장하라.",
@@ -432,6 +462,7 @@ def generate_derivatives(longform_script: str, analysis: dict, row: dict, model:
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
 {VIRAL_RETENTION_ENGINE}
+{INTIMACY_BOUNDARY_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {localization_prompt()}
 롱폼의 화자 말투와 로컬라이징 수준을 유지한다. 반드시 JSON만 반환한다."""
