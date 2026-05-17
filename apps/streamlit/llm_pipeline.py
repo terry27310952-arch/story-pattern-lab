@@ -108,6 +108,19 @@ PERSONA_EMBODIMENT_ENGINE = """
 - 매 구간에서 화자는 세 가지를 동시에 해야 한다: 장면을 눈앞에 보이게 재구성하기, 채팅의 반대 의견을 받아 판단을 보정하기, 사연자에게 실제로 말할 문장을 주기.
 """
 
+EMBODIED_INSIGHT_ENGINE = """
+체화형 개인 경험 + 은근한 성향 인사이트 엔진:
+- 대본은 사연 요약으로 시작하지 않는다. 화자가 비슷한 공기를 겪은 개인적 하루, 몸에 남은 감각, 반복해서 보인 상징으로 먼저 들어간다.
+- 개인 경험은 과시용 일기가 아니라 사연을 이해시키는 감각의 다리다. 예: 빨간불, 멈춘 엘리베이터, 배터리 경고, 어긋난 메시지처럼 작은 신호가 반복되다가 관계 해석으로 확장되는 구조.
+- 화자의 경험은 현실감 있게 창작할 수 있지만, 외부 사건·역사·통계·실명 사실은 원문에 있거나 사용자가 준 경우에만 구체적으로 말한다. 모르면 "기록을 보면" 식으로 꾸미지 않는다.
+- 상징은 최소 3번 변주한다. 처음엔 일상의 감각, 중간엔 관계의 패턴, 후반엔 사주/점성술식 해석으로 의미가 바뀌어야 한다.
+- MBTI, 사주 궁합, 오행, 일간, 대운/세운은 대놓고 판정하지 않는다. "이 사람은 ENFP다"가 아니라 "MBTI식으로 보면 감정 확인이 먼저인 쪽과 맥락 확인이 먼저인 쪽이 부딪힌 느낌"처럼 은근히 말한다.
+- 생년월일이나 확정 정보가 없으면 사주를 단정하지 않는다. "일간을 모르는 상태에서 확정은 못 하지만", "궁합으로 치면 속도와 온도가 안 맞는 그림"처럼 가능성의 언어로 쓴다.
+- 내담자 인사이트는 상담에 붙어야 한다. 성향을 말한 뒤 바로 "그래서 이 사람에게는 이렇게 물어봐야 한다"는 실제 문장으로 연결한다.
+- 좋은 흐름: 개인 경험의 감각 -> 사연의 장면 -> 성향/궁합의 은근한 해석 -> 채팅 반론 -> 실제 상담 문장 -> 사회적 패턴 확장.
+- 실패 흐름: "당신의 MBTI는", "이 궁합은 무조건", "올해는 반드시", "제 경험상 모든 사람은"처럼 딱지 붙이거나 예언처럼 말하는 것.
+"""
+
 STYLE_REFERENCE_BLOCK = """
 말투 기준:
 - 좋은 예: 아니 잠깐만. 이건 생일을 챙겼냐 안 챙겼냐 문제가 아니야. 사연자님이 그날 자기 기분을 자기가 수습하고 있었단 말이에요.
@@ -153,6 +166,7 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
 
 {STORY_IMMERSION_ENGINE}
 {PERSONA_EMBODIMENT_ENGINE}
+{EMBODIED_INSIGHT_ENGINE}
 
 {localization_prompt()}
 
@@ -161,6 +175,7 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
         "story_summary": "사연 핵심 요약. 번역투 없이 자연스러운 한국어",
         "one_line_viral_premise": "시청자가 3초 안에 이해할 바이럴 전제. 누가 무엇을 했고 왜 갈리는지",
         "cold_open_bomb": "대본 첫 문장으로 쓸 수 있는 사건 폭탄. 인사 금지",
+        "embodied_entry_seed": "화자가 자신의 개인적 하루나 몸의 감각으로 들어갈 수 있는 도입 소재. 사연의 상징과 연결",
         "judgment_question": "댓글이 갈릴 핵심 질문. 예: 이건 예민함인가, 선 넘은 행동인가",
         "curiosity_gap": "시청자가 다음 내용을 기다리게 만드는 미해결 의문",
         "localized_context": "원문 문화권/플랫폼 맥락을 한국 시청자가 이해할 수 있게 변환한 설명",
@@ -179,6 +194,18 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
         "timeline": ["사건 순서. 각 항목은 장면으로 재구성 가능한 수준"],
         "emotional_trigger": "감정이 터지는 지점",
         "hidden_pattern": "반복되는 관계 패턴",
+        "symbolic_motif": {
+            "motif": "대본 전체에 반복할 상징. 예: 빨간불/문/침묵/알림/계단",
+            "sensory_details": ["눈에 남는 색, 소리, 몸의 반응 같은 감각 디테일"],
+            "meaning_shift": "일상 신호가 관계 패턴이나 시대 공기로 확장되는 방식",
+        },
+        "client_tendency_read": {
+            "mbti_style_hypothesis": "MBTI 확정이 아니라 감정형/사고형, 직관형/감각형, 계획형/즉흥형처럼 보이는 성향 충돌",
+            "saju_compatibility_lens": "생년월일 없이 단정하지 않는 사주/오행/궁합 렌즈. 속도, 온도, 표현 방식의 충돌로 설명",
+            "relationship_tempo": "두 사람이 감정을 처리하는 속도와 확인 방식의 차이",
+            "safe_caveat": "단정하지 않기 위한 방송 멘트",
+        },
+        "implicit_insight_lines": ["대놓고 진단하지 않고 방송 멘트 속에 은근히 넣을 성향/궁합 인사이트 문장"],
         "turning_points": ["판단이 바뀌거나 더 복잡해지는 반전/추가 정보"],
         "audience_camps": [
             {"camp": "시청자 진영 이름", "argument": "이 진영의 주장", "emotional_payoff": "왜 이 주장에 끌리는지"}
@@ -215,6 +242,7 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
     system = f"""너는 라이브 사연 상담형 유튜브 대본의 구성 작가다.
 {LIVE_NARRATOR_RULES}
 {PERSONA_EMBODIMENT_ENGINE}
+{EMBODIED_INSIGHT_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {localization_prompt()}
@@ -226,6 +254,9 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
     schema = {
         "production_thesis": "이 사연을 라이브 상담으로 만들 때 끝까지 붙잡을 핵심 관점",
         "host_persona_anchor": "이 사연 앞에서 30대 한국 여성 라이브 상담 화자가 먼저 느끼는 불편함, 조심할 선, 채팅을 받아칠 태도",
+        "host_personal_entry": "00:00에서 화자가 자기 경험처럼 체화해서 꺼낼 도입. 일상 감각 3개 이상 포함",
+        "motif_ladder": ["개인 경험 속 상징", "사연 속 같은 상징", "관계/사회 패턴으로 확장된 상징"],
+        "implicit_profile_insights": ["MBTI/사주 궁합/오행 렌즈를 단정 없이 상담 멘트에 녹일 문장"],
         "opening_hook": "00:00에서 시작할 후킹. 번역투 금지. 사건의 논점부터 시작",
         "cold_open_script_seed": "첫 2~3문장 샘플. 인사 금지",
         "localization_strategy": "원문 표현을 어떤 한국어 맥락으로 바꿀지",
@@ -246,8 +277,10 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
                 "segment_goal": "3초 안에 논쟁과 불편함 제시",
                 "new_reveal": "",
                 "emotional_turn": "",
+                "embodied_scene": "화자의 몸에 남은 개인 경험/감각과 연결할 장면",
                 "chat_collision": "",
                 "astrology_bridge": "",
+                "implicit_profile_or_compatibility_insight": "MBTI식 성향/사주 궁합/오행 렌즈를 은근히 넣을 지점",
                 "counseling_value": "",
                 "cliffhanger_to_next": "",
                 "must_include_lines": ["실제 멘트 샘플 2개"],
@@ -288,6 +321,7 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
     system = f"""너는 실제 한국 라이브 유튜버 말투를 잘 쓰는 대본 작가이자 고급 로컬라이징 에디터다.
 {LIVE_NARRATOR_RULES}
 {PERSONA_EMBODIMENT_ENGINE}
+{EMBODIED_INSIGHT_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -299,12 +333,15 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
 - 타임코드 11개 이상 포함. 타임코드 줄은 반드시 00:00 형식만 쓴다.
 - 각 타임코드마다 최소 650자 이상 실제 말로 작성한다. 제목/요약/목차만 쓰면 실패다.
 - 오프닝은 흔한 인사 금지. 바로 사연의 이상한 지점으로 들어간다.
+- 00:00~01:35 안에 화자의 개인적 경험형 도입을 넣는다. "나도 그런 날이 있었거든" 수준이 아니라 몸에 남은 감각, 반복된 상징, 말이 꼬이는 순간을 구체적으로 보여준다.
 - "안녕하세요 여러분", "함께 고민해볼까요", "다양한 시각이 있네요", "정말 서운하셨겠어요" 같은 AI식 문장 금지.
 - "사생활이 터졌다", "성 정체성이 드러났다"처럼 과격하거나 부정확한 번역투 금지. 맥락에 따라 "개인적인 일이 원치 않게 알려졌다", "아웃팅처럼 받아들여질 수 있었다", "사적인 부분이 사람들 입에 오르내리게 됐다"처럼 쓴다.
 - 존댓말 진행 50%, 반말 리액션 30%, 채팅 받아치기 10%, 혼잣말/자기정정 10% 정도로 섞는다.
 - "사연자님" 8회 이상, "여러분" 10회 이상, "채팅" 또는 "댓글" 반응 5회 이상, 현실 조언 4개 이상 포함한다.
 - "아니 잠깐만", "야 이건", "근데", "제가 보기엔요", "저기요", "작두 살짝만", "사주로 치면", "기운", "궁합", "운의 흐름" 중 여러 개를 자연스럽게 사용한다.
 - 사주/점성술 표현은 허용한다. 다만 무조건 악연, 100%, 운명 확정 같은 단정은 금지한다.
+- MBTI/사주 궁합/오행 인사이트는 은근히 넣는다. 내담자를 확정 진단하지 말고, 성향 충돌과 관계 리듬을 설명한 뒤 바로 실제 상담 문장으로 연결한다.
+- 대본 전체에 반복 상징을 하나 세운다. 처음엔 개인 경험, 중간엔 사연의 관계 패턴, 후반엔 시대/댓글/구설의 공기로 확장한다.
 - 사연 원문은 읽어주는 느낌으로 재구성하되, 원문 문장을 그대로 복제하지 않는다.
 - 반드시 해결 방법을 자세히 준다. '대화해보세요' 한 줄 금지. 어떤 문장으로 물어볼지, 상대 반응별로 어떻게 할지까지 말한다.
 - 초반 3분 안에 시청자들이 갈릴 해석 두 개를 모두 제시한다.
@@ -323,6 +360,7 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
         "analysis": analysis,
         "blueprint": blueprint,
         "mission": "짧고 점잖은 상담 대본이 아니라, 진짜 라이브 유튜버가 사연 읽으며 채팅과 티키타카하고 사주/점성술 감각으로 풀이하는 10분짜리 장문 대본을 작성하라. 번역투를 없애고 현지화 수준을 최대로 끌어올려라.",
+        "embodied_insight_mission": "화자의 개인 경험형 도입으로 사연의 공기를 먼저 몸에 입힌 뒤, MBTI식 성향/사주 궁합/오행 렌즈를 은근한 상담 인사이트로 녹여라. 확정 진단이나 예언처럼 쓰지 말고 관계 리듬 설명으로 처리하라.",
         "script_contract": {
             "timecodes": ["00:00", "00:45", "01:35", "02:30", "03:25", "04:20", "05:20", "06:20", "07:25", "08:25", "09:20"],
             "minimum_total_chars": 8500,
@@ -331,6 +369,8 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
             "required_chat_reactions": 5,
             "required_exact_advice_sentences": 4,
             "required_astrology_pattern_reads": 4,
+            "required_embodied_personal_anchor": 1,
+            "required_implicit_profile_insights": 3,
         },
         "section_fill_rule": "각 타임코드는 장면 재구성, 화자 리액션, 채팅 충돌, 사주/점성술 패턴 읽기, 현실 상담 문장, 다음 궁금증 연결 중 최소 4개 이상을 포함해야 한다.",
         "minimum_length_reminder": "8,500자 미만이면 실패다. 모든 타임코드를 충분히 확장하라.",
@@ -346,6 +386,7 @@ def generate_derivatives(longform_script: str, analysis: dict, row: dict, model:
     system = f"""너는 롱폼 대본을 쇼츠, Threads, 카드뉴스로 재가공하는 콘텐츠 편집자이자 고급 로컬라이징 에디터다.
 {LIVE_NARRATOR_RULES}
 {PERSONA_EMBODIMENT_ENGINE}
+{EMBODIED_INSIGHT_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {localization_prompt()}
 롱폼의 화자 말투와 로컬라이징 수준을 유지한다. 반드시 JSON만 반환한다."""

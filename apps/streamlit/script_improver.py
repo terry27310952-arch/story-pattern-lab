@@ -4,6 +4,7 @@ import json
 from typing import Optional
 
 from llm_pipeline import (
+    EMBODIED_INSIGHT_ENGINE,
     LIVE_NARRATOR_RULES,
     LIVE_SCRIPT_CONTRACT,
     PERSONA_EMBODIMENT_ENGINE,
@@ -32,6 +33,8 @@ IMPROVEMENT_RULES = """
 13. 서사 몰입도 부족이면 각 타임코드마다 새 정보, 판단 변화, 반대 해석, 다음 궁금증을 넣는다.
 14. 채팅 논쟁성 부족이면 찬반 채팅을 실제로 받아치며 화자의 판단이 보정되는 장면을 만든다.
 15. 최종 대본에는 제작 메모, 목차, 분석 라벨이 남으면 안 된다. 타임코드와 실제 방송 멘트만 남긴다.
+16. 체화형 도입이 부족하면 화자의 개인적 경험, 몸에 남은 감각, 반복 상징으로 사연의 공기를 먼저 입힌다.
+17. 성향/궁합 인사이트가 부족하면 MBTI식 성향 충돌, 사주 궁합, 오행, 대운/세운 렌즈를 단정 없이 상담 문장에 녹인다.
 """
 
 DIRECTION_GUIDE = """
@@ -50,6 +53,8 @@ PERSONA_REWRITE_CORE = """
 - 말투: 존댓말로 진행하다가 장면이 이상하거나 채팅이 과열되면 반말 리액션이 튀어나온다. 반말은 귀여운 장식이 아니라 판단의 온도다.
 - 판단 방식: 한 사람을 악역으로 박기 전에 행동, 맥락, 동의, 공개 범위, 관계의 힘 차이를 나눈다. 그래야 민감한 사연도 오래 볼 수 있다.
 - 방송 목표: 시청자가 "누가 맞아?"에서 멈추지 않고 "왜 이 장면이 찝찝하지?"를 계속 따라오게 만든다.
+- 체화 방식: 사연을 바로 해설하지 않고, 화자가 겪은 비슷한 하루/작은 신호/몸의 감각으로 먼저 들어가 시청자가 공기를 느끼게 한다.
+- 인사이트 방식: MBTI와 사주 궁합은 정답지가 아니라 관계 리듬을 읽는 렌즈다. 성향을 말하면 바로 실제 상담 문장으로 이어야 한다.
 """
 
 
@@ -110,15 +115,21 @@ def build_persona_rewrite_diagnostic(
 
     story_lines: list[str] = []
     for label, key in [
+        ("화자가 체화할 개인 경험 도입", "embodied_entry_seed"),
         ("첫 판단 질문", "judgment_question"),
         ("핵심 갈등", "main_conflict"),
         ("감정이 터지는 지점", "emotional_trigger"),
         ("반복되는 관계 패턴", "hidden_pattern"),
         ("사연자가 진짜 받고 싶은 상담", "sender_problem"),
+        ("반복 상징", "symbolic_motif"),
+        ("내담자 성향/궁합 렌즈", "client_tendency_read"),
     ]:
         value = _format_analysis_value(analysis.get(key))
         if value:
             story_lines.append(f"- {label}: {value}")
+    insight_lines = analysis.get("implicit_insight_lines")
+    if isinstance(insight_lines, list) and insight_lines:
+        story_lines.append("- 은근히 넣을 인사이트: " + " / ".join(str(item) for item in insight_lines[:3]))
     if story_lines:
         parts.append("[이 사연 앞에서 화자가 먼저 붙잡을 것]\n" + "\n".join(story_lines))
 
@@ -139,6 +150,10 @@ def build_persona_rewrite_diagnostic(
         diagnosis.append("- 민감 주제 처리 약함: 정체성이나 사생활을 평가하지 말고, 행동/동의/공개 범위/2차 피해 방지로 분리해 말한다.")
     if _score_value(scores, "대본_분량") < 78 or _score_value(scores, "타임코드_구조") < 72:
         diagnosis.append("- 분량/구조 부족: 화자의 숨과 장면이 들어갈 공간이 없다. 11개 이상 타임코드마다 장면, 채팅, 패턴 읽기, 실제 상담 문장을 길게 펼친다.")
+    if _score_value(scores, "체화형_도입") < 60:
+        diagnosis.append("- 체화형 도입 낮음: 사연을 설명하기 전에 화자의 개인적 경험, 반복된 신호, 몸에 남은 감각으로 공기를 먼저 입혀야 한다.")
+    if _score_value(scores, "성향궁합_인사이트") < 60:
+        diagnosis.append("- 성향/궁합 인사이트 낮음: MBTI나 사주를 딱지처럼 붙이지 말고, 감정 처리 속도·표현 방식·궁합의 온도 차이를 은근히 상담에 붙여야 한다.")
 
     if metrics:
         metric_lines = []
@@ -148,6 +163,9 @@ def build_persona_rewrite_diagnostic(
             ("채팅 충돌 표식", "chat_collision_markers"),
             ("현실 상담 표식", "exact_advice_markers"),
             ("사주/점성술 표식", "astro_markers"),
+            ("체화형 도입 표식", "embodied_markers"),
+            ("반복 상징 표식", "symbolic_motif_markers"),
+            ("성향/궁합 인사이트 표식", "profile_insight_markers"),
             ("AI식 문장", "forbidden_ai_phrases"),
         ]:
             if key in metrics:
@@ -160,10 +178,11 @@ def build_persona_rewrite_diagnostic(
 
     parts.append(
         "[재작성 순서]\n"
-        "- 1단계: 이 화자가 사건을 처음 들은 표정과 불편함을 정한다.\n"
-        "- 2단계: 사연자 편/상대 편/채팅 반론을 나눠 판단이 흔들리는 구조를 만든다.\n"
-        "- 3단계: 사주·점성술 렌즈를 사건 구조에 붙인다. 랜덤 별자리 언급은 금지한다.\n"
-        "- 4단계: 마지막에는 사연자가 실제로 말할 문장과 멈춰야 할 기준으로 닫는다."
+        "- 1단계: 화자의 개인 경험이나 몸의 감각으로 사연의 공기를 먼저 입힌다.\n"
+        "- 2단계: 반복 상징을 세운다. 처음엔 일상 신호, 중간엔 관계 패턴, 후반엔 사회적 공기로 확장한다.\n"
+        "- 3단계: 사연자 편/상대 편/채팅 반론을 나눠 판단이 흔들리는 구조를 만든다.\n"
+        "- 4단계: MBTI식 성향과 사주·궁합 렌즈를 단정 없이 상담 문장에 스며들게 한다.\n"
+        "- 5단계: 마지막에는 사연자가 실제로 말할 문장과 멈춰야 할 기준으로 닫는다."
     )
     return "\n\n".join(parts).strip()
 
@@ -209,6 +228,7 @@ def improve_failed_script(
 
 {LIVE_NARRATOR_RULES}
 {PERSONA_EMBODIMENT_ENGINE}
+{EMBODIED_INSIGHT_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -224,6 +244,8 @@ def improve_failed_script(
 - 품질검사 리포트의 critical_failures는 반드시 해결한다.
 - 사용자 디렉션이 있으면 반드시 눈에 보이게 반영한다.
 - 재작성 브리프의 페르소나를 먼저 체화하고, 그 화자가 실제 라이브에서 말할 수 없는 문장은 버린다.
+- 개인 경험형 도입과 반복 상징을 넣는다. "나도 그런 날이 있었어"에서 멈추지 말고 감각 디테일이 있어야 한다.
+- MBTI/사주 궁합/오행 인사이트를 은근히 넣되, 확정 진단·예언처럼 말하지 않는다.
 - 서사 몰입도, 채팅 논쟁성, 상담성 점수가 낮으면 해당 항목을 구조적으로 보강한다.
 - 각 구간은 장면 재구성, 화자 리액션, 채팅 충돌, 사주/점성술 패턴 읽기, 현실 상담 문장 중 최소 4개 이상을 포함한다.
 - AI식 일반 멘트 금지: 안녕하세요 여러분, 함께 고민해볼까요, 다양한 시각이 있네요, 깊은 대화를 나눠보세요.
@@ -237,7 +259,7 @@ def improve_failed_script(
         "current_script": clean_text(current_script, 18000),
         "quality_report": compact_quality_report(quality),
         "rewrite_brief": brief,
-        "persona_first_instruction": "대본을 쓰기 전에 32~38세 한국 여성 라이브 상담 유튜버의 입장에서 이 사연을 어떻게 받아칠지 먼저 내면화하라. 출력에는 분석 메모를 남기지 말고, 체화된 말투만 남겨라.",
+        "persona_first_instruction": "대본을 쓰기 전에 32~38세 한국 여성 라이브 상담 유튜버의 입장에서 이 사연을 어떻게 받아칠지 먼저 내면화하라. 화자의 개인 경험형 도입과 반복 상징, 은근한 MBTI/사주 궁합 인사이트를 설계하되 출력에는 분석 메모를 남기지 말고 체화된 말투만 남겨라.",
         "user_direction": user_direction.strip(),
         "improvement_mode": improvement_mode,
         "mission": "품질검사 통과를 목표로 대본을 전면 개선하라. 특히 후킹, 서사 몰입도, 채팅 논쟁성, 라이브감, 상담성, 캐릭터성, 로컬라이징, 타임코드 밀도를 강화하라. 사용자가 준 디렉션이 있으면 최우선으로 반영하라.",
@@ -246,6 +268,8 @@ def improve_failed_script(
             "minimum_timecodes": 11,
             "required_chat_collisions": 5,
             "required_exact_advice_sentences": 4,
+            "required_embodied_personal_anchor": 1,
+            "required_implicit_profile_insights": 3,
             "forbidden_output": ["목차", "제작 메모", "분석 라벨", "요약형 비트"],
         },
     }
@@ -287,6 +311,7 @@ def generate_directed_addition(
 
 {LIVE_NARRATOR_RULES}
 {PERSONA_EMBODIMENT_ENGINE}
+{EMBODIED_INSIGHT_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -298,6 +323,7 @@ def generate_directed_addition(
 - 기존 대본 전체를 다시 쓰지 않는다.
 - 사용자가 지정한 보강 방향에 맞는 추가 구간만 만든다.
 - 재작성 브리프의 화자 페르소나를 먼저 체화한다. 추가 블록만 따로 튀는 문어체가 되면 실패다.
+- 부족한 부분이 체화/인사이트라면 화자의 개인 경험, 반복 상징, MBTI식 성향/사주 궁합 렌즈를 한 블록 안에 자연스럽게 넣는다.
 - 타임코드를 포함한다. 예: 04:20 추가 / 06:50 보강 / 09:10 보강.
 - 기존 대본에 자연스럽게 삽입될 수 있게 시작과 끝을 연결형 멘트로 쓴다.
 - 추상 조언 금지. 디테일한 방송 멘트와 실제 상담 문장을 넣는다.
@@ -312,7 +338,7 @@ def generate_directed_addition(
         "current_script": clean_text(current_script, 18000),
         "quality_report": compact_quality_report(quality),
         "rewrite_brief": brief,
-        "persona_first_instruction": "추가 블록도 같은 32~38세 한국 여성 라이브 상담 유튜버가 이어서 말하는 것처럼 써라.",
+        "persona_first_instruction": "추가 블록도 같은 32~38세 한국 여성 라이브 상담 유튜버가 이어서 말하는 것처럼 써라. 필요하면 개인 경험형 감각이나 MBTI/사주 궁합 인사이트를 은근히 보강하라.",
         "user_direction": user_direction.strip(),
         "target_section": target_section,
         "target_length": target_length,
