@@ -115,7 +115,8 @@ blueprint = live_blueprints.get(selected_key, {})
 
 with st.sidebar:
     st.header("개선 설정")
-    model = st.text_input("모델", value=st.session_state.get("llm_model", "gpt-4o-mini"))
+    model = st.text_input("모델", value=st.session_state.get("llm_model", "gpt-5.5"))
+    st.caption("품질 우선 권장: gpt-5.5 / 균형: gpt-5.4 / 비용 절감: gpt-5.4-mini")
     temperature = st.slider("재작성 창의성", 0.3, 1.1, float(st.session_state.get("temperature", 0.78)), 0.05)
     max_rounds = st.slider("자동 개선 최대 회차", 1, 3, 2, 1)
     auto_stop = st.checkbox("통과하면 자동 중단", value=True)

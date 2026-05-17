@@ -10,7 +10,9 @@ from llm_pipeline import (
     LIVE_SCRIPT_CONTRACT,
     PERSONA_EMBODIMENT_ENGINE,
     STYLE_REFERENCE_BLOCK,
+    STORY_BRAIN_ENGINE,
     STORY_IMMERSION_ENGINE,
+    STRUCTURAL_OUTPUT_GUARD,
     VIRAL_RETENTION_ENGINE,
     clean_text,
     localization_prompt,
@@ -41,6 +43,8 @@ IMPROVEMENT_RULES = """
 19. 리텐션 루프가 부족하면 최소 3개의 오픈루프와 3개의 회수 문장을 만든다. 던지기만 하고 회수하지 않으면 실패다.
 20. 친밀관계/기기/프라이버시 사연은 동의, 촬영·녹화·저장 가능성, 중단 기준, 삭제/확인 문장을 중심으로 재작성한다.
 21. 저품질 채팅 유도와 빈 마무리 멘트는 삭제한다. 후반부도 새 정보, 판단 변화, 현실 대응으로 채운다.
+22. 1차 해부나 2차 설계가 얕으면 그대로 믿지 말고, 돈/수치심/권력/비밀/관계 리듬/댓글 진영을 다시 추론해 대본 구조에 반영한다.
+23. required_schema, role/purpose/tone_note, 해결 방법 1 같은 자리표시자 흔적이 있으면 전부 버리고 실제 방송 멘트와 판단 변화로 다시 채운다.
 """
 
 DIRECTION_GUIDE = """
@@ -263,6 +267,8 @@ def improve_failed_script(
 {EMBODIED_INSIGHT_ENGINE}
 {VIRAL_RETENTION_ENGINE}
 {INTIMACY_BOUNDARY_ENGINE}
+{STORY_BRAIN_ENGINE}
+{STRUCTURAL_OUTPUT_GUARD}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -356,6 +362,8 @@ def generate_directed_addition(
 {EMBODIED_INSIGHT_ENGINE}
 {VIRAL_RETENTION_ENGINE}
 {INTIMACY_BOUNDARY_ENGINE}
+{STORY_BRAIN_ENGINE}
+{STRUCTURAL_OUTPUT_GUARD}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}

@@ -9,6 +9,10 @@ The first version starts with Streamlit so the full product flow can be tested q
 3. Classify story angles.
 4. Generate a first shorts script draft.
 
+The OpenAI-backed production flow defaults to `gpt-5.5` for richer story
+analysis, live counseling structure, and longform script generation. You can
+override it with the `OPENAI_MODEL` environment/Streamlit secret.
+
 ## Local Streamlit Test
 
 ```cmd
