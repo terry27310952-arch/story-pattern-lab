@@ -73,7 +73,8 @@ def post_chat_completion(endpoint: str, api_key: str, payload: dict) -> tuple[Op
             body = error.read().decode("utf-8")
         except Exception:
             body = str(error)
-        return None, f"OpenAI HTTP 오류: {error.code} / {body[:1200]}"
+        token_param = "max_completion_tokens" if "max_completion_tokens" in payload else "max_tokens" if "max_tokens" in payload else "none"
+        return None, f"OpenAI HTTP 오류: {error.code} / 요청 token 파라미터: {token_param} / {body[:1200]}"
     except URLError as error:
         return None, f"OpenAI 네트워크 오류: {error}"
     except Exception as error:
@@ -106,18 +107,6 @@ def openai_chat(messages: list[dict[str, str]], model: str, temperature: float, 
         return content, None
 
     retry_payload = dict(payload)
-    if "max_tokens" in retry_payload and error_is_for_param(error, "max_tokens"):
-        retry_payload["max_completion_tokens"] = retry_payload.pop("max_tokens")
-        content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
-        if not retry_error:
-            return content, None
-        error = retry_error
-    if "max_completion_tokens" in retry_payload and error_is_for_param(error, "max_completion_tokens"):
-        retry_payload["max_tokens"] = retry_payload.pop("max_completion_tokens")
-        content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
-        if not retry_error:
-            return content, None
-        error = retry_error
     if "reasoning_effort" in retry_payload and "reasoning_effort" in error:
         retry_payload.pop("reasoning_effort", None)
         content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
