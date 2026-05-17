@@ -10,6 +10,7 @@ from llm_pipeline import (
     PERSONA_EMBODIMENT_ENGINE,
     STYLE_REFERENCE_BLOCK,
     STORY_IMMERSION_ENGINE,
+    VIRAL_RETENTION_ENGINE,
     clean_text,
     localization_prompt,
     openai_chat,
@@ -35,6 +36,8 @@ IMPROVEMENT_RULES = """
 15. 최종 대본에는 제작 메모, 목차, 분석 라벨이 남으면 안 된다. 타임코드와 실제 방송 멘트만 남긴다.
 16. 체화형 도입이 부족하면 화자의 개인적 경험, 몸에 남은 감각, 반복 상징으로 사연의 공기를 먼저 입힌다.
 17. 성향/궁합 인사이트가 부족하면 MBTI식 성향 충돌, 사주 궁합, 오행, 대운/세운 렌즈를 단정 없이 상담 문장에 녹인다.
+18. 후킹 장치가 부족하면 첫 5초 결과/논쟁, 첫 30초 시청 계약, 매 타임코드 리훅을 새로 설계한다.
+19. 리텐션 루프가 부족하면 최소 3개의 오픈루프와 3개의 회수 문장을 만든다. 던지기만 하고 회수하지 않으면 실패다.
 """
 
 DIRECTION_GUIDE = """
@@ -55,6 +58,7 @@ PERSONA_REWRITE_CORE = """
 - 방송 목표: 시청자가 "누가 맞아?"에서 멈추지 않고 "왜 이 장면이 찝찝하지?"를 계속 따라오게 만든다.
 - 체화 방식: 사연을 바로 해설하지 않고, 화자가 겪은 비슷한 하루/작은 신호/몸의 감각으로 먼저 들어가 시청자가 공기를 느끼게 한다.
 - 인사이트 방식: MBTI와 사주 궁합은 정답지가 아니라 관계 리듬을 읽는 렌즈다. 성향을 말하면 바로 실제 상담 문장으로 이어야 한다.
+- 리텐션 방식: 첫 5초에는 결과나 논쟁, 첫 30초에는 시청 계약, 이후 매 타임코드에는 마이크로 후킹과 다음 궁금증이 있어야 한다.
 """
 
 
@@ -123,6 +127,11 @@ def build_persona_rewrite_diagnostic(
         ("사연자가 진짜 받고 싶은 상담", "sender_problem"),
         ("반복 상징", "symbolic_motif"),
         ("내담자 성향/궁합 렌즈", "client_tendency_read"),
+        ("첫 5초 후킹 cue", "first_5_second_cue"),
+        ("첫 30초 시청 계약", "first_30_second_contract"),
+        ("오픈루프", "open_loops"),
+        ("루프 회수", "loop_payoffs"),
+        ("패턴 인터럽트", "pattern_interrupts"),
     ]:
         value = _format_analysis_value(analysis.get(key))
         if value:
@@ -154,6 +163,10 @@ def build_persona_rewrite_diagnostic(
         diagnosis.append("- 체화형 도입 낮음: 사연을 설명하기 전에 화자의 개인적 경험, 반복된 신호, 몸에 남은 감각으로 공기를 먼저 입혀야 한다.")
     if _score_value(scores, "성향궁합_인사이트") < 60:
         diagnosis.append("- 성향/궁합 인사이트 낮음: MBTI나 사주를 딱지처럼 붙이지 말고, 감정 처리 속도·표현 방식·궁합의 온도 차이를 은근히 상담에 붙여야 한다.")
+    if _score_value(scores, "후킹장치_밀도") < 65:
+        diagnosis.append("- 후킹 장치 밀도 낮음: 첫 5초 결과/논쟁, 첫 30초 시청 계약, 타임코드별 리훅이 부족하다.")
+    if _score_value(scores, "리텐션_루프") < 65:
+        diagnosis.append("- 리텐션 루프 낮음: 궁금증을 열고 회수하는 구조가 약하다. 오픈루프 3개와 회수 3개를 명시적으로 심어야 한다.")
 
     if metrics:
         metric_lines = []
@@ -166,6 +179,10 @@ def build_persona_rewrite_diagnostic(
             ("체화형 도입 표식", "embodied_markers"),
             ("반복 상징 표식", "symbolic_motif_markers"),
             ("성향/궁합 인사이트 표식", "profile_insight_markers"),
+            ("후킹 장치 표식", "hook_device_markers"),
+            ("오픈루프 표식", "open_loop_markers"),
+            ("회수 표식", "payoff_markers"),
+            ("패턴 인터럽트 표식", "pattern_interrupt_markers"),
             ("AI식 문장", "forbidden_ai_phrases"),
         ]:
             if key in metrics:
@@ -180,9 +197,11 @@ def build_persona_rewrite_diagnostic(
         "[재작성 순서]\n"
         "- 1단계: 화자의 개인 경험이나 몸의 감각으로 사연의 공기를 먼저 입힌다.\n"
         "- 2단계: 반복 상징을 세운다. 처음엔 일상 신호, 중간엔 관계 패턴, 후반엔 사회적 공기로 확장한다.\n"
-        "- 3단계: 사연자 편/상대 편/채팅 반론을 나눠 판단이 흔들리는 구조를 만든다.\n"
-        "- 4단계: MBTI식 성향과 사주·궁합 렌즈를 단정 없이 상담 문장에 스며들게 한다.\n"
-        "- 5단계: 마지막에는 사연자가 실제로 말할 문장과 멈춰야 할 기준으로 닫는다."
+        "- 3단계: 첫 5초 cue와 첫 30초 시청 계약을 새로 쓴다.\n"
+        "- 4단계: 사연자 편/상대 편/채팅 반론을 나눠 판단이 흔들리는 구조를 만든다.\n"
+        "- 5단계: MBTI식 성향과 사주·궁합 렌즈를 단정 없이 상담 문장에 스며들게 한다.\n"
+        "- 6단계: 매 타임코드 첫 문장에 리훅을 넣고, 오픈루프를 열었다면 반드시 회수한다.\n"
+        "- 7단계: 마지막에는 사연자가 실제로 말할 문장과 댓글에서 갈릴 질문으로 닫는다."
     )
     return "\n\n".join(parts).strip()
 
@@ -229,6 +248,7 @@ def improve_failed_script(
 {LIVE_NARRATOR_RULES}
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
+{VIRAL_RETENTION_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -246,6 +266,8 @@ def improve_failed_script(
 - 재작성 브리프의 페르소나를 먼저 체화하고, 그 화자가 실제 라이브에서 말할 수 없는 문장은 버린다.
 - 개인 경험형 도입과 반복 상징을 넣는다. "나도 그런 날이 있었어"에서 멈추지 말고 감각 디테일이 있어야 한다.
 - MBTI/사주 궁합/오행 인사이트를 은근히 넣되, 확정 진단·예언처럼 말하지 않는다.
+- 첫 5초는 결과/논쟁/책임 갈림으로 시작한다. 첫 30초 안에는 끝까지 봐야 하는 이유를 만든다.
+- 매 타임코드 첫 문장에 리훅을 넣고, 오픈루프 3개 이상과 회수 3개 이상을 설계한다.
 - 서사 몰입도, 채팅 논쟁성, 상담성 점수가 낮으면 해당 항목을 구조적으로 보강한다.
 - 각 구간은 장면 재구성, 화자 리액션, 채팅 충돌, 사주/점성술 패턴 읽기, 현실 상담 문장 중 최소 4개 이상을 포함한다.
 - AI식 일반 멘트 금지: 안녕하세요 여러분, 함께 고민해볼까요, 다양한 시각이 있네요, 깊은 대화를 나눠보세요.
@@ -259,7 +281,7 @@ def improve_failed_script(
         "current_script": clean_text(current_script, 18000),
         "quality_report": compact_quality_report(quality),
         "rewrite_brief": brief,
-        "persona_first_instruction": "대본을 쓰기 전에 32~38세 한국 여성 라이브 상담 유튜버의 입장에서 이 사연을 어떻게 받아칠지 먼저 내면화하라. 화자의 개인 경험형 도입과 반복 상징, 은근한 MBTI/사주 궁합 인사이트를 설계하되 출력에는 분석 메모를 남기지 말고 체화된 말투만 남겨라.",
+        "persona_first_instruction": "대본을 쓰기 전에 32~38세 한국 여성 라이브 상담 유튜버의 입장에서 이 사연을 어떻게 받아칠지 먼저 내면화하라. 화자의 개인 경험형 도입과 반복 상징, 은근한 MBTI/사주 궁합 인사이트, 첫 5초 cue, 첫 30초 시청 계약, 오픈루프와 회수를 설계하되 출력에는 분석 메모를 남기지 말고 체화된 말투만 남겨라.",
         "user_direction": user_direction.strip(),
         "improvement_mode": improvement_mode,
         "mission": "품질검사 통과를 목표로 대본을 전면 개선하라. 특히 후킹, 서사 몰입도, 채팅 논쟁성, 라이브감, 상담성, 캐릭터성, 로컬라이징, 타임코드 밀도를 강화하라. 사용자가 준 디렉션이 있으면 최우선으로 반영하라.",
@@ -270,6 +292,9 @@ def improve_failed_script(
             "required_exact_advice_sentences": 4,
             "required_embodied_personal_anchor": 1,
             "required_implicit_profile_insights": 3,
+            "required_open_loops": 3,
+            "required_loop_payoffs": 3,
+            "required_micro_hooks_per_timecode": True,
             "forbidden_output": ["목차", "제작 메모", "분석 라벨", "요약형 비트"],
         },
     }
@@ -312,6 +337,7 @@ def generate_directed_addition(
 {LIVE_NARRATOR_RULES}
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
+{VIRAL_RETENTION_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -324,6 +350,7 @@ def generate_directed_addition(
 - 사용자가 지정한 보강 방향에 맞는 추가 구간만 만든다.
 - 재작성 브리프의 화자 페르소나를 먼저 체화한다. 추가 블록만 따로 튀는 문어체가 되면 실패다.
 - 부족한 부분이 체화/인사이트라면 화자의 개인 경험, 반복 상징, MBTI식 성향/사주 궁합 렌즈를 한 블록 안에 자연스럽게 넣는다.
+- 부족한 부분이 후킹/몰입이라면 해당 추가 블록 자체도 첫 문장에 마이크로 후킹, 중간에 패턴 인터럽트, 끝에 다음 궁금증을 넣는다.
 - 타임코드를 포함한다. 예: 04:20 추가 / 06:50 보강 / 09:10 보강.
 - 기존 대본에 자연스럽게 삽입될 수 있게 시작과 끝을 연결형 멘트로 쓴다.
 - 추상 조언 금지. 디테일한 방송 멘트와 실제 상담 문장을 넣는다.
@@ -338,7 +365,7 @@ def generate_directed_addition(
         "current_script": clean_text(current_script, 18000),
         "quality_report": compact_quality_report(quality),
         "rewrite_brief": brief,
-        "persona_first_instruction": "추가 블록도 같은 32~38세 한국 여성 라이브 상담 유튜버가 이어서 말하는 것처럼 써라. 필요하면 개인 경험형 감각이나 MBTI/사주 궁합 인사이트를 은근히 보강하라.",
+        "persona_first_instruction": "추가 블록도 같은 32~38세 한국 여성 라이브 상담 유튜버가 이어서 말하는 것처럼 써라. 필요하면 개인 경험형 감각, MBTI/사주 궁합 인사이트, 리훅과 오픈루프 회수를 은근히 보강하라.",
         "user_direction": user_direction.strip(),
         "target_section": target_section,
         "target_length": target_length,
