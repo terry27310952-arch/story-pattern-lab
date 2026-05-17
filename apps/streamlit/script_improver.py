@@ -5,7 +5,9 @@ from typing import Optional
 
 from llm_pipeline import (
     LIVE_NARRATOR_RULES,
+    LIVE_SCRIPT_CONTRACT,
     STYLE_REFERENCE_BLOCK,
+    STORY_IMMERSION_ENGINE,
     clean_text,
     localization_prompt,
     openai_chat,
@@ -16,7 +18,7 @@ IMPROVEMENT_RULES = """
 품질검사 실패 시 개선 룰:
 1. 실패 항목을 우선순위로 정리한다. critical_failures > 낮은 점수 항목 > warnings 순서다.
 2. 대본을 살짝 고치는 것이 아니라, 실패 원인을 해결하도록 구조를 재작성한다.
-3. 분량 부족이면 전체를 10분 롱폼 수준으로 확장한다. 최소 8,000자, 권장 9,000~11,000자.
+3. 분량 부족이면 전체를 10분 롱폼 수준으로 확장한다. 최소 8,500자, 권장 9,000~11,000자.
 4. 후킹 약함이면 첫 700자에서 인사말을 삭제하고 사건의 폭탄, 판단 갈림, 책임 소재를 먼저 보여준다.
 5. 라이브감 부족이면 채팅 의견을 최소 3회 받아치고, 단순 의견 유도가 아니라 채팅 의견 때문에 화자의 판단이 흔들리거나 보정되는 장면을 넣는다.
 6. 상담성 부족이면 '대화해보세요' 같은 추상 조언을 금지한다. 실제로 말할 문장, 상대 반응별 대응, 피해야 할 행동까지 쓴다.
@@ -26,6 +28,9 @@ IMPROVEMENT_RULES = """
 10. 민감 주제 처리 부족이면 단정하지 않는다. 정체성, 사생활, 아웃팅, 차별, 폭력, 임신, 장애 등은 행동과 정체성을 분리하고 2차 피해 방지 조언을 넣는다.
 11. 사용자가 직접 입력한 디렉션은 품질검사보다 우선한다. 단, 원문 왜곡, 단정적 점술, 혐오/비하, 개인정보 노출은 하지 않는다.
 12. 추가 생성 모드에서는 기존 대본을 전부 다시 쓰지 말고, 부족한 구간에 붙일 수 있는 방송 멘트 블록을 만든다.
+13. 서사 몰입도 부족이면 각 타임코드마다 새 정보, 판단 변화, 반대 해석, 다음 궁금증을 넣는다.
+14. 채팅 논쟁성 부족이면 찬반 채팅을 실제로 받아치며 화자의 판단이 보정되는 장면을 만든다.
+15. 최종 대본에는 제작 메모, 목차, 분석 라벨이 남으면 안 된다. 타임코드와 실제 방송 멘트만 남긴다.
 """
 
 DIRECTION_GUIDE = """
@@ -87,17 +92,21 @@ def improve_failed_script(
 
 {LIVE_NARRATOR_RULES}
 {STYLE_REFERENCE_BLOCK}
+{STORY_IMMERSION_ENGINE}
+{LIVE_SCRIPT_CONTRACT}
 {localization_prompt()}
 {IMPROVEMENT_RULES}
 {DIRECTION_GUIDE}
 
 재작성 절대 조건:
 - 기존 대본을 문장 몇 개만 수정하지 말고, 실패 원인을 해결하도록 다시 쓴다.
-- 총 8,000자 이상, 권장 9,000~11,000자.
-- 타임코드 10개 이상.
+- 총 8,500자 이상, 권장 9,000~11,000자.
+- 타임코드 11개 이상. 타임코드 줄은 00:00 형식만 쓴다.
 - 각 타임코드마다 실제 방송 멘트를 길게 작성한다. 요약/목차 금지.
 - 품질검사 리포트의 critical_failures는 반드시 해결한다.
 - 사용자 디렉션이 있으면 반드시 눈에 보이게 반영한다.
+- 서사 몰입도, 채팅 논쟁성, 상담성 점수가 낮으면 해당 항목을 구조적으로 보강한다.
+- 각 구간은 장면 재구성, 화자 리액션, 채팅 충돌, 사주/점성술 패턴 읽기, 현실 상담 문장 중 최소 4개 이상을 포함한다.
 - AI식 일반 멘트 금지: 안녕하세요 여러분, 함께 고민해볼까요, 다양한 시각이 있네요, 깊은 대화를 나눠보세요.
 - 반환은 개선된 대본 텍스트만. JSON 금지."""
 
@@ -111,7 +120,14 @@ def improve_failed_script(
         "rewrite_brief": brief,
         "user_direction": user_direction.strip(),
         "improvement_mode": improvement_mode,
-        "mission": "품질검사 통과를 목표로 대본을 전면 개선하라. 특히 후킹, 라이브감, 상담성, 캐릭터성, 로컬라이징, 타임코드 밀도를 강화하라. 사용자가 준 디렉션이 있으면 최우선으로 반영하라.",
+        "mission": "품질검사 통과를 목표로 대본을 전면 개선하라. 특히 후킹, 서사 몰입도, 채팅 논쟁성, 라이브감, 상담성, 캐릭터성, 로컬라이징, 타임코드 밀도를 강화하라. 사용자가 준 디렉션이 있으면 최우선으로 반영하라.",
+        "repair_contract": {
+            "minimum_total_chars": 8500,
+            "minimum_timecodes": 11,
+            "required_chat_collisions": 5,
+            "required_exact_advice_sentences": 4,
+            "forbidden_output": ["목차", "제작 메모", "분석 라벨", "요약형 비트"],
+        },
     }
     raw, error = openai_chat(
         [
@@ -151,6 +167,8 @@ def generate_directed_addition(
 
 {LIVE_NARRATOR_RULES}
 {STYLE_REFERENCE_BLOCK}
+{STORY_IMMERSION_ENGINE}
+{LIVE_SCRIPT_CONTRACT}
 {localization_prompt()}
 {IMPROVEMENT_RULES}
 {DIRECTION_GUIDE}
@@ -161,6 +179,7 @@ def generate_directed_addition(
 - 타임코드를 포함한다. 예: 04:20 추가 / 06:50 보강 / 09:10 보강.
 - 기존 대본에 자연스럽게 삽입될 수 있게 시작과 끝을 연결형 멘트로 쓴다.
 - 추상 조언 금지. 디테일한 방송 멘트와 실제 상담 문장을 넣는다.
+- 보강 블록 안에도 장면, 채팅 충돌, 판단 변화, 실제 상담 문장 중 최소 3개 이상을 넣는다.
 - 반환은 추가 생성 블록 텍스트만. JSON 금지."""
 
     user = {
