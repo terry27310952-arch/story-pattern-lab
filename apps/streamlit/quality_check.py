@@ -6,17 +6,34 @@ from statistics import mean
 
 FORBIDDEN_AI_PHRASES = [
     "안녕하세요 여러분",
+    "여러분, 오늘은",
+    "오늘은 정말 복잡한 사연",
+    "오늘은 많은 분들이",
     "함께 고민해보면 좋을 것 같아요",
     "그럼 시작해볼까요",
+    "자, 그럼 같이 살펴보죠",
     "정말 서운하셨겠어요",
     "정말 다양한 시각이 있는 것 같아요",
     "댓글로 여러분의 의견을 한번 남겨주세요",
+    "채팅창에 한 번 써보세요",
+    "댓글로 이야기해보세요",
+    "비슷한 경험 있으신가요",
     "서로의 감정을 존중",
     "솔직하게 감정을 표현",
+    "솔직한 대화가 필요",
     "깊은 대화를 나눠보세요",
+    "대화는 진짜 중요",
     "관계를 개선할 수 있는 시작",
+    "작은 변화부터",
+    "많은 걸 느끼고 배울",
+    "사연자님, 화이팅",
     "오늘도 함께해 주셔서 감사",
+    "궁금한 점이나 고민",
     "다음 시간에도",
+    "다음에 또 새로운 사연",
+    "안녕히 주무세요",
+    "좋은 하루 되세요",
+    "기운 좋게 하루를 마무리",
 ]
 
 TEMPLATE_LEAK_PHRASES = [
@@ -35,6 +52,32 @@ DIRECT_FORTUNE_ABSOLUTES = [
     "절대적으로",
     "평생 안 맞",
     "타고난 팔자가",
+]
+
+LOW_VALUE_CTA_PATTERNS = [
+    "채팅창에 한 번 써보세요", "채팅에 적어보세요", "댓글로 이야기해보세요", "댓글로 남겨주세요",
+    "공유해주시면 좋겠어요", "화이팅", "응원해주면", "여러분의 생각을 댓글",
+]
+
+GENERIC_OUTRO_PATTERNS = [
+    "다음에 또", "오늘도 함께", "궁금한 점이나 고민", "서로의 이야기", "더 많은 걸 배울",
+    "안녕히 주무세요", "좋은 하루", "하루를 마무리", "다음 방송", "새로운 사연",
+]
+
+INTIMACY_TOPIC_PATTERNS = [
+    "성관계", "성적인", "몸", "벗은", "나체", "불을 끄", "침대", "관계 중", "친밀한",
+    "메타 글라스", "스마트 안경", "안경", "카메라", "촬영", "녹화", "기록", "보여주는",
+]
+
+INTIMACY_SAFETY_PATTERNS = [
+    "동의", "사전 설명", "허락", "촬영", "녹화", "기록", "저장", "삭제", "프라이버시",
+    "경계", "중단", "멈춰", "거절", "불편", "압박", "수치심", "안전", "비공개",
+    "확인", "합의", "공개 범위", "민감",
+]
+
+BAD_INTIMACY_HANDLING_PATTERNS = [
+    "성관계 중에 그를 쫓아낸", "완전히 벗은 모습을", "시각적 자극", "몸에 대한 불안감",
+    "관계를 더 깊게", "성적인 경계를 다시 설정", "취향을 공유",
 ]
 
 LIVE_CHAT_PATTERNS = [
@@ -139,6 +182,12 @@ EXACT_ADVICE_PATTERNS = [
     "그때는", "여기까지만", "기준을", "보내세요", "물어보세요",
 ]
 
+BOUNDARY_ADVICE_PATTERNS = [
+    "기기를 벗", "안경을 벗", "촬영되는지", "녹화되는지", "저장되는지", "삭제해",
+    "동의 없이", "동의한 적 없", "지금은 멈춰", "여기서 중단", "불편하면 중단",
+    "사전에 말", "먼저 확인", "경계를 다시", "허락 없이는", "비공개로",
+]
+
 OUTLINE_LEAK_PATTERNS = [
     "이 구간에서는", "핵심 포인트", "요약하자면", "다음 단계", "목표는", "분석:", "상담:", "채팅 반응:",
 ]
@@ -227,6 +276,8 @@ def quality_check_live_script(script: str) -> dict:
     sender = text.count("사연자님")
     viewer = text.count("여러분")
     forbidden_ai = count_any(text, FORBIDDEN_AI_PHRASES)
+    low_value_cta = count_any(text, LOW_VALUE_CTA_PATTERNS)
+    generic_outro = count_any(text, GENERIC_OUTRO_PATTERNS)
     template_leak = count_any(text, TEMPLATE_LEAK_PHRASES)
     fortune_absolute = count_any(text, DIRECT_FORTUNE_ABSOLUTES)
     sensitive_safety = count_any(text, SENSITIVE_SAFETY_PATTERNS)
@@ -244,6 +295,10 @@ def quality_check_live_script(script: str) -> dict:
     payoffs = count_any(text, PAYOFF_PATTERNS)
     pattern_interrupts = count_any(text, PATTERN_INTERRUPT_PATTERNS)
     stakes = count_any(text, STAKES_PATTERNS)
+    intimacy_topic = count_any(text, INTIMACY_TOPIC_PATTERNS)
+    intimacy_safety = count_any(text, INTIMACY_SAFETY_PATTERNS)
+    bad_intimacy_handling = count_any(text, BAD_INTIMACY_HANDLING_PATTERNS)
+    boundary_advice = count_any(text, BOUNDARY_ADVICE_PATTERNS)
     outline_leak = count_any(text, OUTLINE_LEAK_PATTERNS)
 
     section_structure_score, section_metrics = section_score(sections)
@@ -255,6 +310,7 @@ def quality_check_live_script(script: str) -> dict:
     sections_with_profile_insight = count_sections_with(sections, PROFILE_INSIGHT_PATTERNS + COMPATIBILITY_INSIGHT_PATTERNS)
     sections_with_rehook = count_sections_with(sections, HOOK_DEVICE_PATTERNS + OPEN_LOOP_PATTERNS + PATTERN_INTERRUPT_PATTERNS)
     sections_with_open_loop_or_payoff = count_sections_with(sections, OPEN_LOOP_PATTERNS + PAYOFF_PATTERNS)
+    sections_with_boundary_advice = count_sections_with(sections, BOUNDARY_ADVICE_PATTERNS)
 
     length_score = ratio_score(length, 9000, 3000)
     timecode_structure_score = section_structure_score
@@ -262,29 +318,31 @@ def quality_check_live_script(script: str) -> dict:
     polite_part = ratio_score(polite, 120, 30)
     casual_part = ratio_score(casual, 35, 8)
     mixed_bonus = 18 if polite >= 60 and casual >= 18 else 0
-    banality_penalty = min(45, forbidden_ai * 10 + template_leak * 18)
+    banality_penalty = min(55, forbidden_ai * 10 + low_value_cta * 8 + generic_outro * 8 + template_leak * 18)
     banter_score = clamp_score((polite_part * 0.35) + (casual_part * 0.50) + mixed_bonus - banality_penalty)
 
     chat_part = ratio_score(chat, 18, 3)
     viewer_part = ratio_score(viewer, 12, 4)
     reactive_part = ratio_score(casual, 30, 6)
-    live_score = clamp_score((chat_part * 0.42) + (viewer_part * 0.28) + (reactive_part * 0.30) - forbidden_ai * 7)
+    live_score = clamp_score((chat_part * 0.42) + (viewer_part * 0.28) + (reactive_part * 0.30) - forbidden_ai * 7 - low_value_cta * 8)
 
     turn_part = ratio_score(sections_with_turns, 8, 2)
     scene_part = ratio_score(sections_with_scenes, 8, 2)
     curiosity_part = ratio_score(immersion_turns, 28, 6)
-    immersion_score = clamp_score((turn_part * 0.36) + (scene_part * 0.34) + (curiosity_part * 0.30) - outline_leak * 18)
+    filler_penalty = min(35, generic_outro * 7 + low_value_cta * 6)
+    immersion_score = clamp_score((turn_part * 0.36) + (scene_part * 0.34) + (curiosity_part * 0.30) - outline_leak * 18 - filler_penalty)
 
     chat_collision_part = ratio_score(chat_collisions, 10, 2)
     chat_section_part = ratio_score(sections_with_chat, 5, 1)
-    debate_design_score = clamp_score((chat_collision_part * 0.56) + (chat_section_part * 0.44) - forbidden_ai * 5)
+    debate_design_score = clamp_score((chat_collision_part * 0.56) + (chat_section_part * 0.44) - forbidden_ai * 5 - low_value_cta * 10)
 
     sender_part = ratio_score(sender, 9, 3)
     advice_part = ratio_score(advice, 24, 6)
     concrete_part = ratio_score(concrete_advice, 12, 2)
     exact_advice_part = ratio_score(exact_advice, 9, 2)
     safety_bonus = min(15, sensitive_safety * 3)
-    counseling_score = clamp_score((sender_part * 0.18) + (advice_part * 0.24) + (concrete_part * 0.28) + (exact_advice_part * 0.20) + safety_bonus - forbidden_ai * 5)
+    boundary_part = ratio_score(boundary_advice, 7, 1)
+    counseling_score = clamp_score((sender_part * 0.14) + (advice_part * 0.20) + (concrete_part * 0.24) + (exact_advice_part * 0.18) + (boundary_part * 0.14) + safety_bonus - forbidden_ai * 5 - low_value_cta * 5)
 
     narrator_part = ratio_score(narrator, 14, 3)
     astro_part = ratio_score(astro, 10, 2)
@@ -333,9 +391,15 @@ def quality_check_live_script(script: str) -> dict:
         - outline_leak * 10
     )
 
-    sensitive_topic_detected = count_any(text, ["정체성", "아웃", "성", "사생활", "헬스장", "스팀", "폭력", "임신", "장애", "차별"]) > 0
+    sensitive_topic_detected = count_any(text, ["정체성", "아웃", "성", "사생활", "헬스장", "스팀", "폭력", "임신", "장애", "차별"]) > 0 or intimacy_topic > 0
     if sensitive_topic_detected:
-        sensitive_score = clamp_score(ratio_score(sensitive_safety, 7, 1) - fortune_absolute * 10)
+        sensitive_score = clamp_score(
+            (ratio_score(sensitive_safety + intimacy_safety, 11, 2) * 0.45)
+            + (ratio_score(boundary_advice, 7, 1) * 0.35)
+            + (ratio_score(sections_with_boundary_advice, 3, 1) * 0.20)
+            - fortune_absolute * 10
+            - bad_intimacy_handling * 12
+        )
     else:
         sensitive_score = 100
 
@@ -373,7 +437,7 @@ def quality_check_live_script(script: str) -> dict:
         "민감주제_처리": 0.02,
     }
     weighted = sum(scores[name] * weight for name, weight in weights.items())
-    hard_penalty = min(40, forbidden_ai * 4 + template_leak * 12 + fortune_absolute * 12 + outline_leak * 10)
+    hard_penalty = min(55, forbidden_ai * 4 + low_value_cta * 6 + generic_outro * 6 + template_leak * 12 + fortune_absolute * 12 + outline_leak * 10 + bad_intimacy_handling * 8)
     overall = clamp_score(weighted - hard_penalty)
 
     outline_only = length < 3500 or (timecodes >= 6 and length / max(timecodes, 1) < 520)
@@ -391,6 +455,15 @@ def quality_check_live_script(script: str) -> dict:
         critical_failures.append("짧은 타임코드 구간이 많습니다. 각 구간을 실제 방송 멘트로 확장해야 합니다.")
     if outline_only:
         critical_failures.append("목차형 출력: 타임코드마다 말이 너무 짧습니다.")
+    if low_value_cta >= 2:
+        critical_failures.append("저품질 채팅 유도: 채팅/댓글 요청이 실제 논쟁을 만들지 못하고 응원/반응 구걸처럼 보입니다.")
+        rewrite_guidance.append("채팅 유도 대신 찬반이 갈리는 실제 질문과 화자의 즉시 반박/보정을 넣으세요.")
+    if generic_outro >= 3:
+        critical_failures.append("후반부 빈말 반복: 방송 종료/감사/다음 사연 멘트가 분량을 채우고 있습니다.")
+        rewrite_guidance.append("05:30 이후에도 새 정보, 판단 변화, 상대 반응별 대응, 오픈루프 회수를 넣으세요.")
+    if intimacy_topic and (intimacy_safety < 5 or boundary_advice < 3):
+        critical_failures.append("친밀관계 민감 사연 처리 실패: 동의, 촬영/녹화 가능성, 기기 사용, 프라이버시, 중단 기준을 충분히 다루지 않았습니다.")
+        rewrite_guidance.append("몸 평가나 성적 디테일보다 '기기 착용 동의 여부, 촬영/저장 여부 확인, 즉시 중단할 기준, 삭제/확인 문장'을 중심으로 재작성하세요.")
     if opening_score < 60:
         critical_failures.append("후킹 약함: 첫 700자 안에 갈등/책임/논란이 선명하게 들어가야 합니다.")
         rewrite_guidance.append("오프닝 인사 삭제 후 사건 폭탄부터 시작하세요.")
@@ -429,6 +502,12 @@ def quality_check_live_script(script: str) -> dict:
         rewrite_guidance.append("정체성 단정 금지, 2차 피해 방지, 비공개 사과, 관리자에게는 행동 기준으로만 말하기를 포함하세요.")
     if forbidden_ai:
         warnings.append(f"AI식 일반 문장 감지: {forbidden_ai}개. 금지 문장류를 제거하세요.")
+    if low_value_cta:
+        warnings.append(f"저품질 채팅/댓글 유도 감지: {low_value_cta}개. 참여 요청을 실제 논쟁 질문으로 바꾸세요.")
+    if generic_outro:
+        warnings.append(f"빈 마무리 멘트 감지: {generic_outro}개. 후반부를 새 정보와 상담 대응으로 채우세요.")
+    if bad_intimacy_handling:
+        warnings.append("친밀관계 사연에서 자극적이거나 초점이 흐린 표현이 있습니다. 동의와 프라이버시 중심으로 바꾸세요.")
     if template_leak:
         critical_failures.append(f"템플릿 찌꺼기 감지: {template_leak}개. 이전 사연 문맥이 섞였습니다.")
     if fortune_absolute:
@@ -493,8 +572,14 @@ def quality_check_live_script(script: str) -> dict:
             "stakes_markers": stakes,
             "sender_mentions": sender,
             "forbidden_ai_phrases": forbidden_ai,
+            "low_value_cta_markers": low_value_cta,
+            "generic_outro_markers": generic_outro,
             "template_leaks": template_leak,
             "fortune_absolutes": fortune_absolute,
+            "intimacy_topic_markers": intimacy_topic,
+            "intimacy_safety_markers": intimacy_safety,
+            "bad_intimacy_handling_markers": bad_intimacy_handling,
+            "boundary_advice_markers": boundary_advice,
             "sensitive_safety_markers": sensitive_safety,
             "immersion_turn_markers": immersion_turns,
             "scene_detail_markers": scene_details,
@@ -508,6 +593,7 @@ def quality_check_live_script(script: str) -> dict:
             "sections_with_profile_insight": sections_with_profile_insight,
             "sections_with_rehook": sections_with_rehook,
             "sections_with_open_loop_or_payoff": sections_with_open_loop_or_payoff,
+            "sections_with_boundary_advice": sections_with_boundary_advice,
             "first_1800_embodied_markers": opening_embodied,
             "first_1800_symbolic_markers": opening_symbolic,
             "first_700_hook_device_markers": first_700_hook_devices,
