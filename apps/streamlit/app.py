@@ -41,6 +41,15 @@ except Exception:
     quality_check_live_script = None
 
 try:
+    from script_improver import build_rewrite_brief, improve_failed_script
+except Exception as import_error:
+    build_rewrite_brief = None
+    improve_failed_script = None
+    SCRIPT_IMPROVER_IMPORT_ERROR = str(import_error)
+else:
+    SCRIPT_IMPROVER_IMPORT_ERROR = None
+
+try:
     from supabase_store import is_configured as db_is_configured
     from supabase_store import load_packages, save_package
 except Exception:
@@ -406,6 +415,45 @@ def render_quality(quality: dict) -> None:
         st.info("품질 기준 미달입니다. 품질개선 워크벤치나 퀵패널에서 재작성하세요.")
 
 
+def run_quality_improvement(
+    selected_key: str,
+    selected_row: dict,
+    source_text: str,
+    analysis: dict,
+    blueprint: dict,
+    script: str,
+    quality: dict,
+    model: str,
+    temperature: float,
+    mode: str,
+    user_direction: str,
+) -> tuple[str, dict, str | None]:
+    if improve_failed_script is None:
+        return script, quality, "script_improver.py를 불러오지 못했습니다."
+    if not script:
+        return script, quality, "개선할 대본이 없습니다."
+    if not quality and quality_check_live_script:
+        quality = quality_check_live_script(script)
+    improved, error = improve_failed_script(
+        source_text=source_text,
+        analysis=analysis,
+        blueprint=blueprint,
+        current_script=script,
+        quality=quality or {},
+        row=selected_row,
+        model=model,
+        temperature=temperature,
+        improvement_mode=mode,
+        user_direction=user_direction,
+    )
+    if error:
+        return script, quality, error
+    new_quality = quality_check_live_script(improved) if quality_check_live_script else {}
+    st.session_state.longform_scripts[selected_key] = improved
+    st.session_state.quality_checks[selected_key] = new_quality
+    return improved, new_quality, None
+
+
 st.title("Story Pattern Lab")
 st.caption("자동 본문 수집 · 라이브 사연 상담형 반존대 대본 · 사주/점성술 화자성 · Supabase 히스토리")
 
@@ -439,8 +487,12 @@ with st.sidebar:
     st.caption(f"Supabase: {'ON' if db_is_configured() else 'OFF'}")
     llm_model = st.text_input("모델명", value=get_secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL) or DEFAULT_OPENAI_MODEL)
     temperature = st.slider("창의성", 0.1, 1.2, 0.78, 0.05)
+    auto_improve_after_generation = st.checkbox("생성 직후 품질 미달이면 자동 개선", value=True)
+    auto_improve_rounds = st.slider("자동 개선 최대 회차", 1, 3, 2, 1, disabled=not auto_improve_after_generation)
     if LLM_PIPELINE_IMPORT_ERROR:
         st.error(f"LLM 파이프라인 로드 실패: {LLM_PIPELINE_IMPORT_ERROR}")
+    if SCRIPT_IMPROVER_IMPORT_ERROR:
+        st.error(f"품질개선 모듈 로드 실패: {SCRIPT_IMPROVER_IMPORT_ERROR}")
     if st.button("Supabase 테스트", use_container_width=True):
         _, err = load_packages(1)
         st.error(err) if err else st.success("Supabase 연결 성공")
@@ -596,6 +648,38 @@ with tabs[2]:
                 if quality_check_live_script:
                     st.session_state.quality_checks[key] = quality_check_live_script(script)
                     quality = st.session_state.quality_checks[key]
+                if quality and not quality.get("passed") and auto_improve_after_generation and improve_failed_script:
+                    current_script = script
+                    current_quality = quality
+                    improve_logs: list[str] = []
+                    with st.spinner("품질 미달 감지: 자동 개선 루프 실행 중..."):
+                        for round_idx in range(1, auto_improve_rounds + 1):
+                            current_script, current_quality, improve_error = run_quality_improvement(
+                                selected_key=key,
+                                selected_row=selected,
+                                source_text=source_text,
+                                analysis=analysis,
+                                blueprint=blueprint,
+                                script=current_script,
+                                quality=current_quality,
+                                model=llm_model,
+                                temperature=temperature,
+                                mode="품질검사 기준 통과용 전면 재작성",
+                                user_direction="품질검사 실패 항목을 우선 해결하고, 분량/타임코드/후킹/상담성/캐릭터성/민감주제 처리를 모두 보강하세요.",
+                            )
+                            if improve_error:
+                                improve_logs.append(f"{round_idx}회차 실패: {improve_error}")
+                                break
+                            improve_logs.append(f"{round_idx}회차 개선: 점수 {current_quality.get('overall_score', 'N/A')} / 통과 {'YES' if current_quality.get('passed') else 'NO'}")
+                            if current_quality.get("passed"):
+                                break
+                    longform = current_script
+                    quality = current_quality
+                    st.session_state.last_auto_improve_logs = improve_logs
+                    if quality.get("passed"):
+                        st.success("10분 대본 생성 후 자동 품질개선까지 통과했습니다.")
+                    else:
+                        st.warning("자동 품질개선을 실행했지만 아직 기준 미달입니다. 아래 품질개선 패널에서 PD 디렉션을 추가해 다시 개선하세요.")
                 st.success("10분 대본 생성 완료")
         edited_longform = st.text_area("10분 롱폼 대본", value=longform, height=520)
         if edited_longform != longform:
@@ -617,11 +701,91 @@ with tabs[2]:
             st.info("파생 콘텐츠나 저장 전에 품질검사를 먼저 실행하세요.")
         if longform and quality and not quality_passed:
             st.error("현재 대본은 발행 기준 미달입니다. 기본적으로 파생 콘텐츠 생성과 저장을 막습니다.")
+            st.markdown("#### 품질개선 바로 실행")
+            st.caption("다른 페이지로 이동하지 않고, 현재 제작실에서 실패 리포트 기반 재작성을 바로 실행합니다.")
+            direction_key = f"quality_improve_direction_{key}"
+            user_direction = st.text_area(
+                "PD 디렉션",
+                value=st.session_state.get(direction_key, ""),
+                height=120,
+                placeholder="예: 오프닝을 더 세게. 첫 3초 안에 갈등을 박고, 상담 파트는 상대가 회피/역공/사과할 때 실제로 보낼 문장까지 넣어줘.",
+                key=direction_key,
+            )
+            improve_mode = st.selectbox(
+                "개선 모드",
+                [
+                    "품질검사 기준 통과용 전면 재작성",
+                    "사용자 디렉션 최우선 전면 재작성",
+                    "후킹/라이브감 집중 개선",
+                    "상담 디테일 집중 개선",
+                    "캐릭터성/사주점성술 화자성 집중 개선",
+                    "로컬라이징/민감표현 집중 개선",
+                ],
+                key=f"quality_improve_mode_{key}",
+            )
+            if build_rewrite_brief:
+                with st.expander("자동 재작성 브리프", expanded=False):
+                    st.text_area("브리프", build_rewrite_brief(quality), height=180, disabled=True)
+            improve_cols = st.columns(2)
+            if improve_cols[0].button("품질 미달 대본 1회 개선", disabled=improve_failed_script is None, type="primary", use_container_width=True, key=f"improve_once_{key}"):
+                with st.spinner("품질검사 실패 항목을 반영해 대본을 1회 재작성 중..."):
+                    longform, quality, improve_error = run_quality_improvement(
+                        selected_key=key,
+                        selected_row=selected,
+                        source_text=source_text,
+                        analysis=analysis,
+                        blueprint=blueprint,
+                        script=longform,
+                        quality=quality,
+                        model=llm_model,
+                        temperature=temperature,
+                        mode=improve_mode,
+                        user_direction=user_direction,
+                    )
+                if improve_error:
+                    st.error(improve_error)
+                else:
+                    st.success(f"1회 개선 완료. 새 점수: {quality.get('overall_score', 'N/A')} / 통과: {'YES' if quality.get('passed') else 'NO'}")
+                    st.rerun()
+            if improve_cols[1].button("통과할 때까지 자동 개선", disabled=improve_failed_script is None, use_container_width=True, key=f"improve_until_pass_{key}"):
+                current_script = longform
+                current_quality = quality
+                logs: list[str] = []
+                with st.spinner("품질검사 통과를 목표로 최대 3회 자동 개선 중..."):
+                    for round_idx in range(1, 4):
+                        current_script, current_quality, improve_error = run_quality_improvement(
+                            selected_key=key,
+                            selected_row=selected,
+                            source_text=source_text,
+                            analysis=analysis,
+                            blueprint=blueprint,
+                            script=current_script,
+                            quality=current_quality,
+                            model=llm_model,
+                            temperature=temperature,
+                            mode=improve_mode,
+                            user_direction=user_direction,
+                        )
+                        if improve_error:
+                            logs.append(f"{round_idx}회차 실패: {improve_error}")
+                            break
+                        logs.append(f"{round_idx}회차 개선: 점수 {current_quality.get('overall_score', 'N/A')} / 통과 {'YES' if current_quality.get('passed') else 'NO'}")
+                        if current_quality.get("passed"):
+                            break
+                st.session_state.last_auto_improve_logs = logs
+                if logs:
+                    st.info("\n".join(f"- {item}" for item in logs))
+                st.rerun()
             force_failed_output = st.checkbox(
                 "테스트 목적으로만 품질 미달 대본 진행 허용",
                 value=False,
                 key=f"force_failed_output_{key}",
             )
+
+        if st.session_state.get("last_auto_improve_logs"):
+            with st.expander("최근 자동 개선 로그", expanded=False):
+                for item in st.session_state.last_auto_improve_logs:
+                    st.write(f"- {item}")
 
         st.markdown("### ⑦ 파생 콘텐츠")
         output_locked = bool(longform) and (quality_missing or (bool(quality) and not quality_passed and not force_failed_output))
