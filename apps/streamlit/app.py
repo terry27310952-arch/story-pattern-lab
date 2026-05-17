@@ -98,7 +98,7 @@ st.markdown(
 
 USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.5; public-list-metadata-only"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_OPENAI_MODEL = "gpt-5.5"
 
 OVERSEAS_SOURCES = {
     "Reddit AITA": {"url": "https://www.reddit.com/r/AmItheAsshole/.rss", "category": "AITA / Moral Debate", "status": "Active RSS", "region": "해외"},
@@ -486,6 +486,9 @@ with st.sidebar:
     st.caption(f"OpenAI: {'ON' if openai_is_configured() else 'OFF'}")
     st.caption(f"Supabase: {'ON' if db_is_configured() else 'OFF'}")
     llm_model = st.text_input("모델명", value=get_secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL) or DEFAULT_OPENAI_MODEL)
+    st.caption("품질 우선 권장: gpt-5.5 / 균형: gpt-5.4 / 비용 절감: gpt-5.4-mini")
+    if llm_model.strip().lower() == "gpt-4o-mini":
+        st.warning("gpt-4o-mini는 빠르지만 사연 해부와 10분 라이브 구조 설계 품질이 낮게 나올 수 있습니다.")
     temperature = st.slider("창의성", 0.1, 1.2, 0.78, 0.05)
     auto_improve_after_generation = st.checkbox("생성 직후 품질 미달이면 자동 개선", value=True)
     auto_improve_rounds = st.slider("자동 개선 최대 회차", 1, 3, 2, 1, disabled=not auto_improve_after_generation)

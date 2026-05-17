@@ -22,7 +22,28 @@ except Exception:
 """
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_OPENAI_MODEL = "gpt-5.5"
+DEFAULT_OPENAI_REASONING_EFFORT = "medium"
+
+MODERN_CHAT_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+GENERIC_JSON_PLACEHOLDERS = [
+    "required_schema",
+    "해결 방법 1",
+    "해결 방법 2",
+    "해결 방법 3",
+    "최종 대본",
+    "사건의 배경과 핵심 문제",
+    "상황을 더 깊이 파악",
+    "다양한 의견을 정리",
+    "최종 의견을 제시",
+    "적극적인 참여를 유도",
+    "진지하면서도 친근한 톤",
+    "감정을 담아 전달",
+    "원문 표현을 그대로 쓰지 않고",
+    "시청자들이 댓글로 자신의 의견",
+    "핵심 문제에 대한 간단한 도입",
+]
 
 
 def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -43,16 +64,15 @@ def clean_text(value: str | None, limit: int = 16000) -> str:
     return text[:limit]
 
 
-def openai_chat(messages: list[dict[str, str]], model: str, temperature: float, max_tokens: int) -> tuple[Optional[str], Optional[str]]:
-    api_key = get_secret("OPENAI_API_KEY")
-    if not api_key:
-        return None, "OPENAI_API_KEY가 설정되어 있지 않습니다."
-    base_url = (get_secret("OPENAI_API_BASE", DEFAULT_OPENAI_BASE_URL) or DEFAULT_OPENAI_BASE_URL).rstrip("/")
-    endpoint = f"{base_url}/chat/completions"
-    payload = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+def uses_modern_chat_params(model: str) -> bool:
+    normalized = (model or "").strip().lower()
+    return normalized.startswith(MODERN_CHAT_MODEL_PREFIXES)
+
+
+def post_chat_completion(endpoint: str, api_key: str, payload: dict) -> tuple[Optional[str], Optional[str]]:
     request = Request(endpoint, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}, method="POST")
     try:
-        with urlopen(request, timeout=180) as response:
+        with urlopen(request, timeout=300) as response:
             result = json.loads(response.read().decode("utf-8"))
         return result["choices"][0]["message"]["content"], None
     except HTTPError as error:
@@ -65,6 +85,61 @@ def openai_chat(messages: list[dict[str, str]], model: str, temperature: float, 
         return None, f"OpenAI 네트워크 오류: {error}"
     except Exception as error:
         return None, f"OpenAI 호출 오류: {error}"
+
+
+def openai_chat(messages: list[dict[str, str]], model: str, temperature: float, max_tokens: int, json_mode: bool = False) -> tuple[Optional[str], Optional[str]]:
+    api_key = get_secret("OPENAI_API_KEY")
+    if not api_key:
+        return None, "OPENAI_API_KEY가 설정되어 있지 않습니다."
+    base_url = (get_secret("OPENAI_API_BASE", DEFAULT_OPENAI_BASE_URL) or DEFAULT_OPENAI_BASE_URL).rstrip("/")
+    endpoint = f"{base_url}/chat/completions"
+    payload = {"model": model, "messages": messages, "temperature": temperature}
+    if uses_modern_chat_params(model):
+        payload["max_completion_tokens"] = max_tokens
+        effort = get_secret("OPENAI_REASONING_EFFORT", DEFAULT_OPENAI_REASONING_EFFORT)
+        if effort:
+            payload["reasoning_effort"] = effort
+    else:
+        payload["max_tokens"] = max_tokens
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+
+    content, error = post_chat_completion(endpoint, api_key, payload)
+    if not error:
+        return content, None
+
+    retry_payload = dict(payload)
+    if "max_completion_tokens" in retry_payload and "max_completion_tokens" in error:
+        retry_payload["max_tokens"] = retry_payload.pop("max_completion_tokens")
+        content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
+        if not retry_error:
+            return content, None
+        error = retry_error
+    if "max_tokens" in retry_payload and "max_tokens" in error:
+        retry_payload["max_completion_tokens"] = retry_payload.pop("max_tokens")
+        content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
+        if not retry_error:
+            return content, None
+        error = retry_error
+    if "reasoning_effort" in retry_payload and "reasoning_effort" in error:
+        retry_payload.pop("reasoning_effort", None)
+        content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
+        if not retry_error:
+            return content, None
+        error = retry_error
+    if "temperature" in retry_payload and "temperature" in error:
+        retry_payload.pop("temperature", None)
+        content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
+        if not retry_error:
+            return content, None
+        error = retry_error
+    if "response_format" in retry_payload and ("response_format" in error or "json_object" in error):
+        retry_payload.pop("response_format", None)
+        content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
+        if not retry_error:
+            return content, None
+        error = retry_error
+    return None, error
 
 
 def extract_json_object(text: str) -> tuple[Optional[dict], Optional[str]]:
@@ -82,6 +157,99 @@ def extract_json_object(text: str) -> tuple[Optional[dict], Optional[str]]:
         except Exception as error:
             return None, f"JSON 파싱 실패: {error}"
     return None, "JSON 객체를 찾지 못했습니다."
+
+
+def flatten_json_text(value: object) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return str(value)
+
+
+def find_structural_json_issues(parsed: dict | None, stage: str) -> list[str]:
+    if not parsed:
+        return ["JSON이 비어 있습니다."]
+    issues: list[str] = []
+    text = flatten_json_text(parsed)
+    if "required_schema" in parsed:
+        issues.append("required_schema를 결과에 그대로 포함했습니다.")
+    placeholder_hits = [phrase for phrase in GENERIC_JSON_PLACEHOLDERS if phrase in text]
+    if len(placeholder_hits) >= 2:
+        issues.append("스키마 설명문이나 자리표시자 문장이 결과에 섞였습니다.")
+    if stage == "story_analysis":
+        summary = str(parsed.get("story_summary", ""))
+        premise = str(parsed.get("one_line_viral_premise", ""))
+        if len(summary) < 35 or len(premise) < 35:
+            issues.append("사연 해부의 핵심 요약/바이럴 전제가 너무 얕습니다.")
+        if not parsed.get("viral_angle_bank") and not parsed.get("audience_camps"):
+            issues.append("시청자가 갈릴 바이럴 각도와 댓글 진영이 부족합니다.")
+        if not parsed.get("counseling_targets"):
+            issues.append("실제 상담 문장과 상대 반응별 대응이 부족합니다.")
+    if stage == "live_blueprint":
+        beats = parsed.get("beats")
+        if not isinstance(beats, list) or len(beats) < 10:
+            issues.append("비트시트 타임코드가 부족합니다.")
+        else:
+            weak_beats = 0
+            for beat in beats:
+                beat_text = flatten_json_text(beat)
+                if len(beat_text) < 260 or beat_text.count("문장") + beat_text.count("구체") + beat_text.count("채움") >= 3:
+                    weak_beats += 1
+            if weak_beats >= 3:
+                issues.append("비트시트가 실제 연출 설계가 아니라 빈 설명문에 가깝습니다.")
+    return issues
+
+
+def repair_json_if_needed(
+    stage: str,
+    parsed: dict,
+    raw: str,
+    context: dict,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+) -> tuple[dict, Optional[str]]:
+    issues = find_structural_json_issues(parsed, stage)
+    if not issues:
+        return parsed, None
+
+    system = f"""너는 유튜브 라이브 상담 콘텐츠의 수석 PD다.
+앞선 JSON이 너무 얕거나 required_schema를 그대로 따라 했다. 같은 키 구조를 최대한 유지하되, 빈 양식이 아니라 방송 작가가 바로 쓸 수 있는 완성된 PD 노트로 수리한다.
+
+{STORY_BRAIN_ENGINE}
+{STRUCTURAL_OUTPUT_GUARD}
+{STYLE_REFERENCE_BLOCK}
+
+반드시 JSON만 반환한다."""
+    user = {
+        "stage": stage,
+        "repair_issues": issues,
+        "story_context": context,
+        "bad_output": parsed or raw,
+        "repair_mission": "자리표시자와 일반론을 제거하고, 이 사연만의 돈/권력/수치심/관계 리듬/댓글 갈등/상담 문장으로 다시 채워라.",
+    }
+    repaired_raw, repair_error = openai_chat(
+        [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
+        model=model,
+        temperature=max(0.45, min(temperature, 0.75)),
+        max_tokens=max_tokens,
+        json_mode=True,
+    )
+    if repair_error:
+        parsed["_quality_warning"] = f"구조화 JSON 수리 실패: {repair_error}"
+        parsed["_quality_issues"] = issues
+        return parsed, None
+    repaired, parse_error = extract_json_object(repaired_raw or "")
+    if parse_error or not repaired:
+        parsed["_quality_warning"] = f"구조화 JSON 수리 결과 파싱 실패: {parse_error}"
+        parsed["_quality_issues"] = issues
+        return parsed, None
+    repaired_issues = find_structural_json_issues(repaired, stage)
+    if len(repaired_issues) < len(issues):
+        return repaired, None
+    repaired["_quality_warning"] = "구조화 JSON이 아직 얕을 수 있습니다."
+    repaired["_quality_issues"] = repaired_issues
+    return repaired, None
 
 
 LIVE_NARRATOR_RULES = """
@@ -146,6 +314,28 @@ INTIMACY_BOUNDARY_ENGINE = """
 - 금지: 몸 평가, 성적 취향 훈수, 불 켜보기 같은 노출 적응 조언, "관계를 더 깊게" 같은 미화, "대화가 중요해요"로 끝내기.
 """
 
+STORY_BRAIN_ENGINE = """
+사연 해부/라이브 설계 브레인:
+- 해부의 목표는 요약이 아니라 "왜 사람들이 이 사연을 끝까지 듣고 싸우는지"를 찾아내는 것이다.
+- 모든 사연은 표면 사건, 숨은 욕망, 권력/돈/수치심/가족/몸/비밀 중 어떤 축에서 터졌는지 분리한다.
+- "남자친구가 울었다", "돈을 보여줬다"처럼 사건명만 말하지 않는다. 예: 돈이 숫자가 아니라 자존심, 생존감, 역할 기대, 관계 권력의 증거로 바뀐 순간.
+- 댓글이 갈리는 두 진영을 만든다. 한쪽은 감정적으로 왜 끌리는지, 반대쪽은 왜 반박하는지까지 쓴다.
+- 방송 구조는 매 구간 판단이 움직여야 한다. 00:00의 판단, 03:00의 흔들림, 06:00의 재해석, 09:00의 상담 결론이 서로 달라야 한다.
+- 상담 설계는 "대화해보세요"가 아니라 확인 질문, 상대 반응별 다음 문장, 멈춰야 할 기준, 관계를 계속할 조건을 준다.
+- 사주/점성술/MBTI 렌즈는 장식이 아니다. 감정 처리 속도, 돈의 온도, 비밀의 자리, 사회적 얼굴, 자존심의 화기처럼 사건의 구조를 읽는 비유로 쓴다.
+- 좋은 분석은 PD, 작가, 진행자가 바로 쓸 수 있어야 한다. 추상어 하나를 쓰면 반드시 장면, 실제 멘트, 채팅 갈등 중 하나로 내려앉힌다.
+"""
+
+STRUCTURAL_OUTPUT_GUARD = """
+구조화 산출물 품질 가드:
+- required_schema를 절대 되돌려주지 않는다. 스키마 설명문, 자리표시자, "해결 방법 1" 같은 빈 값은 실패다.
+- 모든 값은 이 사연의 제목/본문에서 나온 구체 정보와 연결되어야 한다. 최소 2개 이상의 사건 디테일, 관계 디테일, 감정 디테일을 넣는다.
+- role/purpose/tone_note 같은 설계 필드는 "라이브 오프닝", "사연 읽기", "최종 판단"처럼 일반 라벨로 끝내지 말고, 이 사연에서 그 구간이 무엇을 새로 뒤집는지 써야 한다.
+- beats의 각 항목은 새 정보, 판단 변화, 채팅 충돌, 실제 상담 문장 중 최소 3개를 반드시 가진다.
+- 모르면 빈칸을 두지 말고 "본문에 없어 단정하지 않음. 대신 방송에서는 이렇게 질문한다"로 처리한다.
+- JSON은 완성된 PD 노트여야 한다. 앱 화면에 그대로 보여줘도 민망하지 않은 밀도로 작성한다.
+"""
+
 STYLE_REFERENCE_BLOCK = """
 말투 기준:
 - 좋은 예: 아니 잠깐만. 이건 생일을 챙겼냐 안 챙겼냐 문제가 아니야. 사연자님이 그날 자기 기분을 자기가 수습하고 있었단 말이에요.
@@ -196,13 +386,19 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
 {EMBODIED_INSIGHT_ENGINE}
 {VIRAL_RETENTION_ENGINE}
 {INTIMACY_BOUNDARY_ENGINE}
+{STORY_BRAIN_ENGINE}
+{STRUCTURAL_OUTPUT_GUARD}
 
 {localization_prompt()}
 
 반드시 JSON만 반환한다."""
     schema = {
         "story_summary": "사연 핵심 요약. 번역투 없이 자연스러운 한국어",
+        "case_thesis": "이 사연을 한 문장으로 해부한 PD 관점. 표면 사건이 아니라 숨은 관계 엔진을 말한다",
+        "surface_event": "겉으로 보이는 사건",
+        "real_engine": "실제로 사람을 붙잡는 돈/수치심/권력/비밀/가족/몸/역할 기대 중 핵심 작동축",
         "one_line_viral_premise": "시청자가 3초 안에 이해할 바이럴 전제. 누가 무엇을 했고 왜 갈리는지",
+        "episode_title_candidates": ["한국 라이브 제목 후보. 자극보다 갈등 구조가 보이게"],
         "cold_open_bomb": "대본 첫 문장으로 쓸 수 있는 사건 폭탄. 인사 금지",
         "first_5_second_cue": "첫 5초 안에 들어갈 결과/논쟁/감정 폭탄. 배경 설명 금지",
         "first_30_second_contract": "시청자가 30초 안에 이해할 시청 계약: 끝까지 보면 무엇을 판단/해결하게 되는지",
@@ -225,11 +421,29 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
         "timeline": ["사건 순서. 각 항목은 장면으로 재구성 가능한 수준"],
         "emotional_trigger": "감정이 터지는 지점",
         "hidden_pattern": "반복되는 관계 패턴",
+        "money_status_power_axis": "돈, 저축, 직업, 성취, 자존심, 역할 기대가 얽힌 사연이면 그 축을 분석. 없으면 해당 없음",
+        "shame_or_pride_trigger": "상대가 울거나 화내거나 얼어붙은 이유를 수치심/자존심/비교감/통제감 관점에서 추론",
         "symbolic_motif": {
             "motif": "대본 전체에 반복할 상징. 예: 빨간불/문/침묵/알림/계단",
             "sensory_details": ["눈에 남는 색, 소리, 몸의 반응 같은 감각 디테일"],
             "meaning_shift": "일상 신호가 관계 패턴이나 시대 공기로 확장되는 방식",
         },
+        "viral_angle_bank": [
+            {
+                "angle_name": "바이럴 각도 이름",
+                "why_people_watch": "사람들이 왜 계속 보게 되는지",
+                "comment_fight": "댓글에서 싸울 질문",
+                "hook_line": "이 각도로 시작할 때의 실제 후킹 문장",
+            }
+        ],
+        "moral_tension_matrix": [
+            {
+                "frame": "돈/사랑/자존심/통제/안전/가족 등 판단 프레임",
+                "pro_argument": "이 프레임에서 한쪽이 맞아 보이는 이유",
+                "counter_argument": "바로 반박되는 이유",
+                "host_position": "화자가 중간에서 잡아줄 판단",
+            }
+        ],
         "client_tendency_read": {
             "mbti_style_hypothesis": "MBTI 확정이 아니라 감정형/사고형, 직관형/감각형, 계획형/즉흥형처럼 보이는 성향 충돌",
             "saju_compatibility_lens": "생년월일 없이 단정하지 않는 사주/오행/궁합 렌즈. 속도, 온도, 표현 방식의 충돌로 설명",
@@ -241,11 +455,25 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
         "loop_payoffs": ["열어둔 궁금증을 어느 지점에서 어떤 문장으로 회수할지"],
         "pattern_interrupts": ["설명 흐름을 끊고 다시 보게 만드는 반전/질문/채팅 충돌 장치"],
         "turning_points": ["판단이 바뀌거나 더 복잡해지는 반전/추가 정보"],
+        "host_take_evolution": [
+            {"time": "00:00", "take": "초반 판단", "why_it_changes": "뒤에서 무엇 때문에 흔들리는지"},
+            {"time": "04:00", "take": "중반 재해석", "why_it_changes": "새 정보나 채팅 반론"},
+            {"time": "09:00", "take": "최종 상담 판단", "why_it_changes": "상담 기준"},
+        ],
         "audience_camps": [
             {"camp": "시청자 진영 이름", "argument": "이 진영의 주장", "emotional_payoff": "왜 이 주장에 끌리는지"}
         ],
         "chat_debate_points": ["채팅이 갈릴 포인트. 찬반 양쪽 논리 포함"],
         "scene_reconstruction_notes": ["대본에서 장면처럼 풀어쓸 수 있는 디테일"],
+        "scene_bank": [
+            {
+                "scene": "방송에서 장면처럼 재구성할 순간",
+                "sensory_anchor": "눈/소리/몸감각",
+                "host_reaction": "화자의 실제 반응 멘트",
+                "why_it_matters": "이 장면이 판단을 바꾸는 이유",
+            }
+        ],
+        "quote_bank": ["대본에 바로 쓸 수 있는 화자 멘트. 일반론 금지"],
         "astrology_lens": ["사주/점성술/기운으로 볼 수 있는 해석 포인트"],
         "occult_pattern_map": [
             {"symbol": "비밀의 자리/사회적 얼굴/운의 흐름 등", "relationship_read": "관계 구조 해석", "safe_language": "단정하지 않는 표현"}
@@ -270,11 +498,13 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
     raw, error = openai_chat([
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
-    ], model=model, temperature=temperature, max_tokens=5000)
+    ], model=model, temperature=temperature, max_tokens=7500, json_mode=True)
     if error:
         return {}, error
     parsed, parse_error = extract_json_object(raw or "")
-    return parsed or {}, parse_error
+    if parse_error:
+        return parsed or {}, parse_error
+    return repair_json_if_needed("story_analysis", parsed or {}, raw or "", user, model, temperature, 8000)
 
 
 def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: float) -> tuple[dict, Optional[str]]:
@@ -284,6 +514,8 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
 {EMBODIED_INSIGHT_ENGINE}
 {VIRAL_RETENTION_ENGINE}
 {INTIMACY_BOUNDARY_ENGINE}
+{STORY_BRAIN_ENGINE}
+{STRUCTURAL_OUTPUT_GUARD}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {localization_prompt()}
@@ -291,9 +523,16 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
 10분 분량 대본을 위한 연출 비트시트를 만든다. 아직 최종 대본은 쓰지 않는다.
 각 비트는 최종 대본에서 긴 실제 멘트로 확장될 수 있도록 장면, 갈등, 채팅 충돌, 사주/점성술 렌즈, 상담 행동을 구체적으로 설계한다.
 타임코드마다 새 정보나 새 판단 변화를 넣어야 한다. 같은 이야기를 반복하는 비트는 실패다.
+role/purpose/tone_note만 있는 빈 설계는 실패다. 각 비트는 실제 방송 멘트 샘플, 채팅 반론, 상담 문장, 다음 궁금증을 포함해야 한다.
 반드시 JSON만 반환한다."""
     schema = {
         "production_thesis": "이 사연을 라이브 상담으로 만들 때 끝까지 붙잡을 핵심 관점",
+        "episode_arc": {
+            "start_judgment": "00:00에서 시청자가 처음 내릴 판단",
+            "midpoint_complication": "중반에 그 판단을 흔드는 정보/반론",
+            "final_counseling_standard": "마지막에 남길 현실 상담 기준",
+        },
+        "retention_thesis": "이 영상이 10분 동안 버틸 긴장. 단순 사건 설명이 아니라 무엇이 계속 궁금한지",
         "host_persona_anchor": "이 사연 앞에서 30대 한국 여성 라이브 상담 화자가 먼저 느끼는 불편함, 조심할 선, 채팅을 받아칠 태도",
         "host_personal_entry": "00:00에서 화자가 자기 경험처럼 체화해서 꺼낼 도입. 일상 감각 3개 이상 포함",
         "motif_ladder": ["개인 경험 속 상징", "사연 속 같은 상징", "관계/사회 패턴으로 확장된 상징"],
@@ -305,6 +544,11 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
         },
         "first_5_second_cue": "대본 첫 1~2문장. 결과/논쟁/책임 갈림부터 시작",
         "first_30_second_contract": "30초 안에 줄 시청 보상과 남겨둘 반전",
+        "segment_escalation_rules": [
+            "각 구간에서 새로 공개할 정보나 새로 바뀌는 판단",
+            "이전 구간과 같은 말이 반복되지 않게 막는 규칙",
+            "상담 가치가 누적되는 순서",
+        ],
         "retention_loop_plan": [
             {
                 "timecode": "00:45",
@@ -325,7 +569,7 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
         ],
         "open_loops": ["초반에 열고 후반에 회수할 궁금증"],
         "chat_camps": [
-            {"camp": "채팅 진영", "claim": "이들이 밀 주장", "host_response": "화자가 받아칠 방식"}
+            {"camp": "채팅 진영", "claim": "이들이 밀 주장", "why_they_feel_that": "감정적으로 끌리는 이유", "host_response": "화자가 받아칠 방식"}
         ],
         "beats": [
             {
@@ -357,11 +601,19 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
             {"timecode": "08:25", "role": "최종 판단 직전 채팅 정리", "segment_goal": "", "new_reveal": "", "emotional_turn": "", "chat_collision": "", "astrology_bridge": "", "counseling_value": "", "cliffhanger_to_next": "", "must_include_lines": [], "min_chars": 700},
             {"timecode": "09:20", "role": "최종 상담 판단과 댓글 질문", "segment_goal": "", "new_reveal": "", "emotional_turn": "", "chat_collision": "", "astrology_bridge": "", "counseling_value": "", "cliffhanger_to_next": "", "must_include_lines": [], "min_chars": 550},
         ],
-        "must_use_phrases": ["여러분들", "아니 잠깐만", "사연자님", "제가 보기엔요", "작두 살짝만 탈게요", "야 이건 좀", "저기요 그러지 마세요"],
+        "voice_toolkit": {
+            "reaction_lines": ["이 사연에 맞춘 화자 리액션 문장. 일반 유행어 나열 금지"],
+            "chat_pushback_lines": ["채팅 반론을 받아치는 실제 문장"],
+            "astrology_bridge_lines": ["사주/점성술 렌즈를 사건 구조와 연결하는 문장"],
+            "quiet_lines": ["감정이 가라앉는 순간에 쓸 낮은 톤의 문장"],
+        },
         "advice_steps": [
             {"step": "확인 질문", "exact_sentence": "실제로 말할 문장", "do_not_do": "피해야 할 말"},
             {"step": "상대 반응별 대응", "exact_sentence": "회피/사과/역공 시 대응 문장", "do_not_do": "피해야 할 행동"},
             {"step": "경계 설정", "exact_sentence": "여기까지만 허용한다는 문장", "do_not_do": "피해야 할 행동"},
+        ],
+        "if_then_response_tree": [
+            {"if_partner_says": "상대가 이렇게 반응하면", "host_read": "그 반응의 의미", "sender_sentence": "사연자가 다음에 할 말", "stop_line": "여기서 멈춰야 할 기준"}
         ],
         "forbidden_generic_phrases": ["함께 고민해보면 좋을 것 같아요", "그럼 시작해볼까요", "정말 다양한 시각이 있는 것 같아요", "사생활이 터졌다"],
         "continuity_notes": ["구간 사이를 자연스럽게 연결하기 위한 멘트"],
@@ -370,11 +622,13 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
     raw, error = openai_chat([
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
-    ], model=model, temperature=temperature, max_tokens=6500)
+    ], model=model, temperature=temperature, max_tokens=8500, json_mode=True)
     if error:
         return {}, error
     parsed, parse_error = extract_json_object(raw or "")
-    return parsed or {}, parse_error
+    if parse_error:
+        return parsed or {}, parse_error
+    return repair_json_if_needed("live_blueprint", parsed or {}, raw or "", user, model, temperature, 9000)
 
 
 def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: dict, model: str, temperature: float) -> tuple[str, Optional[str]]:
@@ -384,6 +638,7 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
 {EMBODIED_INSIGHT_ENGINE}
 {VIRAL_RETENTION_ENGINE}
 {INTIMACY_BOUNDARY_ENGINE}
+{STORY_BRAIN_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -463,6 +718,8 @@ def generate_derivatives(longform_script: str, analysis: dict, row: dict, model:
 {EMBODIED_INSIGHT_ENGINE}
 {VIRAL_RETENTION_ENGINE}
 {INTIMACY_BOUNDARY_ENGINE}
+{STORY_BRAIN_ENGINE}
+{STRUCTURAL_OUTPUT_GUARD}
 {STYLE_REFERENCE_BLOCK}
 {localization_prompt()}
 롱폼의 화자 말투와 로컬라이징 수준을 유지한다. 반드시 JSON만 반환한다."""
@@ -478,7 +735,7 @@ def generate_derivatives(longform_script: str, analysis: dict, row: dict, model:
     raw, error = openai_chat([
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
-    ], model=model, temperature=temperature, max_tokens=5500)
+    ], model=model, temperature=temperature, max_tokens=5500, json_mode=True)
     if error:
         return {}, error
     parsed, parse_error = extract_json_object(raw or "")
