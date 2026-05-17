@@ -85,6 +85,32 @@ INSIGHT_CAUTION_PATTERNS = [
     "말할 수는 없", "볼 수 있",
 ]
 
+HOOK_DEVICE_PATTERNS = [
+    "결론부터", "먼저 결론", "한 줄로", "딱 하나", "진짜 문제", "문제는", "핵심은",
+    "왜냐면", "왜 이게", "이게 왜", "끝까지", "지금부터", "여기서 갈", "댓글 갈",
+    "책임", "논쟁", "반전", "폭탄", "선 넘", "말 한마디", "그 다음",
+]
+
+OPEN_LOOP_PATTERNS = [
+    "뒤에서", "이 뒤", "나중에", "마지막에", "잠시 후", "조금 있다", "아직", "끝이 아니",
+    "이 다음", "그 다음", "기다려", "보셔야", "풀립니다", "나옵니다",
+]
+
+PAYOFF_PATTERNS = [
+    "아까", "초반에", "처음에", "앞에서", "방금", "말했죠", "얘기했죠", "회수", "연결",
+    "그래서", "결국", "이게 바로", "여기서 풀",
+]
+
+PATTERN_INTERRUPT_PATTERNS = [
+    "아니", "잠깐만", "근데", "그런데", "반대로", "오히려", "다시 보면", "여기서",
+    "멈춰", "틀렸", "그 말은", "채팅", "댓글", "잠깐",
+]
+
+STAKES_PATTERNS = [
+    "위험", "손해", "잃", "무너", "커지", "번지", "폭발", "구설", "낙인", "피해",
+    "책임", "갈등", "선 넘", "돌아오", "망가",
+]
+
 HOOK_CONFLICT_PATTERNS = [
     "문제", "잘못", "책임", "갈린", "아웃", "상처", "무시", "숨겨", "드러", "농담", "비밀", "죄책감", "피해", "불편", "논란",
 ]
@@ -213,6 +239,11 @@ def quality_check_live_script(script: str) -> dict:
     profile_insight = count_any(text, PROFILE_INSIGHT_PATTERNS)
     compatibility_insight = count_any(text, COMPATIBILITY_INSIGHT_PATTERNS)
     insight_caution = count_any(text, INSIGHT_CAUTION_PATTERNS)
+    hook_devices = count_any(text, HOOK_DEVICE_PATTERNS)
+    open_loops = count_any(text, OPEN_LOOP_PATTERNS)
+    payoffs = count_any(text, PAYOFF_PATTERNS)
+    pattern_interrupts = count_any(text, PATTERN_INTERRUPT_PATTERNS)
+    stakes = count_any(text, STAKES_PATTERNS)
     outline_leak = count_any(text, OUTLINE_LEAK_PATTERNS)
 
     section_structure_score, section_metrics = section_score(sections)
@@ -222,6 +253,8 @@ def quality_check_live_script(script: str) -> dict:
     sections_with_chat = count_sections_with(sections, CHAT_COLLISION_PATTERNS)
     sections_with_embodied = count_sections_with(sections, EMBODIED_EXPERIENCE_PATTERNS)
     sections_with_profile_insight = count_sections_with(sections, PROFILE_INSIGHT_PATTERNS + COMPATIBILITY_INSIGHT_PATTERNS)
+    sections_with_rehook = count_sections_with(sections, HOOK_DEVICE_PATTERNS + OPEN_LOOP_PATTERNS + PATTERN_INTERRUPT_PATTERNS)
+    sections_with_open_loop_or_payoff = count_sections_with(sections, OPEN_LOOP_PATTERNS + PAYOFF_PATTERNS)
 
     length_score = ratio_score(length, 9000, 3000)
     timecode_structure_score = section_structure_score
@@ -278,6 +311,27 @@ def quality_check_live_script(script: str) -> dict:
     )
 
     hook_quality_score = opening_score
+    first_700 = text[:700]
+    first_700_hook_devices = count_any(first_700, HOOK_DEVICE_PATTERNS)
+    first_700_open_loops = count_any(first_700, OPEN_LOOP_PATTERNS)
+    first_700_stakes = count_any(first_700, STAKES_PATTERNS)
+    first_1800_pattern_interrupts = count_any(first_1800, PATTERN_INTERRUPT_PATTERNS)
+    hook_device_density_score = clamp_score(
+        (ratio_score(first_700_hook_devices, 5, 1) * 0.30)
+        + (ratio_score(first_700_open_loops, 2, 0) * 0.18)
+        + (ratio_score(first_700_stakes, 4, 1) * 0.20)
+        + (ratio_score(hook_devices, 24, 5) * 0.18)
+        + (ratio_score(first_1800_pattern_interrupts, 8, 2) * 0.14)
+        - forbidden_ai * 8
+    )
+    retention_loop_score = clamp_score(
+        (ratio_score(sections_with_rehook, 9, 3) * 0.32)
+        + (ratio_score(open_loops, 8, 2) * 0.22)
+        + (ratio_score(payoffs, 6, 1) * 0.18)
+        + (ratio_score(sections_with_open_loop_or_payoff, 6, 2) * 0.16)
+        + (ratio_score(pattern_interrupts, 28, 8) * 0.12)
+        - outline_leak * 10
+    )
 
     sensitive_topic_detected = count_any(text, ["정체성", "아웃", "성", "사생활", "헬스장", "스팀", "폭력", "임신", "장애", "차별"]) > 0
     if sensitive_topic_detected:
@@ -297,22 +351,26 @@ def quality_check_live_script(script: str) -> dict:
         "캐릭터성": character_score,
         "체화형_도입": embodied_score,
         "성향궁합_인사이트": profile_insight_score,
+        "후킹장치_밀도": hook_device_density_score,
+        "리텐션_루프": retention_loop_score,
         "민감주제_처리": sensitive_score,
     }
 
     weights = {
-        "대본_분량": 0.10,
-        "타임코드_구조": 0.10,
-        "후킹_강도": 0.10,
-        "서사_몰입도": 0.12,
-        "채팅_논쟁성": 0.09,
-        "반존대_자연스러움": 0.08,
-        "라이브감": 0.08,
-        "상담성": 0.10,
-        "캐릭터성": 0.08,
-        "체화형_도입": 0.07,
-        "성향궁합_인사이트": 0.05,
-        "민감주제_처리": 0.03,
+        "대본_분량": 0.08,
+        "타임코드_구조": 0.08,
+        "후킹_강도": 0.08,
+        "서사_몰입도": 0.10,
+        "채팅_논쟁성": 0.08,
+        "반존대_자연스러움": 0.07,
+        "라이브감": 0.07,
+        "상담성": 0.09,
+        "캐릭터성": 0.07,
+        "체화형_도입": 0.06,
+        "성향궁합_인사이트": 0.04,
+        "후킹장치_밀도": 0.08,
+        "리텐션_루프": 0.08,
+        "민감주제_처리": 0.02,
     }
     weighted = sum(scores[name] * weight for name, weight in weights.items())
     hard_penalty = min(40, forbidden_ai * 4 + template_leak * 12 + fortune_absolute * 12 + outline_leak * 10)
@@ -360,6 +418,12 @@ def quality_check_live_script(script: str) -> dict:
     if profile_insight_score < 60:
         warnings.append("성향/궁합 인사이트 부족: 내담자의 MBTI식 성향, 사주 궁합, 오행 렌즈가 은근히 녹지 않았습니다.")
         rewrite_guidance.append("확정 진단을 피하면서 감정 처리 속도, 표현 방식, 궁합의 온도 차이를 실제 상담 문장으로 연결하세요.")
+    if hook_device_density_score < 65:
+        warnings.append("후킹 장치 부족: 첫 5초/첫 30초에 결과, 논쟁, 시청 계약, 책임 갈림이 충분히 박히지 않았습니다.")
+        rewrite_guidance.append("첫 700자 안에 결과 먼저 제시, 논쟁 질문, 뒤에 남은 반전, 끝까지 봐야 하는 이유를 넣으세요.")
+    if retention_loop_score < 65:
+        warnings.append("리텐션 루프 부족: 구간마다 다음을 보게 만드는 오픈루프와 회수가 약합니다.")
+        rewrite_guidance.append("각 타임코드 첫 문장에 리훅을 넣고, 오픈루프 3개 이상과 그 회수 문장 3개 이상을 배치하세요.")
     if sensitive_topic_detected and sensitive_score < 70:
         warnings.append("민감 주제 처리 부족: 정체성/사생활/아웃팅/차별 이슈를 더 조심스럽게 다뤄야 합니다.")
         rewrite_guidance.append("정체성 단정 금지, 2차 피해 방지, 비공개 사과, 관리자에게는 행동 기준으로만 말하기를 포함하세요.")
@@ -385,6 +449,8 @@ def quality_check_live_script(script: str) -> dict:
         and scores["캐릭터성"] >= 65
         and scores["체화형_도입"] >= 60
         and scores["성향궁합_인사이트"] >= 60
+        and scores["후킹장치_밀도"] >= 65
+        and scores["리텐션_루프"] >= 65
     )
 
     if overall >= 90 and passed:
@@ -420,6 +486,11 @@ def quality_check_live_script(script: str) -> dict:
             "profile_insight_markers": profile_insight,
             "compatibility_insight_markers": compatibility_insight,
             "insight_caution_markers": insight_caution,
+            "hook_device_markers": hook_devices,
+            "open_loop_markers": open_loops,
+            "payoff_markers": payoffs,
+            "pattern_interrupt_markers": pattern_interrupts,
+            "stakes_markers": stakes,
             "sender_mentions": sender,
             "forbidden_ai_phrases": forbidden_ai,
             "template_leaks": template_leak,
@@ -435,8 +506,14 @@ def quality_check_live_script(script: str) -> dict:
             "sections_with_chat_collision": sections_with_chat,
             "sections_with_embodied": sections_with_embodied,
             "sections_with_profile_insight": sections_with_profile_insight,
+            "sections_with_rehook": sections_with_rehook,
+            "sections_with_open_loop_or_payoff": sections_with_open_loop_or_payoff,
             "first_1800_embodied_markers": opening_embodied,
             "first_1800_symbolic_markers": opening_symbolic,
+            "first_700_hook_device_markers": first_700_hook_devices,
+            "first_700_open_loop_markers": first_700_open_loops,
+            "first_700_stakes_markers": first_700_stakes,
+            "first_1800_pattern_interrupt_markers": first_1800_pattern_interrupts,
             **section_metrics,
             **opening_metrics,
         },

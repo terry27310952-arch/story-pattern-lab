@@ -121,6 +121,19 @@ EMBODIED_INSIGHT_ENGINE = """
 - 실패 흐름: "당신의 MBTI는", "이 궁합은 무조건", "올해는 반드시", "제 경험상 모든 사람은"처럼 딱지 붙이거나 예언처럼 말하는 것.
 """
 
+VIRAL_RETENTION_ENGINE = """
+100만 뷰급 후킹/리텐션 엔진:
+- 첫 5초는 결과나 논쟁부터 보여준다. 배경 설명, 인사, 사연 제목 낭독은 뒤로 뺀다. 첫 문장은 "무슨 일이 있었는지"보다 "왜 이걸 끝까지 봐야 하는지"를 만든다.
+- 첫 30초 안에는 시청자에게 계약을 건다: 오늘 끝까지 보면 무엇을 판단하게 되는지, 어떤 반전이 남아 있는지, 어떤 현실 조언을 가져갈 수 있는지 분명히 약속한다.
+- 45~60초마다 리훅을 넣는다. 리훅은 새 정보, 반대 해석, 채팅 충돌, 사주/점성술 패턴, 개인 경험의 회수, 실제 상담 문장 중 하나여야 한다.
+- 오픈루프를 최소 3개 연다. 예: "근데 진짜 문제는 이 다음이에요", "이 말이 왜 위험한지는 뒤에서 바로 나와요", "아까 그 빨간불 얘기가 여기서 다시 연결됩니다."
+- 열어둔 루프는 반드시 회수한다. 회수 문장은 "아까 제가 말한 빨간불이 이거예요", "초반에 찝찝했던 지점이 여기서 풀립니다"처럼 시청자가 따라온 보상을 느끼게 한다.
+- 패턴 인터럽트를 자주 넣는다. 4~5문장 이상 같은 톤으로 설명하지 말고, "아니 근데 잠깐만", "반대로 보면요", "여기서 채팅 갈릴 거 알아요"처럼 리듬을 꺾는다.
+- 100만 뷰급 팟캐스트/라이브의 공통 장치는 큰 자극이 아니라 명확한 긴장이다: 개인적 공감, 이해관계 충돌, 책임 소재, 숨은 반전, 말 한마디의 대가, 댓글에서 싸울 질문.
+- 각 타임코드는 작은 에피소드처럼 움직인다: 마이크로 후킹 -> 새 정보 -> 판단 흔들기 -> 상담/해석 가치 -> 다음 구간 궁금증.
+- 결말 직전에는 댓글을 부르는 마지막 갈림 질문을 남긴다. 단순 정답 발표가 아니라 "여기서 여러분은 어디까지가 선이라고 보세요?"처럼 참여 욕구를 남긴다.
+"""
+
 STYLE_REFERENCE_BLOCK = """
 말투 기준:
 - 좋은 예: 아니 잠깐만. 이건 생일을 챙겼냐 안 챙겼냐 문제가 아니야. 사연자님이 그날 자기 기분을 자기가 수습하고 있었단 말이에요.
@@ -167,6 +180,7 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
 {STORY_IMMERSION_ENGINE}
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
+{VIRAL_RETENTION_ENGINE}
 
 {localization_prompt()}
 
@@ -175,6 +189,8 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
         "story_summary": "사연 핵심 요약. 번역투 없이 자연스러운 한국어",
         "one_line_viral_premise": "시청자가 3초 안에 이해할 바이럴 전제. 누가 무엇을 했고 왜 갈리는지",
         "cold_open_bomb": "대본 첫 문장으로 쓸 수 있는 사건 폭탄. 인사 금지",
+        "first_5_second_cue": "첫 5초 안에 들어갈 결과/논쟁/감정 폭탄. 배경 설명 금지",
+        "first_30_second_contract": "시청자가 30초 안에 이해할 시청 계약: 끝까지 보면 무엇을 판단/해결하게 되는지",
         "embodied_entry_seed": "화자가 자신의 개인적 하루나 몸의 감각으로 들어갈 수 있는 도입 소재. 사연의 상징과 연결",
         "judgment_question": "댓글이 갈릴 핵심 질문. 예: 이건 예민함인가, 선 넘은 행동인가",
         "curiosity_gap": "시청자가 다음 내용을 기다리게 만드는 미해결 의문",
@@ -206,6 +222,9 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
             "safe_caveat": "단정하지 않기 위한 방송 멘트",
         },
         "implicit_insight_lines": ["대놓고 진단하지 않고 방송 멘트 속에 은근히 넣을 성향/궁합 인사이트 문장"],
+        "open_loops": ["초반에 열고 중후반에 회수할 궁금증. 최소 3개"],
+        "loop_payoffs": ["열어둔 궁금증을 어느 지점에서 어떤 문장으로 회수할지"],
+        "pattern_interrupts": ["설명 흐름을 끊고 다시 보게 만드는 반전/질문/채팅 충돌 장치"],
         "turning_points": ["판단이 바뀌거나 더 복잡해지는 반전/추가 정보"],
         "audience_camps": [
             {"camp": "시청자 진영 이름", "argument": "이 진영의 주장", "emotional_payoff": "왜 이 주장에 끌리는지"}
@@ -243,6 +262,7 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
 {LIVE_NARRATOR_RULES}
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
+{VIRAL_RETENTION_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {localization_prompt()}
@@ -257,6 +277,17 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
         "host_personal_entry": "00:00에서 화자가 자기 경험처럼 체화해서 꺼낼 도입. 일상 감각 3개 이상 포함",
         "motif_ladder": ["개인 경험 속 상징", "사연 속 같은 상징", "관계/사회 패턴으로 확장된 상징"],
         "implicit_profile_insights": ["MBTI/사주 궁합/오행 렌즈를 단정 없이 상담 멘트에 녹일 문장"],
+        "first_5_second_cue": "대본 첫 1~2문장. 결과/논쟁/책임 갈림부터 시작",
+        "first_30_second_contract": "30초 안에 줄 시청 보상과 남겨둘 반전",
+        "retention_loop_plan": [
+            {
+                "timecode": "00:45",
+                "rehook_type": "새 정보/반대 해석/채팅 충돌/개인 경험 회수/상담 문장 중 하나",
+                "open_loop": "이 구간에서 새로 여는 궁금증",
+                "payoff_later": "어느 뒤 구간에서 회수할지",
+                "pattern_interrupt_line": "톤을 꺾는 실제 멘트 샘플",
+            }
+        ],
         "opening_hook": "00:00에서 시작할 후킹. 번역투 금지. 사건의 논점부터 시작",
         "cold_open_script_seed": "첫 2~3문장 샘플. 인사 금지",
         "localization_strategy": "원문 표현을 어떤 한국어 맥락으로 바꿀지",
@@ -275,10 +306,13 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
                 "timecode": "00:00",
                 "role": "콜드오픈 폭탄",
                 "segment_goal": "3초 안에 논쟁과 불편함 제시",
+                "micro_hook": "해당 타임코드 첫 문장에 들어갈 리훅",
                 "new_reveal": "",
                 "emotional_turn": "",
                 "embodied_scene": "화자의 몸에 남은 개인 경험/감각과 연결할 장면",
                 "chat_collision": "",
+                "open_loop_or_payoff": "새로 열 궁금증 또는 앞에서 연 궁금증 회수",
+                "pattern_interrupt": "설명 리듬을 깨는 반전/질문/채팅 충돌",
                 "astrology_bridge": "",
                 "implicit_profile_or_compatibility_insight": "MBTI식 성향/사주 궁합/오행 렌즈를 은근히 넣을 지점",
                 "counseling_value": "",
@@ -322,6 +356,7 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
 {LIVE_NARRATOR_RULES}
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
+{VIRAL_RETENTION_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -333,6 +368,8 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
 - 타임코드 11개 이상 포함. 타임코드 줄은 반드시 00:00 형식만 쓴다.
 - 각 타임코드마다 최소 650자 이상 실제 말로 작성한다. 제목/요약/목차만 쓰면 실패다.
 - 오프닝은 흔한 인사 금지. 바로 사연의 이상한 지점으로 들어간다.
+- 첫 5초는 결과/논쟁/책임 갈림 중 하나로 시작한다. 인사, 맥락 설명, 사연 제목 낭독 금지.
+- 첫 30초 안에 "끝까지 봐야 하는 이유"를 만든다. 오늘 판단할 질문, 뒤에 남은 반전, 얻어갈 상담 문장을 약속한다.
 - 00:00~01:35 안에 화자의 개인적 경험형 도입을 넣는다. "나도 그런 날이 있었거든" 수준이 아니라 몸에 남은 감각, 반복된 상징, 말이 꼬이는 순간을 구체적으로 보여준다.
 - "안녕하세요 여러분", "함께 고민해볼까요", "다양한 시각이 있네요", "정말 서운하셨겠어요" 같은 AI식 문장 금지.
 - "사생활이 터졌다", "성 정체성이 드러났다"처럼 과격하거나 부정확한 번역투 금지. 맥락에 따라 "개인적인 일이 원치 않게 알려졌다", "아웃팅처럼 받아들여질 수 있었다", "사적인 부분이 사람들 입에 오르내리게 됐다"처럼 쓴다.
@@ -347,6 +384,9 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
 - 초반 3분 안에 시청자들이 갈릴 해석 두 개를 모두 제시한다.
 - 중반에는 화자 판단이 한 번 흔들려야 한다. 처음부터 끝까지 같은 주장만 밀면 실패다.
 - 후반 상담 파트에는 상대가 사과할 때, 회피할 때, 역공할 때의 대응 문장을 분리해서 말한다.
+- 매 타임코드 첫 1~2문장에는 마이크로 후킹을 넣는다. 새 정보, 반대 해석, 채팅 충돌, "아까 말한 것" 회수, 다음 구간 궁금증 중 하나가 있어야 한다.
+- 설명문이 4~5문장 이상 같은 톤으로 이어지면 실패다. 패턴 인터럽트로 리듬을 꺾어라.
+- 오픈루프 3개 이상을 열고 반드시 회수한다. 회수 없이 궁금증만 던지는 것은 실패다.
 - 반환은 대본 텍스트만. JSON 금지.
 
 출력 구조:
@@ -361,6 +401,7 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
         "blueprint": blueprint,
         "mission": "짧고 점잖은 상담 대본이 아니라, 진짜 라이브 유튜버가 사연 읽으며 채팅과 티키타카하고 사주/점성술 감각으로 풀이하는 10분짜리 장문 대본을 작성하라. 번역투를 없애고 현지화 수준을 최대로 끌어올려라.",
         "embodied_insight_mission": "화자의 개인 경험형 도입으로 사연의 공기를 먼저 몸에 입힌 뒤, MBTI식 성향/사주 궁합/오행 렌즈를 은근한 상담 인사이트로 녹여라. 확정 진단이나 예언처럼 쓰지 말고 관계 리듬 설명으로 처리하라.",
+        "retention_mission": "100만 뷰급 팟캐스트/라이브처럼 첫 5초 cue, 첫 30초 시청 계약, 매 타임코드 리훅, 오픈루프와 회수를 설계하라. 모든 구간은 시청자가 다음 구간을 궁금해하도록 끝나야 한다.",
         "script_contract": {
             "timecodes": ["00:00", "00:45", "01:35", "02:30", "03:25", "04:20", "05:20", "06:20", "07:25", "08:25", "09:20"],
             "minimum_total_chars": 8500,
@@ -371,8 +412,11 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
             "required_astrology_pattern_reads": 4,
             "required_embodied_personal_anchor": 1,
             "required_implicit_profile_insights": 3,
+            "required_open_loops": 3,
+            "required_loop_payoffs": 3,
+            "required_micro_hooks_per_timecode": True,
         },
-        "section_fill_rule": "각 타임코드는 장면 재구성, 화자 리액션, 채팅 충돌, 사주/점성술 패턴 읽기, 현실 상담 문장, 다음 궁금증 연결 중 최소 4개 이상을 포함해야 한다.",
+        "section_fill_rule": "각 타임코드는 마이크로 후킹, 장면 재구성, 화자 리액션, 채팅 충돌, 사주/점성술 패턴 읽기, 현실 상담 문장, 다음 궁금증 연결 중 최소 5개 이상을 포함해야 한다.",
         "minimum_length_reminder": "8,500자 미만이면 실패다. 모든 타임코드를 충분히 확장하라.",
     }
     raw, error = openai_chat([
@@ -387,6 +431,7 @@ def generate_derivatives(longform_script: str, analysis: dict, row: dict, model:
 {LIVE_NARRATOR_RULES}
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
+{VIRAL_RETENTION_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {localization_prompt()}
 롱폼의 화자 말투와 로컬라이징 수준을 유지한다. 반드시 JSON만 반환한다."""
