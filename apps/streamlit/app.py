@@ -99,7 +99,7 @@ st.markdown(
 USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.5; public-list-metadata-only"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
-STREAMLIT_PATCH_VERSION = "2026-05-17 deploy-sanity-v6"
+STREAMLIT_PATCH_VERSION = "2026-05-17 json-repair-v7"
 TOKEN_PARAMETER_POLICY = "max_completion_tokens only"
 DEPLOYMENT_ENTRYPOINT = "streamlit_app.py -> apps/streamlit/app.py"
 
@@ -661,7 +661,14 @@ with tabs[2]:
             with st.spinner("사연의 핵심 갈등, 채팅 포인트, 사주/점성술 렌즈를 해부 중..."):
                 result, error = analyze_story(source_text, selected, llm_model, temperature)
             if error:
+                st.session_state.story_analyses.pop(key, None)
+                st.session_state.live_blueprints.pop(key, None)
+                st.session_state.longform_scripts.pop(key, None)
+                analysis = {}
+                blueprint = {}
+                longform = ""
                 st.error(error)
+                st.warning("새 사연 해부 생성에 실패해서 이전 분석/구조/대본 표시를 비웠습니다.")
             else:
                 st.session_state.story_analyses[key] = result
                 analysis = result
@@ -673,7 +680,12 @@ with tabs[2]:
             with st.spinner("반말/존댓말 혼합 라이브 상담 구조를 설계 중..."):
                 result, error = build_live_blueprint(analysis, selected, llm_model, temperature)
             if error:
+                st.session_state.live_blueprints.pop(key, None)
+                st.session_state.longform_scripts.pop(key, None)
+                blueprint = {}
+                longform = ""
                 st.error(error)
+                st.warning("새 라이브 구조 생성에 실패해서 이전 구조/대본 표시를 비웠습니다.")
             else:
                 st.session_state.live_blueprints[key] = result
                 blueprint = result
@@ -938,4 +950,4 @@ with tabs[4]:
     st.markdown("### v0.5 제작 플로우")
     st.write("본문 자동 가져오기 → 사연 해부 → 라이브 구조 설계 → 10분 대본 → 품질검사 → 파생 콘텐츠 → 저장")
 
-st.caption("Story Pattern Lab v0.6 · 라이브 사연 상담형 반존대 대본 제작기 · deploy-sanity-v6")
+st.caption("Story Pattern Lab v0.6 · 라이브 사연 상담형 반존대 대본 제작기 · json-repair-v7")
