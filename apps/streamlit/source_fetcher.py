@@ -10,7 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.5; article-body-preview"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 StoryPatternLab/0.7"
 
 
 @dataclass
@@ -113,6 +113,8 @@ def fetch_url(url: str, accept: str = "text/html") -> tuple[Optional[str], Optio
             "User-Agent": USER_AGENT,
             "Accept": accept,
             "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
         },
     )
     try:
@@ -174,40 +176,80 @@ def extract_readable_text(html: str) -> tuple[str, str, str]:
     return title, body[:12000], "generic_html_text"
 
 
-def reddit_json_url(url: str) -> str:
+def reddit_json_candidates(url: str) -> list[str]:
     clean = url.split("?")[0].rstrip("/")
-    return clean + ".json"
+    candidates = [clean + ".json?raw_json=1"]
+    parsed = urlparse(clean)
+    parts = [part for part in parsed.path.split("/") if part]
+    if "comments" in parts:
+        index = parts.index("comments")
+        if len(parts) > index + 1:
+            post_id = parts[index + 1]
+            candidates.append(f"https://www.reddit.com/comments/{post_id}.json?raw_json=1")
+            if index >= 2 and parts[index - 2] == "r":
+                subreddit = parts[index - 1]
+                candidates.append(f"https://www.reddit.com/r/{subreddit}/comments/{post_id}.json?raw_json=1")
+    seen: set[str] = set()
+    unique_candidates: list[str] = []
+    for candidate in candidates:
+        if candidate not in seen:
+            seen.add(candidate)
+            unique_candidates.append(candidate)
+    return unique_candidates
 
 
 def fetch_reddit_body(url: str) -> FetchResult:
-    json_url = reddit_json_url(url)
-    text, error = fetch_url(json_url, accept="application/json")
-    if error or not text:
-        return FetchResult(False, url, "reddit", "", "", 0, "reddit_json", error or "본문 없음")
-    try:
-        payload = json.loads(text)
-        post = payload[0]["data"]["children"][0]["data"]
-        title = clean_text(post.get("title", ""))
-        body = clean_text(post.get("selftext", ""))
-        if not body:
-            body = clean_text(post.get("title", ""))
-        return FetchResult(True, url, "reddit", title, body[:12000], len(body), "reddit_json")
-    except Exception as error:
-        return FetchResult(False, url, "reddit", "", "", 0, "reddit_json", f"Reddit JSON 파싱 실패: {error}")
+    errors: list[str] = []
+    for json_url in reddit_json_candidates(url):
+        text, error = fetch_url(json_url, accept="application/json,text/plain,*/*")
+        if error or not text:
+            errors.append(f"{json_url}: {error or '본문 없음'}")
+            continue
+        try:
+            payload = json.loads(text)
+            post = payload[0]["data"]["children"][0]["data"]
+            title = clean_text(post.get("title", ""))
+            body = clean_text(post.get("selftext", ""))
+            if not body:
+                body = clean_text(post.get("selftext_html", ""))
+            if not body:
+                body = clean_text(post.get("title", ""))
+            if len(body) >= 80:
+                return FetchResult(True, url, "reddit", title, body[:12000], len(body), "reddit_json")
+            errors.append(f"{json_url}: Reddit 본문이 너무 짧습니다.")
+        except Exception as error:
+            errors.append(f"{json_url}: Reddit JSON 파싱 실패: {error}")
+    return FetchResult(False, url, "reddit", "", "", 0, "reddit_json", " / ".join(errors[-2:]) or "Reddit JSON 본문 없음")
 
 
-def fetch_article_body(url: str, source_name: str = "") -> FetchResult:
+def fallback_result(url: str, source_name: str, fallback_text: str, reason: str) -> Optional[FetchResult]:
+    fallback = clean_text(fallback_text)
+    if len(fallback) < 120:
+        return None
+    return FetchResult(True, url, source_name, "", fallback[:12000], len(fallback), "rss_excerpt_fallback", reason)
+
+
+def fetch_article_body(url: str, source_name: str = "", fallback_text: str = "") -> FetchResult:
     domain = urlparse(url).netloc.lower()
     if "reddit.com" in domain:
         result = fetch_reddit_body(url)
         if result.ok and result.length >= 80:
             return result
+        fallback = fallback_result(url, source_name or "reddit", fallback_text, result.error or "Reddit 원문 요청 차단")
+        if fallback:
+            return fallback
 
     html, error = fetch_url(url)
     if error or not html:
+        fallback = fallback_result(url, source_name, fallback_text, error or "본문 없음")
+        if fallback:
+            return fallback
         return FetchResult(False, url, source_name, "", "", 0, "html", error or "본문 없음")
 
     title, body, method = extract_readable_text(html)
     if len(body) < 150:
+        fallback = fallback_result(url, source_name, fallback_text, "본문 후보가 너무 짧아 RSS 요약으로 대체")
+        if fallback:
+            return fallback
         return FetchResult(False, url, source_name, title, body, len(body), method, "본문 후보가 너무 짧습니다.")
     return FetchResult(True, url, source_name, title, body, len(body), method)

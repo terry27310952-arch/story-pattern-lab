@@ -99,7 +99,7 @@ st.markdown(
 USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.5; public-list-metadata-only"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
-STREAMLIT_PATCH_VERSION = "2026-05-17 json-repair-v7"
+STREAMLIT_PATCH_VERSION = "2026-05-17 fetch-fallback-v8"
 TOKEN_PARAMETER_POLICY = "max_completion_tokens only"
 DEPLOYMENT_ENTRYPOINT = "streamlit_app.py -> apps/streamlit/app.py"
 
@@ -314,7 +314,13 @@ def collect_rss(source_name: str, source_meta: dict[str, str], limit: int) -> li
         if not title or not url:
             continue
         published = getattr(entry, "published", None) or getattr(entry, "updated", None)
-        summary = clean_html(getattr(entry, "summary", ""))
+        content_values = []
+        for content_item in getattr(entry, "content", []) or []:
+            value = getattr(content_item, "value", "")
+            if value:
+                content_values.append(value)
+        summary_source = max([getattr(entry, "summary", ""), *content_values], key=lambda value: len(str(value)), default="")
+        summary = clean_html(summary_source)
         items.append(StoryItem(source=source_name, region=source_meta["region"], category=source_meta["category"], title=title, url=url, original_excerpt=summary, posted_at=parse_datetime(published), collected_at=collected_at, rank_position=index))
     return items
 
@@ -639,11 +645,13 @@ with tabs[2]:
                 st.error("source_fetcher.py를 불러오지 못했습니다.")
             else:
                 with st.spinner("본문을 자동으로 가져오는 중..."):
-                    result = fetch_article_body(selected["url"], selected.get("source", ""))
+                    result = fetch_article_body(selected["url"], selected.get("source", ""), selected.get("original_excerpt", ""))
                 if result.ok:
                     st.session_state.source_texts[key] = result.body
                     source_text = result.body
                     st.success(f"본문 확보 완료: {result.length}자 / {result.method}")
+                    if result.method == "rss_excerpt_fallback" and result.error:
+                        st.info(f"원문 페이지가 직접 요청을 막아서 RSS에 포함된 제작 재료를 사용했습니다. 원인: {result.error}")
                 else:
                     st.session_state.source_texts[key] = result.body or selected.get("original_excerpt", "")
                     source_text = st.session_state.source_texts[key]
@@ -950,4 +958,4 @@ with tabs[4]:
     st.markdown("### v0.5 제작 플로우")
     st.write("본문 자동 가져오기 → 사연 해부 → 라이브 구조 설계 → 10분 대본 → 품질검사 → 파생 콘텐츠 → 저장")
 
-st.caption("Story Pattern Lab v0.6 · 라이브 사연 상담형 반존대 대본 제작기 · json-repair-v7")
+st.caption("Story Pattern Lab v0.6 · 라이브 사연 상담형 반존대 대본 제작기 · fetch-fallback-v8")
