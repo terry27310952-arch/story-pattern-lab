@@ -25,8 +25,6 @@ DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
 DEFAULT_OPENAI_REASONING_EFFORT = "medium"
 
-MODERN_CHAT_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
-
 GENERIC_JSON_PLACEHOLDERS = [
     "required_schema",
     "해결 방법 1",
@@ -64,11 +62,6 @@ def clean_text(value: str | None, limit: int = 16000) -> str:
     return text[:limit]
 
 
-def uses_modern_chat_params(model: str) -> bool:
-    normalized = (model or "").strip().lower()
-    return normalized.startswith(MODERN_CHAT_MODEL_PREFIXES)
-
-
 def post_chat_completion(endpoint: str, api_key: str, payload: dict) -> tuple[Optional[str], Optional[str]]:
     request = Request(endpoint, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}, method="POST")
     try:
@@ -87,21 +80,24 @@ def post_chat_completion(endpoint: str, api_key: str, payload: dict) -> tuple[Op
         return None, f"OpenAI 호출 오류: {error}"
 
 
+def error_is_for_param(error: str, param: str) -> bool:
+    return (
+        f"Unsupported parameter: '{param}'" in error
+        or f'"param": "{param}"' in error
+        or f'"param":"{param}"' in error
+    )
+
+
 def openai_chat(messages: list[dict[str, str]], model: str, temperature: float, max_tokens: int, json_mode: bool = False) -> tuple[Optional[str], Optional[str]]:
     api_key = get_secret("OPENAI_API_KEY")
     if not api_key:
         return None, "OPENAI_API_KEY가 설정되어 있지 않습니다."
     base_url = (get_secret("OPENAI_API_BASE", DEFAULT_OPENAI_BASE_URL) or DEFAULT_OPENAI_BASE_URL).rstrip("/")
     endpoint = f"{base_url}/chat/completions"
-    payload = {"model": model, "messages": messages, "temperature": temperature}
-    modern_params = uses_modern_chat_params(model)
-    if modern_params:
-        payload["max_completion_tokens"] = max_tokens
-        effort = get_secret("OPENAI_REASONING_EFFORT", DEFAULT_OPENAI_REASONING_EFFORT)
-        if effort:
-            payload["reasoning_effort"] = effort
-    else:
-        payload["max_tokens"] = max_tokens
+    payload = {"model": model, "messages": messages, "temperature": temperature, "max_completion_tokens": max_tokens}
+    effort = get_secret("OPENAI_REASONING_EFFORT", DEFAULT_OPENAI_REASONING_EFFORT)
+    if effort:
+        payload["reasoning_effort"] = effort
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
 
@@ -110,14 +106,14 @@ def openai_chat(messages: list[dict[str, str]], model: str, temperature: float, 
         return content, None
 
     retry_payload = dict(payload)
-    if not modern_params and "max_completion_tokens" in retry_payload and "max_completion_tokens" in error and "max_tokens" in error:
-        retry_payload["max_tokens"] = retry_payload.pop("max_completion_tokens")
+    if "max_tokens" in retry_payload and error_is_for_param(error, "max_tokens"):
+        retry_payload["max_completion_tokens"] = retry_payload.pop("max_tokens")
         content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
         if not retry_error:
             return content, None
         error = retry_error
-    if "max_tokens" in retry_payload and "max_tokens" in error and "max_completion_tokens" in error:
-        retry_payload["max_completion_tokens"] = retry_payload.pop("max_tokens")
+    if "max_completion_tokens" in retry_payload and error_is_for_param(error, "max_completion_tokens"):
+        retry_payload["max_tokens"] = retry_payload.pop("max_completion_tokens")
         content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
         if not retry_error:
             return content, None
