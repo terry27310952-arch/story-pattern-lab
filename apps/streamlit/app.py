@@ -390,11 +390,20 @@ def render_quality(quality: dict) -> None:
     scores = quality.get("scores", {})
     for idx, (name, value) in enumerate(scores.items()):
         score_cols[idx % 4].metric(name, value)
+    critical_failures = quality.get("critical_failures", [])
     warnings = quality.get("warnings", [])
+    if critical_failures:
+        st.error("\n".join([f"- {item}" for item in critical_failures]))
     if warnings:
         st.warning("\n".join([f"- {item}" for item in warnings]))
-    else:
+    if quality.get("rewrite_guidance"):
+        with st.expander("재작성 가이드", expanded=False):
+            for item in quality.get("rewrite_guidance", []):
+                st.write(f"- {item}")
+    if quality.get("passed"):
         st.success("품질 기준을 통과했습니다.")
+    else:
+        st.info("품질 기준 미달입니다. 품질개선 워크벤치나 퀵패널에서 재작성하세요.")
 
 
 st.title("Story Pattern Lab")
@@ -592,15 +601,31 @@ with tabs[2]:
         if edited_longform != longform:
             st.session_state.longform_scripts[key] = edited_longform
             longform = edited_longform
+            st.session_state.quality_checks.pop(key, None)
+            quality = {}
+            st.info("대본이 수정되어 기존 품질검사 결과를 초기화했습니다. 다시 품질검사를 실행하세요.")
 
         st.markdown("### ⑥ 품질검사")
         if st.button("대본 품질검사", disabled=not bool(longform) or quality_check_live_script is None, use_container_width=True):
             st.session_state.quality_checks[key] = quality_check_live_script(longform)
             quality = st.session_state.quality_checks[key]
         render_quality(quality)
+        quality_passed = bool(quality.get("passed")) if quality else False
+        force_failed_output = False
+        quality_missing = bool(longform) and not bool(quality)
+        if quality_missing:
+            st.info("파생 콘텐츠나 저장 전에 품질검사를 먼저 실행하세요.")
+        if longform and quality and not quality_passed:
+            st.error("현재 대본은 발행 기준 미달입니다. 기본적으로 파생 콘텐츠 생성과 저장을 막습니다.")
+            force_failed_output = st.checkbox(
+                "테스트 목적으로만 품질 미달 대본 진행 허용",
+                value=False,
+                key=f"force_failed_output_{key}",
+            )
 
         st.markdown("### ⑦ 파생 콘텐츠")
-        if st.button("4차 LLM: 쇼츠/Threads/카드뉴스 만들기", disabled=not bool(longform) or generate_derivatives is None, use_container_width=True):
+        output_locked = bool(longform) and (quality_missing or (bool(quality) and not quality_passed and not force_failed_output))
+        if st.button("4차 LLM: 쇼츠/Threads/카드뉴스 만들기", disabled=not bool(longform) or generate_derivatives is None or output_locked, use_container_width=True):
             with st.spinner("롱폼 대본 기반으로 파생 콘텐츠 생성 중..."):
                 result, error = generate_derivatives(longform, analysis, selected, llm_model, temperature)
             if error:
@@ -637,7 +662,9 @@ with tabs[2]:
                 st.json(derivatives)
 
         st.markdown("### ⑧ 저장")
-        if st.button("제작 패키지 조립", disabled=not bool(longform), use_container_width=True):
+        if output_locked:
+            st.warning("품질 미달 대본은 패키지 조립/Supabase 저장 전에 개선이 필요합니다.")
+        if st.button("제작 패키지 조립", disabled=not bool(longform) or output_locked, use_container_width=True):
             if build_package:
                 package = build_package(selected, source_text, analysis, blueprint, longform, quality, derivatives)
             else:
@@ -648,7 +675,7 @@ with tabs[2]:
         package = st.session_state.production_packages.get(key)
         if package:
             save_col, down_col = st.columns(2)
-            if save_col.button("Supabase에 저장", use_container_width=True):
+            if save_col.button("Supabase에 저장", disabled=output_locked, use_container_width=True):
                 result, error = save_package(selected, package)
                 if error:
                     st.error(error)

@@ -67,9 +67,37 @@ SENSITIVE_SAFETY_PATTERNS = [
     "단정하면 안", "정체성", "아웃팅", "사생활", "2차", "피해 확산", "함부로", "비공개", "조심", "민감",
 ]
 
+IMMERSION_TURN_PATTERNS = [
+    "근데", "그런데", "여기서", "문제는", "더 이상한", "여기서부터", "반대로", "그렇다고", "사실은", "그 순간",
+    "이 지점", "판단", "흔들", "걸리는", "불편", "찝찝", "갈리는", "다시 보면", "처음에는", "나중에",
+]
+
+SCENE_DETAIL_PATTERNS = [
+    "그 자리", "그때", "순간", "장면", "공기", "말투", "표정", "메시지", "카톡", "전화", "대화", "댓글창",
+    "사람들 앞", "둘만", "공용", "방송", "글을 보면", "사연을 보면", "상황",
+]
+
+CHAT_COLLISION_PATTERNS = [
+    "채팅에", "댓글에", "도배", "올라오", "갈리", "반은 맞", "그 말", "잠깐만", "얘들아", "여러분들 지금",
+    "그렇게 보면", "아니라는 분", "맞다는 분", "지금 보니까",
+]
+
+EXACT_ADVICE_PATTERNS = [
+    "이렇게 말", "라고 물어", "라고 말", "이 문장", "첫 문장", "상대가", "회피하면", "역공하면", "사과하면",
+    "그때는", "여기까지만", "기준을", "보내세요", "물어보세요",
+]
+
+OUTLINE_LEAK_PATTERNS = [
+    "이 구간에서는", "핵심 포인트", "요약하자면", "다음 단계", "목표는", "분석:", "상담:", "채팅 반응:",
+]
+
 
 def count_any(text: str, words: list[str]) -> int:
     return sum(text.count(word) for word in words)
+
+
+def count_sections_with(sections: list[tuple[str, str]], words: list[str]) -> int:
+    return sum(1 for _, section in sections if count_any(section, words) > 0)
 
 
 def clamp_score(value: float) -> int:
@@ -98,8 +126,9 @@ def section_score(sections: list[tuple[str, str]]) -> tuple[int, dict]:
     if not sections:
         return 0, {"section_count": 0, "avg_section_length": 0, "short_sections": 0}
     lengths = [len(section) for _, section in sections]
-    short_sections = sum(1 for length in lengths if length < 450)
-    very_short_sections = sum(1 for length in lengths if length < 300)
+    short_sections = sum(1 for length in lengths if length < 550)
+    old_short_sections = sum(1 for length in lengths if length < 450)
+    very_short_sections = sum(1 for length in lengths if length < 400)
 
     count_part = ratio_score(len(sections), 10, 5)
     avg_part = ratio_score(mean(lengths), 650, 250)
@@ -109,8 +138,9 @@ def section_score(sections: list[tuple[str, str]]) -> tuple[int, dict]:
         "section_count": len(sections),
         "avg_section_length": round(mean(lengths), 1),
         "min_section_length": min(lengths),
-        "short_sections_under_450": short_sections,
-        "very_short_sections_under_300": very_short_sections,
+        "short_sections_under_550": short_sections,
+        "short_sections_under_450": old_short_sections,
+        "very_short_sections_under_400": very_short_sections,
     }
 
 
@@ -148,9 +178,17 @@ def quality_check_live_script(script: str) -> dict:
     template_leak = count_any(text, TEMPLATE_LEAK_PHRASES)
     fortune_absolute = count_any(text, DIRECT_FORTUNE_ABSOLUTES)
     sensitive_safety = count_any(text, SENSITIVE_SAFETY_PATTERNS)
+    immersion_turns = count_any(text, IMMERSION_TURN_PATTERNS)
+    scene_details = count_any(text, SCENE_DETAIL_PATTERNS)
+    chat_collisions = count_any(text, CHAT_COLLISION_PATTERNS)
+    exact_advice = count_any(text, EXACT_ADVICE_PATTERNS)
+    outline_leak = count_any(text, OUTLINE_LEAK_PATTERNS)
 
     section_structure_score, section_metrics = section_score(sections)
     opening_score, opening_metrics = hook_score(text)
+    sections_with_turns = count_sections_with(sections, IMMERSION_TURN_PATTERNS)
+    sections_with_scenes = count_sections_with(sections, SCENE_DETAIL_PATTERNS)
+    sections_with_chat = count_sections_with(sections, CHAT_COLLISION_PATTERNS)
 
     length_score = ratio_score(length, 9000, 3000)
     timecode_structure_score = section_structure_score
@@ -166,11 +204,21 @@ def quality_check_live_script(script: str) -> dict:
     reactive_part = ratio_score(casual, 30, 6)
     live_score = clamp_score((chat_part * 0.42) + (viewer_part * 0.28) + (reactive_part * 0.30) - forbidden_ai * 7)
 
+    turn_part = ratio_score(sections_with_turns, 8, 2)
+    scene_part = ratio_score(sections_with_scenes, 8, 2)
+    curiosity_part = ratio_score(immersion_turns, 28, 6)
+    immersion_score = clamp_score((turn_part * 0.36) + (scene_part * 0.34) + (curiosity_part * 0.30) - outline_leak * 18)
+
+    chat_collision_part = ratio_score(chat_collisions, 10, 2)
+    chat_section_part = ratio_score(sections_with_chat, 5, 1)
+    debate_design_score = clamp_score((chat_collision_part * 0.56) + (chat_section_part * 0.44) - forbidden_ai * 5)
+
     sender_part = ratio_score(sender, 9, 3)
     advice_part = ratio_score(advice, 24, 6)
     concrete_part = ratio_score(concrete_advice, 12, 2)
+    exact_advice_part = ratio_score(exact_advice, 9, 2)
     safety_bonus = min(15, sensitive_safety * 3)
-    counseling_score = clamp_score((sender_part * 0.22) + (advice_part * 0.33) + (concrete_part * 0.35) + safety_bonus - forbidden_ai * 5)
+    counseling_score = clamp_score((sender_part * 0.18) + (advice_part * 0.24) + (concrete_part * 0.28) + (exact_advice_part * 0.20) + safety_bonus - forbidden_ai * 5)
 
     narrator_part = ratio_score(narrator, 14, 3)
     astro_part = ratio_score(astro, 10, 2)
@@ -190,6 +238,8 @@ def quality_check_live_script(script: str) -> dict:
         "대본_분량": length_score,
         "타임코드_구조": timecode_structure_score,
         "후킹_강도": hook_quality_score,
+        "서사_몰입도": immersion_score,
+        "채팅_논쟁성": debate_design_score,
         "반존대_자연스러움": banter_score,
         "라이브감": live_score,
         "상담성": counseling_score,
@@ -198,17 +248,19 @@ def quality_check_live_script(script: str) -> dict:
     }
 
     weights = {
-        "대본_분량": 0.15,
-        "타임코드_구조": 0.14,
-        "후킹_강도": 0.12,
-        "반존대_자연스러움": 0.14,
-        "라이브감": 0.13,
-        "상담성": 0.15,
-        "캐릭터성": 0.12,
-        "민감주제_처리": 0.05,
+        "대본_분량": 0.11,
+        "타임코드_구조": 0.11,
+        "후킹_강도": 0.11,
+        "서사_몰입도": 0.14,
+        "채팅_논쟁성": 0.10,
+        "반존대_자연스러움": 0.10,
+        "라이브감": 0.09,
+        "상담성": 0.11,
+        "캐릭터성": 0.09,
+        "민감주제_처리": 0.04,
     }
     weighted = sum(scores[name] * weight for name, weight in weights.items())
-    hard_penalty = min(35, forbidden_ai * 4 + template_leak * 12 + fortune_absolute * 12)
+    hard_penalty = min(40, forbidden_ai * 4 + template_leak * 12 + fortune_absolute * 12 + outline_leak * 10)
     overall = clamp_score(weighted - hard_penalty)
 
     outline_only = length < 3500 or (timecodes >= 6 and length / max(timecodes, 1) < 520)
@@ -217,12 +269,12 @@ def quality_check_live_script(script: str) -> dict:
     warnings: list[str] = []
     rewrite_guidance: list[str] = []
 
-    if length < 8000:
-        critical_failures.append("분량 부족: 10분 롱폼은 최소 8,000자 이상이어야 합니다.")
-        rewrite_guidance.append("롱폼을 3파트로 나눠 각 파트 2,500자 이상 생성하세요.")
-    if timecodes < 10:
-        critical_failures.append("타임코드 부족: 최소 10개 이상 필요합니다.")
-    if section_metrics.get("short_sections_under_450", 0) > 2:
+    if length < 8500:
+        critical_failures.append("분량 부족: 10분 롱폼은 최소 8,500자 이상이어야 합니다.")
+        rewrite_guidance.append("롱폼을 11개 타임코드로 나눠 각 구간 650자 이상 생성하세요.")
+    if timecodes < 11:
+        critical_failures.append("타임코드 부족: 최소 11개 이상 필요합니다.")
+    if section_metrics.get("short_sections_under_550", 0) > 2:
         critical_failures.append("짧은 타임코드 구간이 많습니다. 각 구간을 실제 방송 멘트로 확장해야 합니다.")
     if outline_only:
         critical_failures.append("목차형 출력: 타임코드마다 말이 너무 짧습니다.")
@@ -235,6 +287,12 @@ def quality_check_live_script(script: str) -> dict:
     if live_score < 65:
         warnings.append("라이브감 부족: 채팅/댓글을 받아치는 장면이 부족하거나 너무 형식적입니다.")
         rewrite_guidance.append("채팅 의견을 3회 이상 받아치고, 그 의견에 반박/수정/동의하는 멘트를 넣으세요.")
+    if immersion_score < 70:
+        warnings.append("서사 몰입도 부족: 구간마다 새 정보, 판단 변화, 장면 디테일이 충분히 열리지 않았습니다.")
+        rewrite_guidance.append("각 타임코드에 장면 재구성 → 화자 리액션 → 반대 해석 → 다음 궁금증을 넣어 판단이 흔들리게 만드세요.")
+    if debate_design_score < 65:
+        warnings.append("채팅 논쟁성 부족: 찬반이 갈리는 실제 라이브 충돌이 약합니다.")
+        rewrite_guidance.append("채팅에 올라온 반대 의견을 5회 이상 받아치고, '반은 맞고 반은 위험하다'처럼 판단을 보정하는 멘트를 넣으세요.")
     if counseling_score < 70:
         warnings.append("상담성 부족: 현실 조언이 추상적입니다.")
         rewrite_guidance.append("상대에게 실제로 말할 문장, 상대 반응별 대응, 피해야 할 행동을 구체적으로 제시하세요.")
@@ -250,6 +308,8 @@ def quality_check_live_script(script: str) -> dict:
         critical_failures.append(f"템플릿 찌꺼기 감지: {template_leak}개. 이전 사연 문맥이 섞였습니다.")
     if fortune_absolute:
         warnings.append("단정적 점술 표현이 있습니다. 방송식 추측으로 완화하세요.")
+    if outline_leak:
+        critical_failures.append(f"제작 메모/목차형 표현 감지: {outline_leak}개. 최종 대본에는 실제 방송 멘트만 남겨야 합니다.")
 
     passed = (
         overall >= 82
@@ -257,6 +317,8 @@ def quality_check_live_script(script: str) -> dict:
         and scores["대본_분량"] >= 78
         and scores["타임코드_구조"] >= 72
         and scores["후킹_강도"] >= 65
+        and scores["서사_몰입도"] >= 70
+        and scores["채팅_논쟁성"] >= 65
         and scores["라이브감"] >= 65
         and scores["상담성"] >= 70
         and scores["캐릭터성"] >= 65
@@ -295,6 +357,14 @@ def quality_check_live_script(script: str) -> dict:
             "template_leaks": template_leak,
             "fortune_absolutes": fortune_absolute,
             "sensitive_safety_markers": sensitive_safety,
+            "immersion_turn_markers": immersion_turns,
+            "scene_detail_markers": scene_details,
+            "chat_collision_markers": chat_collisions,
+            "exact_advice_markers": exact_advice,
+            "outline_leak_markers": outline_leak,
+            "sections_with_turns": sections_with_turns,
+            "sections_with_scenes": sections_with_scenes,
+            "sections_with_chat_collision": sections_with_chat,
             **section_metrics,
             **opening_metrics,
         },
