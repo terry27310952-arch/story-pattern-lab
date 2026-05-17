@@ -99,6 +99,8 @@ st.markdown(
 USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.5; public-list-metadata-only"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
+STREAMLIT_PATCH_VERSION = "2026-05-17 token-param-v5"
+TOKEN_PARAMETER_POLICY = "max_completion_tokens only"
 
 OVERSEAS_SOURCES = {
     "Reddit AITA": {"url": "https://www.reddit.com/r/AmItheAsshole/.rss", "category": "AITA / Moral Debate", "status": "Active RSS", "region": "해외"},
@@ -193,6 +195,28 @@ def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
 
 def openai_is_configured() -> bool:
     return bool(get_secret("OPENAI_API_KEY"))
+
+
+def llm_pipeline_source() -> str:
+    if analyze_story is None:
+        return "llm_pipeline 로드 실패"
+    try:
+        return os.path.abspath(str(analyze_story.__globals__.get("__file__", "")))
+    except Exception:
+        return "경로 확인 실패"
+
+
+def clear_llm_outputs() -> None:
+    for state_key in [
+        "story_analyses",
+        "live_blueprints",
+        "longform_scripts",
+        "quality_checks",
+        "derivative_assets",
+        "production_packages",
+    ]:
+        st.session_state[state_key] = {}
+    st.session_state.pop("last_addition", None)
 
 
 def clean_html(value: str | None) -> str:
@@ -485,6 +509,15 @@ with st.sidebar:
     st.header("API 상태")
     st.caption(f"OpenAI: {'ON' if openai_is_configured() else 'OFF'}")
     st.caption(f"Supabase: {'ON' if db_is_configured() else 'OFF'}")
+    st.caption(f"패치 버전: {STREAMLIT_PATCH_VERSION}")
+    st.caption(f"토큰 파라미터: {TOKEN_PARAMETER_POLICY}")
+    with st.expander("업데이트 진단", expanded=True):
+        st.write("새 코드의 OpenAI 오류에는 `요청 token 파라미터:`가 함께 표시됩니다.")
+        st.code(llm_pipeline_source(), language="text")
+        if st.button("LLM 결과/이전 오류 초기화", use_container_width=True):
+            clear_llm_outputs()
+            st.success("이전 LLM 결과와 오류 표시를 비웠습니다.")
+            st.rerun()
     llm_model = st.text_input("모델명", value=get_secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL) or DEFAULT_OPENAI_MODEL)
     st.caption("품질 우선 권장: gpt-5.5 / 균형: gpt-5.4 / 비용 절감: gpt-5.4-mini")
     if llm_model.strip().lower() == "gpt-4o-mini":
@@ -896,4 +929,4 @@ with tabs[4]:
     st.markdown("### v0.5 제작 플로우")
     st.write("본문 자동 가져오기 → 사연 해부 → 라이브 구조 설계 → 10분 대본 → 품질검사 → 파생 콘텐츠 → 저장")
 
-st.caption("Story Pattern Lab v0.5 · 라이브 사연 상담형 반존대 대본 제작기")
+st.caption("Story Pattern Lab v0.6 · 라이브 사연 상담형 반존대 대본 제작기 · token-param-v5")
