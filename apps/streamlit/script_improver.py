@@ -6,6 +6,7 @@ from typing import Optional
 from llm_pipeline import (
     LIVE_NARRATOR_RULES,
     LIVE_SCRIPT_CONTRACT,
+    PERSONA_EMBODIMENT_ENGINE,
     STYLE_REFERENCE_BLOCK,
     STORY_IMMERSION_ENGINE,
     clean_text,
@@ -41,6 +42,16 @@ DIRECTION_GUIDE = """
 - 디렉션이 추가 생성이면 기존 대본과 자연스럽게 이어질 타임코드/블록을 생성한다.
 """
 
+PERSONA_REWRITE_CORE = """
+[먼저 체화할 화자]
+- 연령/성별/국적: 32~38세 한국 여성. 해외 사연도 한국 유튜브 라이브 시청자에게 바로 꽂히게 번역하는 사람이다.
+- 위치감: 사연자에게는 선을 지키는 상담자, 시청자에게는 "언니/누나처럼 가까운데 판단은 빠른 진행자"다.
+- 직업감: 무속인이나 상담센터 직원이 아니라, 사주/점성술을 관계 패턴을 읽는 은유로 쓰는 라이브 콘텐츠 진행자다.
+- 말투: 존댓말로 진행하다가 장면이 이상하거나 채팅이 과열되면 반말 리액션이 튀어나온다. 반말은 귀여운 장식이 아니라 판단의 온도다.
+- 판단 방식: 한 사람을 악역으로 박기 전에 행동, 맥락, 동의, 공개 범위, 관계의 힘 차이를 나눈다. 그래야 민감한 사연도 오래 볼 수 있다.
+- 방송 목표: 시청자가 "누가 맞아?"에서 멈추지 않고 "왜 이 장면이 찝찝하지?"를 계속 따라오게 만든다.
+"""
+
 
 def compact_quality_report(quality: dict) -> dict:
     return {
@@ -55,10 +66,116 @@ def compact_quality_report(quality: dict) -> dict:
     }
 
 
-def build_rewrite_brief(quality: dict) -> str:
+def _score_value(scores: dict, key: str, default: int = 100) -> int:
+    try:
+        return int(scores.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _sort_score_item(item: tuple[str, object]) -> float:
+    try:
+        return float(item[1])
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _format_analysis_value(value: object, limit: int = 180) -> str:
+    if isinstance(value, list):
+        value = " / ".join(str(item) for item in value[:3])
+    elif isinstance(value, dict):
+        value = " / ".join(f"{key}: {val}" for key, val in list(value.items())[:3])
+    text = str(value or "").strip()
+    if len(text) > limit:
+        return text[: limit - 1].rstrip() + "…"
+    return text
+
+
+def build_persona_rewrite_diagnostic(
+    quality: dict,
+    analysis: Optional[dict] = None,
+    row: Optional[dict] = None,
+) -> str:
+    """Create a persona-first diagnostic that turns numeric failures into writer behavior."""
+    analysis = analysis or {}
+    row = row or {}
     scores = quality.get("scores", {}) or {}
-    low_scores = sorted(scores.items(), key=lambda item: item[1])[:5]
-    parts: list[str] = []
+    metrics = quality.get("metrics", {}) or {}
+
+    parts: list[str] = [PERSONA_REWRITE_CORE.strip()]
+
+    title = _format_analysis_value(row.get("title"), 120)
+    if title:
+        parts.append(f"[오늘 이 화자가 손에 든 사연]\n- {title}")
+
+    story_lines: list[str] = []
+    for label, key in [
+        ("첫 판단 질문", "judgment_question"),
+        ("핵심 갈등", "main_conflict"),
+        ("감정이 터지는 지점", "emotional_trigger"),
+        ("반복되는 관계 패턴", "hidden_pattern"),
+        ("사연자가 진짜 받고 싶은 상담", "sender_problem"),
+    ]:
+        value = _format_analysis_value(analysis.get(key))
+        if value:
+            story_lines.append(f"- {label}: {value}")
+    if story_lines:
+        parts.append("[이 사연 앞에서 화자가 먼저 붙잡을 것]\n" + "\n".join(story_lines))
+
+    diagnosis: list[str] = []
+    if _score_value(scores, "캐릭터성") < 65:
+        diagnosis.append("- 캐릭터성 낮음: 사주/점성술 단어를 더 넣는 문제가 아니다. 화자의 나이, 성별, 플랫폼 감각이 문장마다 느껴지게 다시 써야 한다.")
+    if _score_value(scores, "반존대_자연스러움") < 65:
+        diagnosis.append("- 반존대 약함: 존댓말 설명만 이어지면 상담센터 문서가 된다. 장면이 이상한 순간, 채팅이 과열되는 순간에 짧은 반말 리액션을 넣어야 한다.")
+    if _score_value(scores, "라이브감") < 65 or _score_value(scores, "채팅_논쟁성") < 65:
+        diagnosis.append("- 라이브감/논쟁성 약함: 채팅은 배경음이 아니라 화자의 판단을 흔드는 상대역이다. 찬반 채팅을 받아치며 판단이 보정되는 장면을 만든다.")
+    if _score_value(scores, "서사_몰입도") < 70:
+        diagnosis.append("- 서사 몰입도 낮음: 사건 요약을 끊고, 60~90초마다 새 정보나 반대 해석을 열어 시청자의 판단을 흔든다.")
+    if _score_value(scores, "상담성") < 70:
+        diagnosis.append("- 상담성 낮음: 위로나 총평이 아니라 사연자가 실제로 보낼 문장, 상대가 회피/역공/사과할 때의 다음 말을 써야 한다.")
+    if _score_value(scores, "후킹_강도") < 65:
+        diagnosis.append("- 후킹 약함: 인사와 주제 소개를 버리고, 첫 문장부터 사건의 폭탄과 책임 갈림을 보여준다.")
+    if _score_value(scores, "민감주제_처리") < 70:
+        diagnosis.append("- 민감 주제 처리 약함: 정체성이나 사생활을 평가하지 말고, 행동/동의/공개 범위/2차 피해 방지로 분리해 말한다.")
+    if _score_value(scores, "대본_분량") < 78 or _score_value(scores, "타임코드_구조") < 72:
+        diagnosis.append("- 분량/구조 부족: 화자의 숨과 장면이 들어갈 공간이 없다. 11개 이상 타임코드마다 장면, 채팅, 패턴 읽기, 실제 상담 문장을 길게 펼친다.")
+
+    if metrics:
+        metric_lines = []
+        for label, key in [
+            ("현재 글자 수", "length"),
+            ("타임코드 수", "timecodes"),
+            ("채팅 충돌 표식", "chat_collision_markers"),
+            ("현실 상담 표식", "exact_advice_markers"),
+            ("사주/점성술 표식", "astro_markers"),
+            ("AI식 문장", "forbidden_ai_phrases"),
+        ]:
+            if key in metrics:
+                metric_lines.append(f"- {label}: {metrics.get(key)}")
+        if metric_lines:
+            diagnosis.append("[숫자가 말하는 결핍]\n" + "\n".join(metric_lines))
+
+    if diagnosis:
+        parts.append("[대본이 페르소나를 놓친 방식]\n" + "\n".join(diagnosis))
+
+    parts.append(
+        "[재작성 순서]\n"
+        "- 1단계: 이 화자가 사건을 처음 들은 표정과 불편함을 정한다.\n"
+        "- 2단계: 사연자 편/상대 편/채팅 반론을 나눠 판단이 흔들리는 구조를 만든다.\n"
+        "- 3단계: 사주·점성술 렌즈를 사건 구조에 붙인다. 랜덤 별자리 언급은 금지한다.\n"
+        "- 4단계: 마지막에는 사연자가 실제로 말할 문장과 멈춰야 할 기준으로 닫는다."
+    )
+    return "\n\n".join(parts).strip()
+
+
+def build_rewrite_brief(
+    quality: dict,
+    analysis: Optional[dict] = None,
+    row: Optional[dict] = None,
+) -> str:
+    scores = quality.get("scores", {}) or {}
+    low_scores = sorted(scores.items(), key=_sort_score_item)[:5]
+    parts: list[str] = [build_persona_rewrite_diagnostic(quality, analysis=analysis, row=row)]
     if quality.get("critical_failures"):
         parts.append("[치명 실패]\n" + "\n".join(f"- {x}" for x in quality.get("critical_failures", [])))
     if low_scores:
@@ -86,11 +203,12 @@ def improve_failed_script(
     if not current_script:
         return "", "개선할 기존 대본이 없습니다."
 
-    brief = build_rewrite_brief(quality)
+    brief = build_rewrite_brief(quality, analysis=analysis, row=row)
     system = f"""너는 유튜브 라이브 사연 상담 대본의 재작성 전문 작가다.
 기존 대본이 품질검사를 통과하지 못했다. 아래 품질검사 리포트와 사용자 디렉션을 반영해 전면 개선한다.
 
 {LIVE_NARRATOR_RULES}
+{PERSONA_EMBODIMENT_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -105,6 +223,7 @@ def improve_failed_script(
 - 각 타임코드마다 실제 방송 멘트를 길게 작성한다. 요약/목차 금지.
 - 품질검사 리포트의 critical_failures는 반드시 해결한다.
 - 사용자 디렉션이 있으면 반드시 눈에 보이게 반영한다.
+- 재작성 브리프의 페르소나를 먼저 체화하고, 그 화자가 실제 라이브에서 말할 수 없는 문장은 버린다.
 - 서사 몰입도, 채팅 논쟁성, 상담성 점수가 낮으면 해당 항목을 구조적으로 보강한다.
 - 각 구간은 장면 재구성, 화자 리액션, 채팅 충돌, 사주/점성술 패턴 읽기, 현실 상담 문장 중 최소 4개 이상을 포함한다.
 - AI식 일반 멘트 금지: 안녕하세요 여러분, 함께 고민해볼까요, 다양한 시각이 있네요, 깊은 대화를 나눠보세요.
@@ -118,6 +237,7 @@ def improve_failed_script(
         "current_script": clean_text(current_script, 18000),
         "quality_report": compact_quality_report(quality),
         "rewrite_brief": brief,
+        "persona_first_instruction": "대본을 쓰기 전에 32~38세 한국 여성 라이브 상담 유튜버의 입장에서 이 사연을 어떻게 받아칠지 먼저 내면화하라. 출력에는 분석 메모를 남기지 말고, 체화된 말투만 남겨라.",
         "user_direction": user_direction.strip(),
         "improvement_mode": improvement_mode,
         "mission": "품질검사 통과를 목표로 대본을 전면 개선하라. 특히 후킹, 서사 몰입도, 채팅 논쟁성, 라이브감, 상담성, 캐릭터성, 로컬라이징, 타임코드 밀도를 강화하라. 사용자가 준 디렉션이 있으면 최우선으로 반영하라.",
@@ -160,12 +280,13 @@ def generate_directed_addition(
     if not user_direction.strip():
         return "", "추가 생성할 디렉션을 입력해주세요."
 
-    brief = build_rewrite_brief(quality)
+    brief = build_rewrite_brief(quality, analysis=analysis, row=row)
     system = f"""너는 유튜브 라이브 사연 상담 대본의 추가 블록을 만드는 작가다.
 기존 대본이 품질검사를 통과하지 못했거나 사용자가 더 보강하고 싶어 한다.
 사용자 디렉션에 맞춰 기존 대본에 붙일 수 있는 추가 방송 멘트 블록을 생성한다.
 
 {LIVE_NARRATOR_RULES}
+{PERSONA_EMBODIMENT_ENGINE}
 {STYLE_REFERENCE_BLOCK}
 {STORY_IMMERSION_ENGINE}
 {LIVE_SCRIPT_CONTRACT}
@@ -176,6 +297,7 @@ def generate_directed_addition(
 추가 생성 절대 조건:
 - 기존 대본 전체를 다시 쓰지 않는다.
 - 사용자가 지정한 보강 방향에 맞는 추가 구간만 만든다.
+- 재작성 브리프의 화자 페르소나를 먼저 체화한다. 추가 블록만 따로 튀는 문어체가 되면 실패다.
 - 타임코드를 포함한다. 예: 04:20 추가 / 06:50 보강 / 09:10 보강.
 - 기존 대본에 자연스럽게 삽입될 수 있게 시작과 끝을 연결형 멘트로 쓴다.
 - 추상 조언 금지. 디테일한 방송 멘트와 실제 상담 문장을 넣는다.
@@ -190,6 +312,7 @@ def generate_directed_addition(
         "current_script": clean_text(current_script, 18000),
         "quality_report": compact_quality_report(quality),
         "rewrite_brief": brief,
+        "persona_first_instruction": "추가 블록도 같은 32~38세 한국 여성 라이브 상담 유튜버가 이어서 말하는 것처럼 써라.",
         "user_direction": user_direction.strip(),
         "target_section": target_section,
         "target_length": target_length,

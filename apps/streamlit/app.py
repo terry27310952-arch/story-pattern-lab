@@ -725,7 +725,7 @@ with tabs[2]:
             )
             if build_rewrite_brief:
                 with st.expander("자동 재작성 브리프", expanded=False):
-                    st.text_area("브리프", build_rewrite_brief(quality), height=180, disabled=True)
+                    st.text_area("브리프", build_rewrite_brief(quality, analysis=analysis, row=selected), height=260, disabled=True)
             improve_cols = st.columns(2)
             if improve_cols[0].button("품질 미달 대본 1회 개선", disabled=improve_failed_script is None, type="primary", use_container_width=True, key=f"improve_once_{key}"):
                 with st.spinner("품질검사 실패 항목을 반영해 대본을 1회 재작성 중..."):
