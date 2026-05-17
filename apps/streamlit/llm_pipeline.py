@@ -94,7 +94,8 @@ def openai_chat(messages: list[dict[str, str]], model: str, temperature: float, 
     base_url = (get_secret("OPENAI_API_BASE", DEFAULT_OPENAI_BASE_URL) or DEFAULT_OPENAI_BASE_URL).rstrip("/")
     endpoint = f"{base_url}/chat/completions"
     payload = {"model": model, "messages": messages, "temperature": temperature}
-    if uses_modern_chat_params(model):
+    modern_params = uses_modern_chat_params(model)
+    if modern_params:
         payload["max_completion_tokens"] = max_tokens
         effort = get_secret("OPENAI_REASONING_EFFORT", DEFAULT_OPENAI_REASONING_EFFORT)
         if effort:
@@ -109,13 +110,13 @@ def openai_chat(messages: list[dict[str, str]], model: str, temperature: float, 
         return content, None
 
     retry_payload = dict(payload)
-    if "max_completion_tokens" in retry_payload and "max_completion_tokens" in error:
+    if not modern_params and "max_completion_tokens" in retry_payload and "max_completion_tokens" in error and "max_tokens" in error:
         retry_payload["max_tokens"] = retry_payload.pop("max_completion_tokens")
         content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
         if not retry_error:
             return content, None
         error = retry_error
-    if "max_tokens" in retry_payload and "max_tokens" in error:
+    if "max_tokens" in retry_payload and "max_tokens" in error and "max_completion_tokens" in error:
         retry_payload["max_completion_tokens"] = retry_payload.pop("max_tokens")
         content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
         if not retry_error:
