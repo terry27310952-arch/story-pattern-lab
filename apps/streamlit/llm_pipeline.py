@@ -24,6 +24,7 @@ except Exception:
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
 DEFAULT_OPENAI_REASONING_EFFORT = "medium"
+DEFAULT_OPENAI_FALLBACK_MODELS = "gpt-5.4,gpt-5.4-mini,gpt-5-chat-latest,gpt-4o-mini"
 
 GENERIC_JSON_PLACEHOLDERS = [
     "required_schema",
@@ -101,54 +102,192 @@ def error_is_for_param(error: str, param: str) -> bool:
     )
 
 
+def model_prefers_completion_tokens(model: str) -> bool:
+    normalized = (model or "").strip().lower()
+    return normalized.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def fallback_models(primary_model: str) -> list[str]:
+    configured = get_secret("OPENAI_FALLBACK_MODELS", DEFAULT_OPENAI_FALLBACK_MODELS) or ""
+    models = [primary_model.strip() or DEFAULT_OPENAI_MODEL]
+    for item in configured.split(","):
+        candidate = item.strip()
+        if candidate and candidate not in models:
+            models.append(candidate)
+    return models
+
+
+def is_model_access_error(error: str) -> bool:
+    lower = (error or "").lower()
+    return any(
+        marker in lower
+        for marker in [
+            "model_not_found",
+            "does not exist",
+            "do not have access",
+            "not have access",
+            "unsupported model",
+            "is not supported",
+            "not supported with this model",
+            "not a valid model",
+            "invalid model",
+            "model unavailable",
+            "not compatible",
+            "responses api",
+            "chat completions",
+        ]
+    )
+
+
+def record_openai_route(route: dict) -> None:
+    try:
+        st.session_state["_openai_last_route"] = route
+    except Exception:
+        pass
+
+
+def build_chat_payload(model: str, messages: list[dict[str, str]], temperature: float, max_tokens: int, json_mode: bool, token_param: str) -> dict:
+    payload = {"model": model, "messages": messages, "temperature": temperature}
+    payload[token_param] = max_tokens
+    effort = get_secret("OPENAI_REASONING_EFFORT", DEFAULT_OPENAI_REASONING_EFFORT)
+    if effort and model_prefers_completion_tokens(model):
+        payload["reasoning_effort"] = effort
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+    return payload
+
+
+def swap_token_param(payload: dict, max_tokens: int) -> dict:
+    swapped = dict(payload)
+    if "max_completion_tokens" in swapped:
+        swapped.pop("max_completion_tokens", None)
+        swapped["max_tokens"] = max_tokens
+    else:
+        swapped.pop("max_tokens", None)
+        swapped["max_completion_tokens"] = max_tokens
+    return swapped
+
+
+def chat_completion_with_retries(endpoint: str, api_key: str, payload: dict, max_tokens: int, json_mode: bool) -> tuple[Optional[str], Optional[str], dict]:
+    attempts: list[dict] = []
+
+    def run_attempt(attempt_payload: dict, note: str) -> tuple[Optional[str], Optional[str]]:
+        token_param = "max_completion_tokens" if "max_completion_tokens" in attempt_payload else "max_tokens" if "max_tokens" in attempt_payload else "none"
+        attempts.append({"model": attempt_payload.get("model"), "token_param": token_param, "note": note})
+        return post_chat_completion(endpoint, api_key, attempt_payload)
+
+    content, error = run_attempt(payload, "initial")
+    if not error:
+        return content, None, {"attempts": attempts, "payload": payload}
+
+    retry_payload = dict(payload)
+    if (
+        error_is_for_param(error, "max_completion_tokens")
+        or error_is_for_param(error, "max_tokens")
+        or "max_completion_tokens" in error
+        or "max_tokens" in error
+    ):
+        retry_payload = swap_token_param(retry_payload, max_tokens)
+        content, retry_error = run_attempt(retry_payload, "swapped token parameter")
+        if not retry_error:
+            return content, None, {"attempts": attempts, "payload": retry_payload}
+        error = retry_error
+
+    if "reasoning_effort" in retry_payload and "reasoning_effort" in error:
+        retry_payload.pop("reasoning_effort", None)
+        content, retry_error = run_attempt(retry_payload, "removed reasoning_effort")
+        if not retry_error:
+            return content, None, {"attempts": attempts, "payload": retry_payload}
+        error = retry_error
+    if "temperature" in retry_payload and "temperature" in error:
+        retry_payload.pop("temperature", None)
+        content, retry_error = run_attempt(retry_payload, "removed temperature")
+        if not retry_error:
+            return content, None, {"attempts": attempts, "payload": retry_payload}
+        error = retry_error
+    if "response_format" in retry_payload and ("response_format" in error or "json_object" in error):
+        retry_payload.pop("response_format", None)
+        content, retry_error = run_attempt(retry_payload, "removed response_format")
+        if not retry_error:
+            return content, None, {"attempts": attempts, "payload": retry_payload}
+        error = retry_error
+    if "응답 본문이 비었습니다" in error:
+        empty_retry_payload = dict(retry_payload)
+        if "reasoning_effort" in empty_retry_payload:
+            empty_retry_payload["reasoning_effort"] = "low"
+        if "max_completion_tokens" in empty_retry_payload:
+            empty_retry_payload["max_completion_tokens"] = max(max_tokens, 12000)
+        elif "max_tokens" in empty_retry_payload:
+            empty_retry_payload["max_tokens"] = max(max_tokens, 12000)
+        if json_mode:
+            empty_retry_payload.pop("response_format", None)
+        content, retry_error = run_attempt(empty_retry_payload, "empty response retry")
+        if not retry_error:
+            return content, None, {"attempts": attempts, "payload": empty_retry_payload}
+        error = retry_error
+    return None, error, {"attempts": attempts, "payload": retry_payload}
+
+
 def openai_chat(messages: list[dict[str, str]], model: str, temperature: float, max_tokens: int, json_mode: bool = False) -> tuple[Optional[str], Optional[str]]:
     api_key = get_secret("OPENAI_API_KEY")
     if not api_key:
         return None, "OPENAI_API_KEY가 설정되어 있지 않습니다."
     base_url = (get_secret("OPENAI_API_BASE", DEFAULT_OPENAI_BASE_URL) or DEFAULT_OPENAI_BASE_URL).rstrip("/")
     endpoint = f"{base_url}/chat/completions"
-    payload = {"model": model, "messages": messages, "temperature": temperature, "max_completion_tokens": max_tokens}
-    effort = get_secret("OPENAI_REASONING_EFFORT", DEFAULT_OPENAI_REASONING_EFFORT)
-    if effort:
-        payload["reasoning_effort"] = effort
-    if json_mode:
-        payload["response_format"] = {"type": "json_object"}
+    errors: list[str] = []
+    attempted_routes: list[dict] = []
+    for candidate_model in fallback_models(model):
+        preferred_token = "max_completion_tokens" if model_prefers_completion_tokens(candidate_model) else "max_tokens"
+        payload = build_chat_payload(candidate_model, messages, temperature, max_tokens, json_mode, preferred_token)
+        content, error, meta = chat_completion_with_retries(endpoint, api_key, payload, max_tokens, json_mode)
+        attempted_routes.extend(meta.get("attempts", []))
+        if not error:
+            final_payload = meta.get("payload", payload)
+            token_param = "max_completion_tokens" if "max_completion_tokens" in final_payload else "max_tokens" if "max_tokens" in final_payload else "none"
+            record_openai_route(
+                {
+                    "ok": True,
+                    "endpoint": "chat.completions",
+                    "model": candidate_model,
+                    "requested_model": model,
+                    "token_param": token_param,
+                    "json_mode": json_mode,
+                    "used_fallback_model": candidate_model != model,
+                    "attempts": attempted_routes[-4:],
+                }
+            )
+            return content, None
+        errors.append(f"{candidate_model}: {error}")
+        if not is_model_access_error(error):
+            break
+    record_openai_route(
+        {
+            "ok": False,
+            "endpoint": "chat.completions",
+            "requested_model": model,
+            "attempts": attempted_routes[-8:],
+        }
+    )
+    return None, " / ".join(errors[-3:]) if errors else "OpenAI 호출 실패"
 
-    content, error = post_chat_completion(endpoint, api_key, payload)
-    if not error:
-        return content, None
 
-    retry_payload = dict(payload)
-    if "reasoning_effort" in retry_payload and "reasoning_effort" in error:
-        retry_payload.pop("reasoning_effort", None)
-        content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
-        if not retry_error:
-            return content, None
-        error = retry_error
-    if "temperature" in retry_payload and "temperature" in error:
-        retry_payload.pop("temperature", None)
-        content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
-        if not retry_error:
-            return content, None
-        error = retry_error
-    if "response_format" in retry_payload and ("response_format" in error or "json_object" in error):
-        retry_payload.pop("response_format", None)
-        content, retry_error = post_chat_completion(endpoint, api_key, retry_payload)
-        if not retry_error:
-            return content, None
-        error = retry_error
-    if "응답 본문이 비었습니다" in error:
-        empty_retry_payload = dict(payload)
-        if "reasoning_effort" in empty_retry_payload:
-            empty_retry_payload["reasoning_effort"] = "low"
-        empty_retry_payload["max_completion_tokens"] = max(max_tokens, 12000)
-        if json_mode:
-            empty_retry_payload.pop("response_format", None)
-        content, retry_error = post_chat_completion(endpoint, api_key, empty_retry_payload)
-        if not retry_error:
-            return content, None
-        error = retry_error
-    return None, error
+def openai_health_check(model: str, temperature: float = 0.2) -> dict:
+    content, error = openai_chat(
+        [
+            {"role": "system", "content": "Return exactly OK."},
+            {"role": "user", "content": "ping"},
+        ],
+        model=model,
+        temperature=temperature,
+        max_tokens=64,
+        json_mode=False,
+    )
+    route = {}
+    try:
+        route = st.session_state.get("_openai_last_route", {})
+    except Exception:
+        route = {}
+    return {"ok": not bool(error), "response": content or "", "error": error or "", "route": route}
 
 
 def extract_json_object(text: str) -> tuple[Optional[dict], Optional[str]]:

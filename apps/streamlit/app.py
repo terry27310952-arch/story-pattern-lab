@@ -29,9 +29,10 @@ try:
         write_live_longform,
         generate_derivatives,
         build_package,
+        openai_health_check,
     )
 except Exception as import_error:
-    analyze_story = build_live_blueprint = write_live_longform = generate_derivatives = build_package = None
+    analyze_story = build_live_blueprint = write_live_longform = generate_derivatives = build_package = openai_health_check = None
     LLM_PIPELINE_IMPORT_ERROR = str(import_error)
 else:
     LLM_PIPELINE_IMPORT_ERROR = None
@@ -100,8 +101,8 @@ st.markdown(
 USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.5; public-list-metadata-only"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
-STREAMLIT_PATCH_VERSION = "2026-05-17 autopilot-v9"
-TOKEN_PARAMETER_POLICY = "max_completion_tokens only"
+STREAMLIT_PATCH_VERSION = "2026-05-18 api-autofallback-v10"
+TOKEN_PARAMETER_POLICY = "adaptive: max_completion_tokens 또는 max_tokens 자동 재시도"
 DEPLOYMENT_ENTRYPOINT = "streamlit_app.py -> apps/streamlit/app.py"
 
 OVERSEAS_SOURCES = {
@@ -682,7 +683,7 @@ with st.sidebar:
     st.caption(f"패치 버전: {STREAMLIT_PATCH_VERSION}")
     st.caption(f"토큰 파라미터: {TOKEN_PARAMETER_POLICY}")
     with st.expander("업데이트 진단", expanded=True):
-        st.write("새 코드의 OpenAI 오류에는 `요청 token 파라미터:`가 함께 표시됩니다.")
+        st.write("OpenAI 호출은 모델별 토큰 파라미터를 자동 선택하고, 실패하면 반대 파라미터와 대체 모델을 순서대로 재시도합니다.")
         st.caption(f"배포 엔트리포인트: {DEPLOYMENT_ENTRYPOINT}")
         st.caption("실행 중인 앱 파일")
         st.code(app_source(), language="text")
@@ -703,6 +704,21 @@ with st.sidebar:
         st.error(f"LLM 파이프라인 로드 실패: {LLM_PIPELINE_IMPORT_ERROR}")
     if SCRIPT_IMPROVER_IMPORT_ERROR:
         st.error(f"품질개선 모듈 로드 실패: {SCRIPT_IMPROVER_IMPORT_ERROR}")
+    if st.button("OpenAI API 진단", width="stretch", disabled=openai_health_check is None or not openai_is_configured()):
+        with st.spinner("OpenAI API 호출 조합을 진단 중..."):
+            health = openai_health_check(llm_model, 0.2) if openai_health_check else {"ok": False, "error": "진단 함수 없음"}
+        st.session_state.openai_health = health
+    if st.session_state.get("openai_health"):
+        health = st.session_state.openai_health
+        if health.get("ok"):
+            route = health.get("route", {})
+            st.success(f"OpenAI 진단 성공: {route.get('model', llm_model)} / {route.get('token_param', 'unknown')}")
+            if route.get("used_fallback_model"):
+                st.info(f"요청 모델 대신 대체 모델을 사용했습니다: {route.get('requested_model')} → {route.get('model')}")
+        else:
+            st.error(f"OpenAI 진단 실패: {health.get('error')}")
+            if health.get("route"):
+                st.json(health.get("route"))
     if st.button("Supabase 테스트", width="stretch"):
         _, err = load_packages(1)
         st.error(err) if err else st.success("Supabase 연결 성공")
@@ -1164,5 +1180,5 @@ with tabs[4]:
     st.markdown("### v0.5 제작 플로우")
     st.write("본문 자동 가져오기 → 사연 해부 → 라이브 구조 설계 → 10분 대본 → 품질검사 → 파생 콘텐츠 → 저장")
 
-st.caption("Story Pattern Lab v0.6 · 라이브 사연 상담형 반존대 대본 제작기 · autopilot-v9")
+st.caption("Story Pattern Lab v0.6 · 라이브 사연 상담형 반존대 대본 제작기 · api-autofallback-v10")
 
