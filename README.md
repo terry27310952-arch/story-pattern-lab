@@ -1,34 +1,22 @@
-# Story Pattern Lab
+# Editorial Life Intelligence Lab
 
-Story Pattern Lab is a beginner-friendly viral story radar for overseas storytime content.
+Editorial Life 브랜드용 시장 인사이트 제작실입니다.
 
-The first version starts with Streamlit so the full product flow can be tested quickly:
+## Streamlit Cloud 설정
 
-1. Collect story candidates from public RSS sources.
-2. Sort them with a basic viral score.
-3. Classify story angles.
-4. Generate a first shorts script draft.
+- Repository: `terry27310952-arch/story-pattern-lab`
+- Branch: `codex/editorial-life-lab`
+- Main file path: `streamlit_app.py`
 
-The OpenAI-backed production flow defaults to `gpt-5.5` for richer story
-analysis, live counseling structure, and longform script generation. You can
-override it with the `OPENAI_MODEL` environment/Streamlit secret.
+## 현재 MVP
 
-## Local Streamlit Test
+- 주식, 코인, 거시경제, 지갑/온체인, 철학 문장 기반 후보 수집
+- Life Edit Framework 기반 인사이트 재해석
+- 롱폼 대본, 쇼츠 훅, 카드뉴스 문안 생성
+- Streamlit 세션 기반 아카이브
 
-```cmd
-cd apps\streamlit
-pip install -r requirements.txt
-streamlit run app.py
-```
+## 다음 연결 지점
 
-Open:
-
-```text
-http://localhost:8501
-```
-
-## Current Development Policy
-
-- This repository is separated from `ai-pd-studio` to avoid confusion.
-- Start with Streamlit only.
-- Add Reddit API, LLM generation, DB storage, FastAPI, and Next.js later.
+- Yahoo Finance, CoinGecko, FRED, Etherscan, RSS 소스 연동
+- OpenAI API 기반 실제 대본 생성
+- Supabase `editorial_life_packages` 저장 테이블 연결
