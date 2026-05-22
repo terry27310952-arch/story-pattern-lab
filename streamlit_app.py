@@ -127,11 +127,12 @@ def topic_terms(keyword: str) -> list[str]:
         piece = normalize_term(piece)
         if piece:
             terms.append(piece)
-    alias_norms = []
-    for key, aliases in TOPIC_ALIASES.items():
+    for key, aliases in sorted(TOPIC_ALIASES.items(), key=lambda x: len(x[0]), reverse=True):
+        key_norm = normalize_term(key)
         alias_norms = [normalize_term(x) for x in aliases]
-        if base == key or key in base or base in alias_norms:
+        if base == key_norm or key_norm in base or base in alias_norms:
             terms.extend(aliases)
+            break
     terms.append(keyword)
     deduped = []
     for term in terms:
@@ -139,6 +140,13 @@ def topic_terms(keyword: str) -> list[str]:
         if n and n not in deduped:
             deduped.append(n)
     return deduped
+
+
+def community_query(keyword: str) -> str:
+    for term in topic_terms(keyword):
+        if re.search(r"[A-Za-z]", term) and "$" not in term and len(term) > 2:
+            return term
+    return keyword
 
 
 def query_string(keyword: str) -> str:
@@ -270,7 +278,7 @@ def fetch_rss_source(source: dict, keyword: str, limit: int) -> tuple[list[dict]
 
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_reddit_source(source: dict, keyword: str, limit: int) -> tuple[list[dict], str]:
-    params = urlencode({"q": query_string(keyword), "restrict_sr": "1", "sort": "hot", "t": "week", "limit": limit})
+    params = urlencode({"q": community_query(keyword), "restrict_sr": "1", "sort": "hot", "t": "week", "limit": limit})
     url = f"https://www.reddit.com/r/{source['sub']}/search.json?{params}"
     try:
         data = json.loads(request_text(url, timeout=8))
@@ -289,7 +297,7 @@ def fetch_reddit_source(source: dict, keyword: str, limit: int) -> tuple[list[di
 
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_hacker_news(keyword: str, limit: int) -> tuple[list[dict], str]:
-    url = f"https://hn.algolia.com/api/v1/search?{urlencode({'query': keyword, 'tags': 'story', 'hitsPerPage': limit})}"
+    url = f"https://hn.algolia.com/api/v1/search?{urlencode({'query': community_query(keyword), 'tags': 'story', 'hitsPerPage': limit})}"
     try:
         data = json.loads(request_text(url, timeout=8))
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
