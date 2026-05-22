@@ -20,32 +20,29 @@ st.set_page_config(page_title="Editorial Life Intelligence Lab", page_icon="EL",
 st.markdown(
     """
     <style>
-    .block-container { padding-top:1.6rem; max-width:1280px; }
+    .block-container { padding-top:1.55rem; max-width:1280px; }
     [data-testid="stSidebar"] { background:#eef1f5; }
     .eyebrow { color:#9f302b; font-size:.78rem; font-weight:800; text-transform:uppercase; letter-spacing:.03em; }
-    .hero-line { color:#596272; max-width:760px; line-height:1.65; }
-    .metric-card { padding:1rem; border:1px solid #dce1e7; border-radius:8px; background:white; box-shadow:0 10px 26px rgba(24,31,43,.06); min-height:118px; }
-    .metric-card span { display:block; color:#6b7280; font-weight:800; margin-bottom:.35rem; font-size:.9rem; }
-    .metric-card strong { font-size:2.05rem; line-height:1; }
-    .metric-card small { display:block; color:#7a8491; margin-top:.55rem; line-height:1.4; }
-    .brief-card { padding:1rem; border:1px solid #dce1e7; border-radius:8px; background:#ffffff; min-height:142px; }
-    .brief-card h4 { margin:0 0 .55rem 0; font-size:1.02rem; }
+    .hero-line { color:#596272; max-width:800px; line-height:1.65; }
+    .metric-card,.export-card { padding:1rem; border:1px solid #dce1e7; border-radius:8px; background:#fff; box-shadow:0 10px 26px rgba(24,31,43,.06); min-height:112px; }
+    .metric-card span,.export-card span { display:block; color:#6b7280; font-weight:800; margin-bottom:.35rem; font-size:.88rem; }
+    .metric-card strong,.export-card strong { display:block; font-size:2.02rem; line-height:1; margin-bottom:.5rem; }
+    .metric-card small,.export-card small { display:block; color:#7a8491; line-height:1.4; }
     .pill { display:inline-block; padding:.22rem .52rem; border:1px solid #d9dee7; border-radius:999px; margin:.15rem .25rem .35rem 0; color:#485160; font-size:.82rem; background:#fff; }
     .pill-red { border-color:#e2b7b4; color:#9f302b; background:#fff7f6; }
     .item-title { font-size:1.04rem; font-weight:850; margin-bottom:.35rem; }
     .source-meta { color:#68707d; font-size:.86rem; line-height:1.5; }
-    .quote,.output { white-space:pre-wrap; line-height:1.72; padding:1rem; border:1px solid #dce1e7; border-radius:8px; background:white; }
-    .quote { border-left:4px solid #c9443e; background:#fff7f6; }
+    .source-text { white-space:pre-wrap; line-height:1.68; padding:1rem; border:1px solid #dce1e7; border-radius:8px; background:#fff; max-height:360px; overflow:auto; }
     .small-muted { color:#7a8491; font-size:.86rem; line-height:1.55; }
-    div.stButton > button[kind="primary"] { background:#c9443e; border-color:#c9443e; }
-    div.stButton > button { border-radius:6px; font-weight:800; }
+    div.stButton > button[kind="primary"], div.stDownloadButton > button[kind="primary"] { background:#c9443e; border-color:#c9443e; }
+    div.stButton > button, div.stDownloadButton > button { border-radius:6px; font-weight:800; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 
-USER_AGENT = "EditorialLifeLab/0.4 (+https://streamlit.app)"
+USER_AGENT = "EditorialLifeLab/0.5 (+https://streamlit.app)"
 
 SOURCE_GROUPS = {
     "news_rss": "뉴스 RSS 일괄 취합",
@@ -69,8 +66,20 @@ TOPIC_ALIASES = {
 }
 
 RSS_SOURCES = [
-    {"group": "news_rss", "name": "Google News KR", "mode": "query", "url_template": "https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko", "weight": 1.2},
-    {"group": "news_rss", "name": "Google News Global", "mode": "query", "url_template": "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en", "weight": 1.15},
+    {
+        "group": "news_rss",
+        "name": "Google News KR",
+        "mode": "query",
+        "url_template": "https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko",
+        "weight": 1.2,
+    },
+    {
+        "group": "news_rss",
+        "name": "Google News Global",
+        "mode": "query",
+        "url_template": "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en",
+        "weight": 1.15,
+    },
     {"group": "crypto_media", "name": "CoinDesk", "mode": "feed", "url": "https://www.coindesk.com/arc/outboundfeeds/rss/", "weight": 1.2},
     {"group": "crypto_media", "name": "Cointelegraph", "mode": "feed", "url": "https://cointelegraph.com/rss", "weight": 1.05},
     {"group": "crypto_media", "name": "Decrypt", "mode": "feed", "url": "https://decrypt.co/feed", "weight": 1.05},
@@ -105,15 +114,30 @@ BULLISH_WORDS = {"surge", "rally", "breakout", "approval", "upgrade", "inflow", 
 BEARISH_WORDS = {"dump", "sell", "lawsuit", "hack", "exploit", "liquidation", "outflow", "bear", "crash", "plunge", "하락", "급락", "매도", "소송", "해킹", "청산", "유출", "규제"}
 NOISE_WORDS = {"the", "and", "for", "with", "from", "that", "this", "into", "crypto", "bitcoin", "ethereum", "classic", "news", "says", "after", "over", "more", "about", "시장", "관련", "뉴스", "코인", "가상자산", "암호화폐", "이더리움", "이더리움클래식"}
 
-for key, default in {"items": [], "brief": {}, "selected_url": "", "archive": [], "status": [], "last_query": "", "generated": {}}.items():
-    st.session_state.setdefault(key, default)
-
 
 def clean_text(value: str | None, limit: int = 1000) -> str:
     value = unescape(value or "")
     value = re.sub(r"<[^>]+>", " ", value)
     value = re.sub(r"\s+", " ", value).strip()
     return value[:limit]
+
+
+def html_to_text(value: str, limit: int = 9000) -> str:
+    value = re.sub(r"(?is)<(script|style|noscript|svg|canvas|form|nav|footer|header).*?</\1>", " ", value)
+    value = re.sub(r"(?is)<br\s*/?>|</p>|</div>|</li>|</h[1-6]>", "\n", value)
+    value = re.sub(r"(?is)<[^>]+>", " ", value)
+    value = unescape(value)
+    lines = []
+    for line in value.splitlines():
+        line = re.sub(r"\s+", " ", line).strip()
+        if len(line) >= 24:
+            lines.append(line)
+    return "\n".join(lines)[:limit]
+
+
+def safe_filename(value: str) -> str:
+    safe = re.sub(r"[^0-9A-Za-z가-힣_-]+", "_", value).strip("_")
+    return safe or "market_sources"
 
 
 def normalize_term(term: str) -> str:
@@ -127,20 +151,20 @@ def topic_terms(keyword: str) -> list[str]:
         piece = normalize_term(piece)
         if piece:
             terms.append(piece)
-    for key, aliases in sorted(TOPIC_ALIASES.items(), key=lambda x: len(x[0]), reverse=True):
+    for key, aliases in sorted(TOPIC_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
         key_norm = normalize_term(key)
-        alias_norms = [normalize_term(x) for x in aliases]
-        if base == key_norm or key_norm in base or base in alias_norms:
+        alias_norms = [normalize_term(alias) for alias in aliases]
+        if base == key_norm or key_norm in base or base in alias_norms or any(alias in base for alias in alias_norms):
             terms.extend(aliases)
             break
     terms.append(keyword)
     deduped = []
     for term in terms:
-        n = normalize_term(term)
-        if n == "etc":
+        normalized = normalize_term(term)
+        if normalized == "etc":
             continue
-        if n and n not in deduped:
-            deduped.append(n)
+        if normalized and normalized not in deduped:
+            deduped.append(normalized)
     return deduped
 
 
@@ -155,7 +179,7 @@ def query_string(keyword: str) -> str:
     terms = topic_terms(keyword)
     if len(terms) == 1:
         return terms[0]
-    quoted = [f'"{term}"' if " " in term else term for term in terms[:5]]
+    quoted = [f'"{term}"' if " " in term else term for term in terms[:6]]
     return " OR ".join(quoted)
 
 
@@ -180,6 +204,33 @@ def request_text(url: str, timeout: int = 9) -> str:
     with urlopen(request, timeout=timeout) as response:
         raw = response.read()
     return raw.decode("utf-8", errors="replace")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_original_text(url: str, fallback: str = "") -> tuple[str, str]:
+    fallback_text = clean_text(fallback, 5000)
+    if not url or not url.startswith("http"):
+        return fallback_text, "fallback_no_url"
+    try:
+        request = Request(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5",
+            },
+        )
+        with urlopen(request, timeout=8) as response:
+            content_type = response.headers.get("Content-Type", "").lower()
+            charset = response.headers.get_content_charset() or "utf-8"
+            raw = response.read(850_000)
+        if "pdf" in content_type or "image/" in content_type or "video/" in content_type:
+            return fallback_text, "fallback_binary"
+        original_text = html_to_text(raw.decode(charset, errors="replace"))
+        if len(original_text) < 240:
+            return fallback_text, "fallback_short"
+        return original_text, "html_body"
+    except (HTTPError, URLError, TimeoutError, ValueError, OSError) as exc:
+        return fallback_text, f"fallback_{type(exc).__name__}"
 
 
 def child_text(node: ET.Element, names: set[str]) -> str:
@@ -217,19 +268,6 @@ def mood_of(text: str) -> tuple[str, int, int]:
     return "중립/관망", bull, bear
 
 
-def theme_terms(items: list[dict], keyword: str, count: int = 8) -> list[tuple[str, int]]:
-    aliases = set(topic_terms(keyword))
-    bucket: dict[str, int] = {}
-    for item in items:
-        text = normalize_term(f"{item['title']} {item['summary']}")
-        for token in re.findall(r"[A-Za-z][A-Za-z0-9$-]{2,}|[가-힣]{2,}", text):
-            token = token.lower().strip("$")
-            if token in NOISE_WORDS or token in aliases or len(token) < 2:
-                continue
-            bucket[token] = bucket.get(token, 0) + 1
-    return sorted(bucket.items(), key=lambda x: x[1], reverse=True)[:count]
-
-
 def item_score(source_weight: float, relevance: int, age_hours: float, popularity: float, bull: int, bear: int) -> int:
     recency = max(0, 24 - min(age_hours, 24)) * 1.15
     tension = min(14, (bull + bear) * 3.5)
@@ -237,7 +275,22 @@ def item_score(source_weight: float, relevance: int, age_hours: float, popularit
     return int(max(1, min(99, round(score))))
 
 
-def make_item(*, source: str, group: str, source_type: str, title: str, summary: str, url: str, published: str = "", age_hours: float = 9999.0, source_weight: float = 1.0, popularity_raw: int = 0, comments: int = 0, origin: str = "rss", keyword: str) -> dict:
+def make_item(
+    *,
+    source: str,
+    group: str,
+    source_type: str,
+    title: str,
+    summary: str,
+    url: str,
+    published: str = "",
+    age_hours: float = 9999.0,
+    source_weight: float = 1.0,
+    popularity_raw: int = 0,
+    comments: int = 0,
+    origin: str = "rss",
+    keyword: str,
+) -> dict:
     terms = topic_terms(keyword)
     text = f"{title} {summary}"
     relevance = sum(1 for term in terms if term in normalize_term(text))
@@ -252,7 +305,26 @@ def make_item(*, source: str, group: str, source_type: str, title: str, summary:
         signal = f"{age_hours:.0f}시간 전"
     else:
         signal = "발행일 미확인"
-    return {"id": f"{origin}-{abs(hash(url + title))}", "source": source, "group": group, "source_type": source_type, "title": clean_text(title, 180) or "Untitled", "summary": clean_text(summary, 900), "url": url, "published": published, "age_hours": age_hours, "score": score, "mood": mood, "popularity_raw": popularity_raw, "comments": comments, "signal": signal, "origin": origin, "captured_at": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    return {
+        "id": f"{origin}-{abs(hash(url + title))}",
+        "source": source,
+        "group": group,
+        "source_type": source_type,
+        "title": clean_text(title, 180) or "Untitled",
+        "summary": clean_text(summary, 900),
+        "original_text": clean_text(summary, 5000),
+        "content_status": "feed_summary",
+        "url": url,
+        "published": published,
+        "age_hours": age_hours,
+        "score": score,
+        "mood": mood,
+        "popularity_raw": popularity_raw,
+        "comments": comments,
+        "signal": signal,
+        "origin": origin,
+        "captured_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -260,10 +332,10 @@ def fetch_rss_source(source: dict, keyword: str, limit: int) -> tuple[list[dict]
     terms = topic_terms(keyword)
     url = source["url_template"].format(query=quote(query_string(keyword))) if source["mode"] == "query" else source["url"]
     try:
-        xml_text = request_text(url)
-        root = ET.fromstring(xml_text)
+        root = ET.fromstring(request_text(url))
     except (HTTPError, URLError, TimeoutError, ET.ParseError, ValueError) as exc:
         return [], f"{source['name']}: 실패 ({type(exc).__name__})"
+
     nodes = root.findall(".//item") or root.findall(".//{http://www.w3.org/2005/Atom}entry")
     items: list[dict] = []
     for node in nodes[: limit * 4]:
@@ -271,8 +343,22 @@ def fetch_rss_source(source: dict, keyword: str, limit: int) -> tuple[list[dict]
         summary = child_text(node, {"description", "summary", "content", "encoded"})
         if source["mode"] == "feed" and not matches_topic(title, summary, terms):
             continue
-        published, age_hours = parse_date(child_text(node, {"pubdate", "published", "updated", "dc:date"}))
-        items.append(make_item(source=source["name"], group=source["group"], source_type="RSS", title=title, summary=summary, url=child_link(node), published=published, age_hours=age_hours, source_weight=float(source["weight"]), origin="rss", keyword=keyword))
+        published, age_hours = parse_date(child_text(node, {"pubdate", "published", "updated", "date"}))
+        items.append(
+            make_item(
+                source=source["name"],
+                group=source["group"],
+                source_type="RSS",
+                title=title,
+                summary=summary,
+                url=child_link(node),
+                published=published,
+                age_hours=age_hours,
+                source_weight=float(source["weight"]),
+                origin="rss",
+                keyword=keyword,
+            )
+        )
         if len(items) >= limit:
             break
     return items, f"{source['name']}: {len(items)}개"
@@ -293,13 +379,31 @@ def fetch_reddit_source(source: dict, keyword: str, limit: int) -> tuple[list[di
             continue
         created = datetime.fromtimestamp(float(post.get("created_utc", 0) or 0), tz=timezone.utc)
         age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
-        items.append(make_item(source=source["name"], group="community", source_type="Community", title=post.get("title", ""), summary=post.get("selftext") or post.get("url_overridden_by_dest") or "", url=f"https://www.reddit.com{post.get('permalink', '')}", published=created.strftime("%Y-%m-%d %H:%M UTC"), age_hours=age_hours, source_weight=float(source["weight"]), popularity_raw=int(post.get("ups") or post.get("score") or 0), comments=int(post.get("num_comments") or 0), origin="reddit", keyword=keyword))
+        summary = post.get("selftext") or post.get("url_overridden_by_dest") or ""
+        items.append(
+            make_item(
+                source=source["name"],
+                group="community",
+                source_type="Community",
+                title=post.get("title", ""),
+                summary=summary,
+                url=f"https://www.reddit.com{post.get('permalink', '')}",
+                published=created.strftime("%Y-%m-%d %H:%M UTC"),
+                age_hours=age_hours,
+                source_weight=float(source["weight"]),
+                popularity_raw=int(post.get("ups") or post.get("score") or 0),
+                comments=int(post.get("num_comments") or 0),
+                origin="reddit",
+                keyword=keyword,
+            )
+        )
     return items, f"{source['name']}: {len(items)}개"
 
 
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_hacker_news(keyword: str, limit: int) -> tuple[list[dict], str]:
-    url = f"https://hn.algolia.com/api/v1/search?{urlencode({'query': community_query(keyword), 'tags': 'story', 'hitsPerPage': limit})}"
+    params = urlencode({"query": community_query(keyword), "tags": "story", "hitsPerPage": limit})
+    url = f"https://hn.algolia.com/api/v1/search?{params}"
     try:
         data = json.loads(request_text(url, timeout=8))
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
@@ -307,14 +411,30 @@ def fetch_hacker_news(keyword: str, limit: int) -> tuple[list[dict], str]:
     items = []
     for hit in data.get("hits", []):
         created, age_hours = parse_date(hit.get("created_at"))
-        items.append(make_item(source="Hacker News", group="community", source_type="Community", title=hit.get("title") or hit.get("story_title") or "", summary=hit.get("comment_text") or "", url=hit.get("url") or f"https://news.ycombinator.com/item?id={hit.get('objectID')}", published=created, age_hours=age_hours, source_weight=0.95, popularity_raw=int(hit.get("points") or 0), comments=int(hit.get("num_comments") or 0), origin="hn", keyword=keyword))
+        items.append(
+            make_item(
+                source="Hacker News",
+                group="community",
+                source_type="Community",
+                title=hit.get("title") or hit.get("story_title") or "",
+                summary=hit.get("comment_text") or "",
+                url=hit.get("url") or f"https://news.ycombinator.com/item?id={hit.get('objectID')}",
+                published=created,
+                age_hours=age_hours,
+                source_weight=0.95,
+                popularity_raw=int(hit.get("points") or 0),
+                comments=int(hit.get("num_comments") or 0),
+                origin="hn",
+                keyword=keyword,
+            )
+        )
     return items, f"Hacker News: {len(items)}개"
 
 
 def dedupe_items(items: list[dict]) -> list[dict]:
     seen: set[str] = set()
     deduped = []
-    for item in sorted(items, key=lambda x: x["score"], reverse=True):
+    for item in sorted(items, key=lambda value: value["score"], reverse=True):
         key = normalize_term(item["url"] or item["title"])
         if not key or key in seen:
             continue
@@ -343,232 +463,253 @@ def run_collection(keyword: str, active_groups: list[str], per_source: int) -> t
     return dedupe_items(all_items), status
 
 
-def build_brief(items: list[dict], keyword: str) -> dict:
-    if not items:
-        return {"tone": "자료 부족", "one_line": f"{keyword} 관련 자료가 충분히 수집되지 않았습니다.", "facts": [], "risks": ["검색어를 영문/티커와 함께 입력하거나 소스 그룹을 넓혀 다시 수집하세요."], "editorial": "지금은 판단보다 수집 범위를 먼저 편집해야 하는 구간입니다.", "themes": [], "top": []}
-    mood_counts = pd.Series([x["mood"] for x in items]).value_counts().to_dict()
-    top = sorted(items, key=lambda x: x["score"], reverse=True)[:6]
-    recent_count = len([x for x in items if x["age_hours"] <= 24])
-    community_count = len([x for x in items if x["group"] == "community"])
-    bull = mood_counts.get("상방/호재", 0)
-    bear = mood_counts.get("하방/리스크", 0)
-    tone = "상방 재료 우세" if bull > bear * 1.35 else "리스크 재료 우세" if bear > bull * 1.35 else "혼조/관망"
-    themes = theme_terms(items, keyword)
-    facts = [f"총 {len(items)}개 자료 중 최근 24시간 자료는 {recent_count}개입니다.", f"커뮤니티 반응 기반 자료는 {community_count}개이며, 뉴스/RSS와 함께 교차검토가 필요합니다.", f"가장 강한 자료는 {top[0]['source']}의 '{top[0]['title']}'입니다."]
-    if themes:
-        facts.append("반복 키워드: " + ", ".join([name for name, _ in themes[:5]]))
-    risk_words = []
-    joined = normalize_term(" ".join([f"{x['title']} {x['summary']}" for x in items]))
-    for label, words in {"레버리지/청산": ["liquidation", "leverage", "청산", "레버리지"], "규제/소송": ["lawsuit", "sec", "regulation", "소송", "규제"], "해킹/보안": ["hack", "exploit", "해킹", "익스플로잇"], "거래소/입출금": ["exchange", "deposit", "withdrawal", "거래소", "입금", "출금"]}.items():
-        if any(word in joined for word in words):
-            risk_words.append(label)
-    risks = risk_words or ["강한 방향성보다 자료 간 온도 차이를 먼저 확인해야 합니다."]
-    editorial = "남길 것: 원천 링크, 발행 시간, 커뮤니티 반응 수치. 덜어낼 것: 단일 속보만 보고 방향을 확정하는 습관. 순서를 바꿀 것: 가격 판단보다 자료의 출처와 지연 시간을 먼저 확인."
-    return {"tone": tone, "one_line": f"{keyword} 장세는 '{tone}'입니다. 지금은 가격 예측보다 어떤 자료가 반복되고 어떤 자료가 과열인지 분리해야 합니다.", "facts": facts, "risks": risks, "editorial": editorial, "themes": themes, "top": top, "mood_counts": mood_counts}
+def export_rows(items: list[dict], keyword: str) -> list[dict]:
+    rows = []
+    for index, item in enumerate(items, start=1):
+        rows.append(
+            {
+                "rank": index,
+                "query": keyword,
+                "captured_at": item.get("captured_at", ""),
+                "source_group": SOURCE_GROUPS.get(item.get("group", ""), item.get("group", "")),
+                "source": item.get("source", ""),
+                "source_type": item.get("source_type", ""),
+                "origin": item.get("origin", ""),
+                "title": item.get("title", ""),
+                "summary": item.get("summary", ""),
+                "original_text": item.get("original_text") or item.get("summary", ""),
+                "content_status": item.get("content_status", "feed_summary"),
+                "url": item.get("url", ""),
+                "published": item.get("published", ""),
+                "age_hours": round(float(item.get("age_hours") or 9999), 2),
+                "score": item.get("score", 0),
+                "mood": item.get("mood", ""),
+                "signal": item.get("signal", ""),
+                "popularity_raw": item.get("popularity_raw", 0),
+                "comments": item.get("comments", 0),
+            }
+        )
+    return rows
+
+
+def csv_payload(items: list[dict], keyword: str) -> bytes:
+    return pd.DataFrame(export_rows(items, keyword)).to_csv(index=False).encode("utf-8-sig")
 
 
 def source_badge(item: dict) -> str:
-    return f'<span class="pill pill-red">{escape(item["score"].__str__())} signal</span><span class="pill">{escape(item["source"])}</span><span class="pill">{escape(item["mood"])}</span><span class="pill">{escape(item["signal"])}</span>'
+    return (
+        f'<span class="pill pill-red">{escape(str(item["score"]))} signal</span>'
+        f'<span class="pill">{escape(item["source"])}</span>'
+        f'<span class="pill">{escape(item["mood"])}</span>'
+        f'<span class="pill">{escape(item["signal"])}</span>'
+        f'<span class="pill">{escape(item.get("content_status", "feed_summary"))}</span>'
+    )
 
 
-def item_card(item: dict, selectable: bool = False, key_prefix: str = "item") -> None:
+def item_card(item: dict) -> None:
     with st.container(border=True):
         st.markdown(f'<div class="item-title">{escape(item["title"])}</div>', unsafe_allow_html=True)
         st.markdown(source_badge(item), unsafe_allow_html=True)
         if item["summary"]:
             st.write(item["summary"])
-        st.markdown(f'<div class="source-meta">{escape(item["source_type"])} · {escape(item["published"] or "발행일 미확인")} · <a href="{escape(item["url"])}" target="_blank">원문 열기</a></div>', unsafe_allow_html=True)
-        with st.expander("수집 근거와 검수 포인트"):
-            st.write(f"출처: {item['source']}")
-            st.write(f"인기/반응 신호: {item['signal']}")
-            st.write(f"자동 분류: {item['mood']}")
-            st.write("검수 질문: 이 자료는 가격 방향을 말하는가, 아니면 사람들의 포지션 변화를 말하는가?")
-        if selectable and st.button("제작실로 보내기", key=f"select-{key_prefix}-{item['id']}", use_container_width=True):
-            st.session_state["selected_url"] = item["url"]
-            st.session_state["generated"] = {}
-            st.rerun()
+        st.markdown(
+            f'<div class="source-meta">{escape(item["source_type"])} · {escape(item["published"] or "발행일 미확인")} · '
+            f'<a href="{escape(item["url"])}" target="_blank">원문 열기</a></div>',
+            unsafe_allow_html=True,
+        )
+        with st.expander("CSV에 들어갈 원문 텍스트 미리보기"):
+            text = item.get("original_text") or item.get("summary") or ""
+            st.markdown(f'<div class="source-text">{escape(text[:5000] or "원문 텍스트가 비어 있습니다.")}</div>', unsafe_allow_html=True)
 
 
-def selected_item() -> dict | None:
-    return next((item for item in st.session_state["items"] if item["url"] == st.session_state["selected_url"]), None)
-
-
-def make_content(item: dict, brief: dict, tone: str) -> dict[str, str]:
-    top_titles = "\n".join([f"- {x['title']} ({x['source']})" for x in brief.get("top", [])[:4]])
-    longform = f"""제목: {item['title']}
-
-오프닝
-오늘의 주제는 {st.session_state.get('last_query', '')}입니다.
-단순히 오른다, 내린다를 말하기 전에 지금 어떤 자료들이 반복되고 있는지 먼저 보겠습니다.
-
-현재 장세 브리프
-{brief.get('one_line', '')}
-
-핵심 자료
-{top_titles}
-
-오늘의 원문
-출처: {item['source']}
-링크: {item['url']}
-요약: {item['summary']}
-
-Editorial Life 관점
-{brief.get('editorial', '')}
-
-정리
-시장은 가격으로 움직이지만, 콘텐츠는 사람들이 어떤 자료를 붙잡고 있는지에서 시작됩니다.
-{tone} 톤으로 말하자면, 지금 해야 할 일은 더 많은 확신을 더하는 것이 아니라 쓸 자료와 버릴 소음을 나누는 일입니다."""
-    shorts = f"""1. {st.session_state.get('last_query', '')} 검색 결과에서 지금 반복되는 장면은 이것입니다.
-2. {brief.get('one_line', '')}
-3. 원문은 {item['source']}의 자료입니다.
-4. 결론: 가격보다 먼저 자료의 출처와 지연 시간을 편집해야 합니다."""
-    cards = f"""카드 1
-{brief.get('tone', '장세 브리프')}
-
-카드 2
-핵심 자료: {item['title']}
-
-카드 3
-출처: {item['source']}
-반응 신호: {item['signal']}
-
-카드 4
-남길 것: 원천 링크와 발행 시간
-덜어낼 것: 단일 속보만 보고 방향을 확정하는 습관"""
-    return {"롱폼": longform, "쇼츠": shorts, "카드뉴스": cards}
+for key, default in {"items": [], "status": [], "last_query": ""}.items():
+    st.session_state.setdefault(key, default)
 
 
 st.sidebar.markdown('<p class="eyebrow">Editorial Life</p>', unsafe_allow_html=True)
-st.sidebar.title("Resource Collector")
-st.sidebar.write("검색어 하나로 RSS, 뉴스, 커뮤니티 반응을 모으고 장세 브리프까지 만듭니다.")
+st.sidebar.title("Source Collector")
+st.sidebar.write("브리프 생성보다 원문 확보가 먼저입니다. 수집한 자료를 LLM 입력용 CSV로 정리합니다.")
 st.sidebar.divider()
+
 keyword = st.sidebar.text_input("검색 주제", value=st.session_state.get("last_query") or "이더리움클래식", placeholder="이더리움클래식, BTC, NVDA")
-active_groups = [key for key, label in SOURCE_GROUPS.items() if key != "market_intel" and st.sidebar.checkbox(label, value=True)]
+active_groups = [
+    key for key, label in SOURCE_GROUPS.items() if key != "market_intel" and st.sidebar.checkbox(label, value=True)
+]
 include_refs = st.sidebar.checkbox(SOURCE_GROUPS["market_intel"], value=True)
 per_source = st.sidebar.slider("소스별 최대 수집", 3, 12, 6)
-tone = st.sidebar.selectbox("제작 톤", ["차분하고 날카롭게", "시장 브리프 중심", "철학적 관찰자", "숏폼 훅 중심"])
-if st.sidebar.button("수집 + 장세 브리프 생성", type="primary", use_container_width=True):
+
+if st.sidebar.button("수집 + CSV 데이터 생성", type="primary", use_container_width=True):
     with st.spinner("RSS와 커뮤니티 반응을 취합하는 중입니다."):
         items, status = run_collection(keyword, active_groups, per_source)
         st.session_state["items"] = items
-        st.session_state["brief"] = build_brief(items, keyword)
         st.session_state["status"] = status
-        st.session_state["selected_url"] = items[0]["url"] if items else ""
-        st.session_state["generated"] = {}
         st.session_state["last_query"] = keyword
+
 if st.sidebar.button("결과 초기화", use_container_width=True):
     st.session_state["items"] = []
-    st.session_state["brief"] = {}
-    st.session_state["selected_url"] = ""
-    st.session_state["generated"] = {}
+    st.session_state["status"] = []
+    st.session_state["last_query"] = ""
 
 items = st.session_state["items"]
-brief = st.session_state["brief"]
 query_label = st.session_state.get("last_query") or keyword
-community_count = len([x for x in items if x["group"] == "community"])
-recent_count = len([x for x in items if x["age_hours"] <= 24])
-avg_score = round(sum(x["score"] for x in items) / len(items)) if items else 0
+community_count = len([item for item in items if item["group"] == "community"])
+recent_count = len([item for item in items if item["age_hours"] <= 24])
+body_count = len([item for item in items if item.get("content_status") == "html_body"])
+avg_score = round(sum(item["score"] for item in items) / len(items)) if items else 0
+
 st.markdown('<p class="eyebrow">Financial Self-Editing Console</p>', unsafe_allow_html=True)
-st.title("Editorial Life 인사이트 수집실")
-st.markdown('<p class="hero-line">주식, 코인, 지갑주소, 데이 트레이딩, 커뮤니티 반응을 하나의 자료 보드로 모읍니다. 검색어를 넣으면 관련 RSS와 커뮤니티 인기글을 취합하고, 현재 장세를 콘텐츠 관점으로 요약합니다.</p>', unsafe_allow_html=True)
+st.title("Editorial Life 원자료 수집실")
+st.markdown(
+    '<p class="hero-line">주식, 코인, 지갑주소, 데이 트레이딩, 커뮤니티 반응을 하나의 원자료 테이블로 모읍니다. '
+    "검색어를 넣으면 RSS와 커뮤니티 인기글을 취합하고, 원문 텍스트/링크/반응 수치를 CSV로 내려받을 수 있습니다.</p>",
+    unsafe_allow_html=True,
+)
+
 alias_preview = ", ".join(topic_terms(query_label)[:6])
 st.markdown(f'<span class="pill pill-red">검색어: {escape(query_label)}</span><span class="pill">확장어: {escape(alias_preview)}</span>', unsafe_allow_html=True)
-metric_cols = st.columns(4)
-for col, (label, value, help_text) in zip(metric_cols, [("수집 자료", len(items), "뉴스/RSS/커뮤니티 합산"), ("평균 Signal", avg_score, "관련도, 최신성, 반응 점수"), ("커뮤니티 반응", community_count, "Reddit/HN 기반 인기 자료"), ("최근 24시간", recent_count, "현재 장세에 가까운 자료")]):
-    col.markdown(f'<div class="metric-card"><span>{label}</span><strong>{value}</strong><small>{help_text}</small></div>', unsafe_allow_html=True)
-st.divider()
-brief_tab, feed_tab, matrix_tab, studio_tab, library_tab = st.tabs(["Market Brief", "Live Feed", "Source Matrix", "Content Studio", "Source Library"])
 
-with brief_tab:
-    st.subheader("자동 장세 브리프")
-    if not brief:
-        st.info("왼쪽에서 검색 주제를 입력하고 수집을 실행하면 장세 브리프가 자동 생성됩니다.")
+metric_cols = st.columns(4)
+metrics = [
+    ("수집 자료", len(items), "뉴스/RSS/커뮤니티 합산"),
+    ("평균 Signal", avg_score, "관련도, 최신성, 반응 점수"),
+    ("커뮤니티 반응", community_count, "Reddit/HN 기반 인기 자료"),
+    ("본문 보강", body_count, "HTML 원문 추출 완료 자료"),
+]
+for col, (label, value, help_text) in zip(metric_cols, metrics):
+    col.markdown(f'<div class="metric-card"><span>{label}</span><strong>{value}</strong><small>{help_text}</small></div>', unsafe_allow_html=True)
+
+st.divider()
+
+export_tab, feed_tab, matrix_tab, library_tab = st.tabs(["Data Export", "Live Feed", "Source Matrix", "Source Library"])
+
+with export_tab:
+    st.subheader("CSV 원자료 내보내기")
+    if not items:
+        st.info("왼쪽에서 검색 주제를 입력하고 수집을 실행하면 CSV 다운로드가 열립니다.")
     else:
-        st.markdown(f'<div class="quote">{escape(brief["one_line"])}</div>', unsafe_allow_html=True)
-        cols = st.columns(3)
-        for col, (title, body) in zip(cols, [("시장 톤", brief.get("tone", "-")), ("핵심 리스크", ", ".join(brief.get("risks", []))), ("반복 테마", ", ".join([x[0] for x in brief.get("themes", [])[:5]]) or "테마 부족")]):
-            col.markdown(f'<div class="brief-card"><h4>{escape(title)}</h4><p>{escape(body)}</p></div>', unsafe_allow_html=True)
-        st.markdown("#### 핵심 관찰")
-        for fact in brief.get("facts", []):
-            st.write(f"- {fact}")
-        st.markdown("#### Editorial Life 편집점")
-        st.write(brief.get("editorial", ""))
-        st.markdown("#### 오늘의 핵심 자료")
-        for item in brief.get("top", [])[:5]:
-            item_card(item, selectable=True, key_prefix="brief")
+        export_cols = st.columns(3)
+        export_cols[0].markdown(f'<div class="export-card"><span>CSV 행</span><strong>{len(items)}</strong><small>수집된 자료 전체</small></div>', unsafe_allow_html=True)
+        export_cols[1].markdown(f'<div class="export-card"><span>본문 보강</span><strong>{body_count}</strong><small>HTML 원문 추출 완료</small></div>', unsafe_allow_html=True)
+        export_cols[2].markdown(f'<div class="export-card"><span>최근 24시간</span><strong>{recent_count}</strong><small>발행 시점 기준</small></div>', unsafe_allow_html=True)
+
+        file_name = f"editorial_life_{safe_filename(query_label)}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+        st.download_button(
+            "CSV 다운로드",
+            data=csv_payload(items, query_label),
+            file_name=file_name,
+            mime="text/csv",
+            type="primary",
+            use_container_width=True,
+            key="download-source-csv",
+        )
+        st.caption("CSV는 Excel에서 바로 열기 쉽도록 UTF-8 BOM으로 저장합니다. 본문 보강 전에는 RSS 요약/selftext가 original_text 컬럼에 들어갑니다.")
+
+        st.markdown("#### 원문 본문 보강")
+        if len(items) == 1:
+            enrich_count = 1
+            st.caption("본문 보강 대상: 상위 1개 자료")
+        else:
+            enrich_count = st.slider("본문을 추가로 긁어올 상위 자료 수", 1, len(items), min(len(items), 20))
+        if st.button("상위 자료 원문 본문 보강", use_container_width=True):
+            updated_items = [dict(item) for item in items]
+            progress = st.progress(0)
+            for index, item in enumerate(updated_items[:enrich_count], start=1):
+                original_text, content_status = fetch_original_text(item.get("url", ""), item.get("summary", ""))
+                item["original_text"] = original_text
+                item["content_status"] = content_status
+                progress.progress(index / enrich_count)
+            st.session_state["items"] = updated_items
+            st.success(f"{enrich_count}개 자료의 원문 본문 보강을 시도했습니다.")
+            st.rerun()
+
+        with st.expander("수집 로그"):
+            for msg in st.session_state["status"]:
+                st.caption(msg)
+
+        st.markdown("#### CSV 미리보기")
+        preview = pd.DataFrame(export_rows(items, query_label))
+        preview_cols = ["rank", "score", "source", "content_status", "published", "title", "url"]
+        st.dataframe(preview[preview_cols], use_container_width=True, hide_index=True)
 
 with feed_tab:
     st.subheader("수집 자료 피드")
     if not items:
         st.info("수집된 자료가 없습니다.")
     else:
-        with st.expander("수집 상태"):
-            for msg in st.session_state["status"]:
-                st.caption(msg)
-        mood_filter = st.multiselect("시장 톤 필터", sorted({x["mood"] for x in items}), default=sorted({x["mood"] for x in items}))
-        group_filter = st.multiselect("소스 그룹 필터", sorted({SOURCE_GROUPS.get(x["group"], x["group"]) for x in items}), default=sorted({SOURCE_GROUPS.get(x["group"], x["group"]) for x in items}))
-        filtered = [item for item in items if item["mood"] in mood_filter and SOURCE_GROUPS.get(item["group"], item["group"]) in group_filter]
+        mood_options = sorted({item["mood"] for item in items})
+        group_options = sorted({SOURCE_GROUPS.get(item["group"], item["group"]) for item in items})
+        mood_filter = st.multiselect("시장 톤 필터", mood_options, default=mood_options)
+        group_filter = st.multiselect("소스 그룹 필터", group_options, default=group_options)
+        filtered = [
+            item
+            for item in items
+            if item["mood"] in mood_filter and SOURCE_GROUPS.get(item["group"], item["group"]) in group_filter
+        ]
         left, right = st.columns([1.05, 0.95])
         with left:
-            for item in filtered[:12]:
-                item_card(item, selectable=True, key_prefix="feed")
+            for item in filtered[:14]:
+                item_card(item)
         with right:
-            table = pd.DataFrame([{"score": x["score"], "source": x["source"], "mood": x["mood"], "signal": x["signal"], "title": x["title"]} for x in filtered])
+            table = pd.DataFrame(
+                [
+                    {
+                        "score": item["score"],
+                        "source": item["source"],
+                        "mood": item["mood"],
+                        "signal": item["signal"],
+                        "content_status": item.get("content_status", "feed_summary"),
+                        "title": item["title"],
+                    }
+                    for item in filtered
+                ]
+            )
             st.dataframe(table, use_container_width=True, hide_index=True)
 
 with matrix_tab:
     st.subheader("소스 매트릭스")
     if not items:
-        st.info("수집을 실행하면 소스별 커버리지와 시장 톤 분포가 표시됩니다.")
+        st.info("수집을 실행하면 소스별 커버리지와 원문 보강 상태가 표시됩니다.")
     else:
         df = pd.DataFrame(items)
-        group_summary = df.groupby(["group", "mood"]).size().reset_index(name="count").replace({"group": {key: value for key, value in SOURCE_GROUPS.items()}})
-        st.bar_chart(group_summary, x="group", y="count", color="mood")
-        source_summary = df.groupby("source").agg(count=("title", "count"), avg_score=("score", "mean"), community=("comments", "sum")).reset_index().sort_values(["count", "avg_score"], ascending=False)
+        df["source_group"] = df["group"].map(SOURCE_GROUPS).fillna(df["group"])
+        group_summary = df.groupby(["source_group", "mood"]).size().reset_index(name="count")
+        st.bar_chart(group_summary, x="source_group", y="count", color="mood")
+        source_summary = (
+            df.groupby("source")
+            .agg(
+                count=("title", "count"),
+                avg_score=("score", "mean"),
+                comments=("comments", "sum"),
+                body_ready=("content_status", lambda values: int((values == "html_body").sum())),
+            )
+            .reset_index()
+            .sort_values(["count", "avg_score"], ascending=False)
+        )
         source_summary["avg_score"] = source_summary["avg_score"].round(1)
         st.dataframe(source_summary, use_container_width=True, hide_index=True)
 
-with studio_tab:
-    st.subheader("콘텐츠 제작실")
-    item = selected_item()
-    if not item:
-        st.info("Market Brief나 Live Feed에서 제작실로 보낼 자료를 선택하세요.")
-    else:
-        left, right = st.columns([0.85, 1.15])
-        with left:
-            item_card(item)
-        with right:
-            if st.button("브리프 기반 대본 생성", type="primary", use_container_width=True):
-                st.session_state["generated"] = make_content(item, brief or build_brief(items, query_label), tone)
-            if st.session_state["generated"]:
-                output_type = st.radio("결과 유형", ["롱폼", "쇼츠", "카드뉴스"], horizontal=True)
-                st.markdown(f'<div class="output">{escape(st.session_state["generated"][output_type])}</div>', unsafe_allow_html=True)
-                if st.button("아카이브 저장", use_container_width=True):
-                    st.session_state["archive"].insert(0, {"created_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "query": query_label, "item": item, "brief": brief})
-                    st.success("아카이브에 저장했습니다.")
-            else:
-                st.info("선택 자료와 장세 브리프를 묶어 대본을 생성할 수 있습니다.")
-
 with library_tab:
     st.subheader("소스 라이브러리")
-    st.write("RSS는 자동 수집 대상이고, 큰손/온체인 레퍼런스는 원천 검증용 링크로 사용합니다.")
+    st.write("RSS와 커뮤니티는 자동 수집 대상이고, 큰손/온체인 레퍼런스는 원천 검증 링크로 사용합니다.")
     st.markdown("#### 자동 수집 RSS")
     for source in RSS_SOURCES:
         with st.container(border=True):
+            feed_url = source.get("url") or source.get("url_template", "").format(query=quote(query_string(query_label)))
             st.markdown(f"**{source['name']}**")
             st.caption(SOURCE_GROUPS[source["group"]])
-            st.markdown(f"[피드 열기]({source.get('url') or source.get('url_template', '').format(query=quote(query_string(query_label)))})")
+            st.markdown(f"[피드 열기]({feed_url})")
+    st.markdown("#### 커뮤니티 수집")
+    for source in REDDIT_SOURCES:
+        with st.container(border=True):
+            st.markdown(f"**{source['name']}**")
+            st.caption("Reddit hot/week search")
+    st.markdown("#### 원천 검증 레퍼런스")
     if include_refs:
-        st.markdown("#### 원천 검증 레퍼런스")
         for source in REFERENCE_SOURCES:
             with st.container(border=True):
                 st.markdown(f"**{source['name']}**")
                 st.caption(SOURCE_GROUPS[source["group"]])
                 st.write(source["use"])
                 st.markdown(f"[사이트 열기]({source['url']})")
-    st.markdown("#### 아카이브")
-    if not st.session_state["archive"]:
-        st.info("저장된 제작 패키지가 없습니다.")
-    for package in st.session_state["archive"]:
-        st.caption(f"{package['created_at']} · {package['query']}")
-        st.write(package["item"]["title"])
+    else:
+        st.info("왼쪽 사이드바에서 큰손/온체인 레퍼런스를 켜면 표시됩니다.")
