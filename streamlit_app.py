@@ -1,29 +1,42 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
-from html import escape
+import re
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from html import escape, unescape
+from math import log1p
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 import pandas as pd
 import streamlit as st
+
 
 st.set_page_config(page_title="Editorial Life Intelligence Lab", page_icon="EL", layout="wide")
 
 st.markdown(
     """
     <style>
-    .block-container { padding-top:2rem; }
+    .block-container { padding-top:1.6rem; max-width:1280px; }
     [data-testid="stSidebar"] { background:#eef1f5; }
-    .eyebrow { color:#9f302b; font-size:.78rem; font-weight:800; text-transform:uppercase; }
-    .metric-card { padding:1rem; border:1px solid #dce1e7; border-radius:8px; background:white; box-shadow:0 10px 28px rgba(24,31,43,.07); }
-    .metric-card span { display:block; color:#68707d; font-weight:700; margin-bottom:.35rem; }
-    .metric-card strong { font-size:2rem; }
-    .pill { display:inline-block; padding:.22rem .5rem; border:1px solid #d9dee7; border-radius:999px; margin:.15rem .25rem .35rem 0; color:#485160; font-size:.82rem; }
-    .quote,.output { white-space:pre-wrap; line-height:1.7; padding:1rem; border:1px solid #dce1e7; border-radius:8px; background:white; }
+    .eyebrow { color:#9f302b; font-size:.78rem; font-weight:800; text-transform:uppercase; letter-spacing:.03em; }
+    .hero-line { color:#596272; max-width:760px; line-height:1.65; }
+    .metric-card { padding:1rem; border:1px solid #dce1e7; border-radius:8px; background:white; box-shadow:0 10px 26px rgba(24,31,43,.06); min-height:118px; }
+    .metric-card span { display:block; color:#6b7280; font-weight:800; margin-bottom:.35rem; font-size:.9rem; }
+    .metric-card strong { font-size:2.05rem; line-height:1; }
+    .metric-card small { display:block; color:#7a8491; margin-top:.55rem; line-height:1.4; }
+    .brief-card { padding:1rem; border:1px solid #dce1e7; border-radius:8px; background:#ffffff; min-height:142px; }
+    .brief-card h4 { margin:0 0 .55rem 0; font-size:1.02rem; }
+    .pill { display:inline-block; padding:.22rem .52rem; border:1px solid #d9dee7; border-radius:999px; margin:.15rem .25rem .35rem 0; color:#485160; font-size:.82rem; background:#fff; }
+    .pill-red { border-color:#e2b7b4; color:#9f302b; background:#fff7f6; }
+    .item-title { font-size:1.04rem; font-weight:850; margin-bottom:.35rem; }
+    .source-meta { color:#68707d; font-size:.86rem; line-height:1.5; }
+    .quote,.output { white-space:pre-wrap; line-height:1.72; padding:1rem; border:1px solid #dce1e7; border-radius:8px; background:white; }
     .quote { border-left:4px solid #c9443e; background:#fff7f6; }
+    .small-muted { color:#7a8491; font-size:.86rem; line-height:1.55; }
     div.stButton > button[kind="primary"] { background:#c9443e; border-color:#c9443e; }
     div.stButton > button { border-radius:6px; font-weight:800; }
     </style>
@@ -31,350 +44,890 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+USER_AGENT = "EditorialLifeLab/0.4 (+https://streamlit.app)"
+
 SOURCE_GROUPS = {
-    "reddit": "Reddit 의견글",
-    "korea": "국내 커뮤니티 의견글",
-    "crypto_flow": "크립토 큰손 / 마켓메이커",
-    "stock_flow": "주식 / 옵션 큰손 플로우",
-    "wallets": "지갑 / 온체인 주장",
-    "philosophy": "돈 / 삶 철학글",
+    "news_rss": "뉴스 RSS 일괄 취합",
+    "crypto_media": "크립토 전문 미디어",
+    "community": "커뮤니티 인기글",
+    "market_intel": "큰손/온체인 레퍼런스",
 }
 
-COMMUNITIES = [
-    ("reddit", "Reddit r/wallstreetbets", "FOMO, 손실 인증, 과도한 확신, 군중 심리가 노골적으로 드러남", "https://www.reddit.com/r/wallstreetbets/"),
-    ("reddit", "Reddit r/stocks / r/investing", "장기 투자자가 가격보다 배치, 리스크, 현금 비중을 논쟁함", "https://www.reddit.com/r/stocks/"),
-    ("reddit", "Reddit r/CryptoCurrency / r/Bitcoin", "레버리지, 신념, 탈출 타이밍이 섞인 코인 서사가 많음", "https://www.reddit.com/r/CryptoCurrency/"),
-    ("reddit", "Reddit r/daytrading", "손절 실패, 매매 복기, 멘탈 붕괴가 1인칭으로 기록됨", "https://www.reddit.com/r/daytrading/"),
-    ("korea", "네이버 종목토론실", "기대, 분노, 체념, 물타기 심리가 종목별로 압축됨", "https://finance.naver.com/"),
-    ("korea", "디시인사이드 주식 / 미국주식 / 비트코인 갤러리", "짧고 거친 문장 안에 확신, 조롱, 후회가 빠르게 발생함", "https://www.dcinside.com/"),
-    ("korea", "블라인드 투자 / 재테크", "월급, 커리어, 부동산, 투자 압박이 한 사람의 삶과 연결됨", "https://www.teamblind.com/kr/"),
-    ("korea", "뽐뿌 재테크 / 클리앙", "절약, 예적금, ETF, 소비 습관 같은 생활형 금융 의견이 많음", "https://www.ppomppu.co.kr/"),
-    ("crypto_flow", "Arkham / @ArkhamIntel", "Jump Trading, ETF, 거래소, 고래 지갑 같은 엔티티 단위 자금 이동을 검증하는 1차 대시보드", "https://intel.arkm.com/"),
-    ("crypto_flow", "Lookonchain / @lookonchain", "Jump Crypto, 고래, VC, 해킹 지갑의 이동을 빠른 온체인 스토리로 풀어주는 피드", "https://lookonchain.com/"),
-    ("crypto_flow", "Spot On Chain / @spotonchain", "특정 큰손 지갑의 입출금, CEX 예치, 평균 단가, 잔여 보유량을 문장화하는 피드", "https://spotonchain.ai/"),
-    ("crypto_flow", "Whale Alert / @whale_alert", "대형 BTC, ETH, USDT, XRP 등 체인 간 이동을 실시간 경보로 확인하는 베이스라인", "https://whale-alert.io/"),
-    ("crypto_flow", "Nansen Smart Money", "Fund, Smart Trader, Hyperliquid 고수익 트레이더 등 라벨 기반 스마트머니 흐름", "https://www.nansen.ai/"),
-    ("crypto_flow", "Cielo Finance / @CieloFinance", "관심 지갑 리스트, Telegram/Discord 알림, Solana/EVM 고PnL 지갑 추적", "https://cielo.finance/"),
-    ("crypto_flow", "DefiLlama", "스테이블코인, ETF/DAT, 브릿지, CEX 투명성 데이터를 통해 자금 흐름의 큰 배경 확인", "https://defillama.com/"),
-    ("stock_flow", "Unusual Whales / @unusual_whales", "미국 주식 옵션 플로우, 다크풀, 의회 거래, 실시간 뉴스 피드를 한 번에 보는 도구", "https://unusualwhales.com/"),
-    ("stock_flow", "Quiver Quantitative / @QuiverQuant", "의회 거래, 내부자 거래, WSB, 대체 데이터 기반 주식 신호", "https://www.quiverquant.com/"),
-    ("stock_flow", "SEC EDGAR + OpenInsider", "Form 4 내부자 매수/매도 원천 데이터와 의미 있는 오픈마켓 매수 필터링", "https://www.sec.gov/edgar"),
-    ("stock_flow", "WhaleWisdom / Dataroma", "13F 기반 헤지펀드와 슈퍼투자자 포트폴리오 변화 추적. 단, 지연 데이터로 해석", "https://whalewisdom.com/"),
-    ("stock_flow", "StockMKTNewz / The Kobeissi Letter", "속보와 거시 이벤트를 빠르게 포착하되 원천 뉴스와 교차검증해야 하는 X 레이어", "https://x.com/StockMKTNewz"),
+TOPIC_ALIASES = {
+    "이더리움클래식": ["이더리움클래식", "이더리움 클래식", "Ethereum Classic", "ETC", "$ETC", "ethereumclassic"],
+    "이더리움 클래식": ["이더리움클래식", "이더리움 클래식", "Ethereum Classic", "ETC", "$ETC", "ethereumclassic"],
+    "etc": ["Ethereum Classic", "ETC", "$ETC", "이더리움클래식", "ethereumclassic"],
+    "비트코인": ["비트코인", "Bitcoin", "BTC", "$BTC"],
+    "btc": ["Bitcoin", "BTC", "$BTC", "비트코인"],
+    "이더리움": ["이더리움", "Ethereum", "ETH", "$ETH"],
+    "eth": ["Ethereum", "ETH", "$ETH", "이더리움"],
+    "솔라나": ["솔라나", "Solana", "SOL", "$SOL"],
+    "sol": ["Solana", "SOL", "$SOL", "솔라나"],
+    "엔비디아": ["엔비디아", "NVIDIA", "NVDA", "$NVDA"],
+    "nvda": ["NVIDIA", "NVDA", "$NVDA", "엔비디아"],
+}
+
+RSS_SOURCES = [
+    {
+        "group": "news_rss",
+        "name": "Google News KR",
+        "mode": "query",
+        "url_template": "https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko",
+        "weight": 1.2,
+    },
+    {
+        "group": "news_rss",
+        "name": "Google News Global",
+        "mode": "query",
+        "url_template": "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en",
+        "weight": 1.15,
+    },
+    {
+        "group": "crypto_media",
+        "name": "CoinDesk",
+        "mode": "feed",
+        "url": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        "weight": 1.2,
+    },
+    {
+        "group": "crypto_media",
+        "name": "Cointelegraph",
+        "mode": "feed",
+        "url": "https://cointelegraph.com/rss",
+        "weight": 1.05,
+    },
+    {
+        "group": "crypto_media",
+        "name": "Decrypt",
+        "mode": "feed",
+        "url": "https://decrypt.co/feed",
+        "weight": 1.05,
+    },
+    {
+        "group": "crypto_media",
+        "name": "CryptoSlate",
+        "mode": "feed",
+        "url": "https://cryptoslate.com/feed/",
+        "weight": 1.0,
+    },
+    {
+        "group": "crypto_media",
+        "name": "NewsBTC",
+        "mode": "feed",
+        "url": "https://newsbtc.com/feed/",
+        "weight": 0.95,
+    },
+    {
+        "group": "crypto_media",
+        "name": "BeInCrypto",
+        "mode": "feed",
+        "url": "https://beincrypto.com/feed/",
+        "weight": 0.95,
+    },
 ]
 
-FRAMES = {
-    "남길 것": ("이 화자에게 계속 가져가야 할 원칙은 무엇인가?", "남겨야 할 건 가격 예측이 아니라 반복 가능한 판단 기준입니다."),
-    "덜어낼 것": ("이 의견에서 계좌와 삶을 흐트러뜨리는 소음은 무엇인가?", "덜어내야 할 건 정보가 아니라 반응 속도에 중독된 습관입니다."),
-    "순서를 바꿀 것": ("이 사람은 무엇보다 먼저 무엇을 배치했어야 했나?", "순서를 바꾸면 같은 자산도 다른 역할을 맡게 됩니다."),
-    "다시 찍을 것": ("이 실패한 판단은 어떤 장면으로 다시 찍어야 하나?", "다시 찍는다는 건 후회가 아니라 다음 선택의 기준을 고치는 일입니다."),
-}
-
-TITLES = {
-    "Market Note": "시장은 가격보다 사람들의 포지션을 먼저 보여줍니다",
-    "Money Edit": "돈이 남지 않는 이유는 수익률보다 구조에 있습니다",
-    "Portfolio Life": "내 삶의 포트폴리오에 지금 무엇이 너무 많을까",
-    "Mind Edit": "내가 계속 보는 것이 결국 내 선택이 됩니다",
-    "Career Recut": "늦었다고 느끼는 순간이 사실 편집점일 수 있습니다",
-}
-
-SEEDS = [
-    dict(group="reddit", community="Reddit r/wallstreetbets", speaker="공격적 단기 트레이더", asset="NVDA", frame="순서를 바꿀 것", stance="과열 경계", emotion="FOMO와 의심", conviction=4.3, friction=4.7, url="https://www.reddit.com/r/wallstreetbets/search/?q=NVDA&restrict_sr=1", title="좋은 회사인 건 알지만 지금 들어가는 건 남의 수익률을 사는 느낌이다", opinion="NVDA가 강한 건 인정하지만, 신규 진입은 내가 확신을 산 게 아니라 커뮤니티의 흥분을 따라 산 것에 가깝다고 본다.", quote="I know the company is great, but buying after everyone already got rich feels like paying for someone else's conviction.", evidence="AI 주도주 긍정론과 진입 가격 불안이 동시에 드러남", counter="강한 추세에서는 비싸 보이는 가격이 한동안 계속 비싸지는 경우도 있음"),
-    dict(group="reddit", community="Reddit r/stocks", speaker="장기 ETF 투자자", asset="SPY", frame="남길 것", stance="방어적 낙관", emotion="차분한 불안", conviction=4.0, friction=3.5, url="https://www.reddit.com/r/stocks/", title="시장 고점보다 더 무서운 건 내가 왜 들고 있는지 모르는 상태다", opinion="S&P500이 비싸 보여도 투자 기간과 현금 비중이 정리되어 있다면 고점 공포는 줄어든다. 문제는 가격이 아니라 계좌 안 역할이다.", quote="The index being expensive matters less than not knowing what role it plays in your portfolio.", evidence="고점 논쟁을 종목 선택이 아니라 현금, ETF, 리밸런싱 순서로 해석함", counter="장기 원칙이 있어도 단기 급락 행동 규칙이 없으면 흔들릴 수 있음"),
-    dict(group="reddit", community="Reddit r/CryptoCurrency", speaker="레버리지 경험자", asset="BTC", frame="덜어낼 것", stance="레버리지 경계", emotion="후회와 경고", conviction=4.6, friction=4.8, url="https://www.reddit.com/r/CryptoCurrency/", title="비트코인을 믿는 것과 레버리지를 버티는 건 완전히 다른 문제다", opinion="BTC 장기 방향을 믿어도 10배 레버리지는 신념이 아니라 청산 게임이다. 믿음보다 먼저 생존 구조를 잡아야 한다.", quote="Believing in Bitcoin and surviving leveraged Bitcoin are not the same thing.", evidence="자산에 대한 믿음과 포지션 설계의 차이를 분리해서 말함", counter="손절 규칙이 있는 트레이더에게 레버리지는 도구일 수 있음"),
-    dict(group="reddit", community="Reddit r/daytrading", speaker="매매 복기 작성자", asset="DAYTRADE", frame="다시 찍을 것", stance="규칙 우선", emotion="자책과 재정렬", conviction=4.7, friction=4.4, url="https://www.reddit.com/r/daytrading/", title="오늘 손실은 시장 때문이 아니라 손절을 미룬 내 편집 실패였다", opinion="계획은 있었지만 손실을 인정하는 장면을 잘라내지 못했다. 좋은 진입보다 먼저 필요한 건 나쁜 포지션을 끝내는 버튼이었다.", quote="My loss today wasn't the market. It was me refusing to cut the scene when the trade was already wrong.", evidence="트레이딩 손실을 외부 탓보다 행동 규칙의 실패로 복기함", counter="자책만 반복하면 다음 기준이 아니라 공포만 남을 수 있음"),
-    dict(group="korea", community="네이버 종목토론실", speaker="물린 개인투자자", asset="국내주식", frame="덜어낼 것", stance="손실 회피", emotion="불안과 체념", conviction=3.8, friction=4.9, url="https://finance.naver.com/", title="손절은 못 하겠고 물타기는 무섭고 결국 게시판만 계속 본다", opinion="종목을 믿는다고 말하지만 사실은 손실 확정이 싫어서 같은 의견을 찾아다니는 중이다. 정보 수집이 아니라 불안 진정에 가깝다.", quote="오늘도 반등 온다는 글만 찾고 있다. 팔면 손실이고 안 팔면 매일 계좌를 보게 된다.", evidence="종목 의견이 실제 판단보다 감정 안정 장치로 쓰이는 장면", counter="게시판 감정과 기업 가치 판단을 분리하지 않으면 같은 글만 소비하게 됨"),
-    dict(group="korea", community="블라인드 투자 / 재테크", speaker="월급쟁이 투자자", asset="계좌", frame="순서를 바꿀 것", stance="구조 재설계", emotion="현실적 피로", conviction=4.5, friction=3.9, url="https://www.teamblind.com/kr/", title="연봉이 올라도 돈이 안 남는 건 계좌가 아니라 생활 장면이 너무 많아서다", opinion="월급이 늘었는데도 남는 돈이 없다면 수익률 문제가 아니다. 고정비, 구독, 인간관계 비용이 먼저 편집되어야 한다.", quote="연봉은 올랐는데 매달 남는 돈은 그대로다. 투자보다 생활 구조가 먼저인 것 같다.", evidence="투자를 삶의 현금흐름과 소비 습관으로 연결함", counter="소비 통제만 강조하면 소득 확장이나 커리어 전략이 빠질 수 있음"),
-    dict(group="crypto_flow", community="Arkham / @ArkhamIntel", speaker="온체인 엔티티 추적 피드", asset="JUMP", frame="남길 것", stance="엔티티 검증", emotion="경계와 확인", conviction=4.7, friction=4.2, url="https://intel.arkm.com/", title="Jump Trading류의 움직임은 X 캡처보다 엔티티 지갑으로 먼저 검증해야 한다", opinion="Jump Trading, ETF, 거래소, 마켓메이커 지갑 이동은 속보보다 원천 지갑 라벨과 상대방 주소를 먼저 확인해야 한다.", quote="Arkham 같은 엔티티 대시보드는 유명 기업, ETF, 고래, 인플루언서 지갑의 실시간 온체인 데이터를 추적하는 데 쓴다.", evidence="엔티티 라벨, 포트폴리오, 트랜잭션 플로우, 알림을 통해 X 속보의 원천을 검증할 수 있음", counter="라벨링 오류나 클러스터링 추정이 섞일 수 있으므로 Nansen, Etherscan, 원문 트랜잭션과 교차검증 필요"),
-    dict(group="crypto_flow", community="Lookonchain / @lookonchain", speaker="스마트머니 온체인 해설 계정", asset="JUMP/SOL", frame="순서를 바꿀 것", stance="마켓메이커 이동 관찰", emotion="긴장과 호기심", conviction=4.5, friction=4.6, url="https://lookonchain.com/", title="Jump Crypto가 SOL을 옮겼다는 속보는 포지션 전환 가설로만 읽어야 한다", opinion="Lookonchain은 큰손 이동을 빠르게 문장화하지만, Editorial Life에서는 그 이동이 매도인지, OTC 교환인지, 리밸런싱인지 분리해서 해석해야 한다.", quote="Jump Crypto is suspected to be converting a substantial amount of SOL to BTC.", evidence="Lookonchain은 Jump Crypto의 SOL 이동처럼 마켓메이커 단위 온체인 사건을 빠르게 포착함", counter="속보는 방향성 확정이 아니라 질문 생성 도구다. 실제 매매 판단은 상대방 주소, 거래소 입금 여부, 이후 포지션 변화를 확인해야 함"),
-    dict(group="crypto_flow", community="Spot On Chain / @spotonchain", speaker="AI 온체인 인사이트 피드", asset="WHALE", frame="남길 것", stance="큰손 평균단가 추적", emotion="차분한 관찰", conviction=4.4, friction=4.0, url="https://spotonchain.ai/", title="큰손의 CEX 입금은 매도 신호가 아니라 검수해야 할 편집점이다", opinion="Spot On Chain류의 피드는 지갑의 평균 단가, 잔여 보유량, 거래소 입출금을 같이 보여줄 때 콘텐츠 재료가 된다.", quote="특정 지갑이 얼마를 옮겼는지보다, 어디에서 와서 어디로 갔고 아직 무엇을 들고 있는지가 중요하다.", evidence="CEX 입금, 누적 매수/매도, 잔여 포지션을 함께 묶어 설명하는 데 유용", counter="거래소 입금이 항상 매도를 의미하지는 않음. 담보, OTC, 내부 이동 가능성도 열어둬야 함"),
-    dict(group="crypto_flow", community="Whale Alert / @whale_alert", speaker="대형 트랜잭션 알림 피드", asset="BTC/USDT", frame="덜어낼 것", stance="대형 이동 경보", emotion="즉각 반응 경계", conviction=4.0, friction=4.8, url="https://whale-alert.io/", title="Whale Alert는 소리 큰 알람이지 곧바로 매매 명령은 아니다", opinion="대형 전송 알림은 시장의 큰 장면을 알려주지만, 주소 라벨과 목적을 모르면 소음이 된다.", quote="Large transfer alerts are transaction evidence, not a complete investment thesis.", evidence="BTC, ETH, XRP, TRON 등 대형 체인 이동을 빠르게 감지하는 베이스라인 피드", counter="거래소 내부 이동이나 커스터디 이동도 큰 금액으로 잡히므로 과잉해석 금지"),
-    dict(group="crypto_flow", community="Nansen Smart Money", speaker="라벨 기반 스마트머니 데이터", asset="SMART MONEY", frame="남길 것", stance="스마트머니 라벨", emotion="분석적 신뢰", conviction=4.6, friction=3.8, url="https://www.nansen.ai/", title="스마트머니는 유명한 지갑이 아니라 검증된 행동 패턴이어야 한다", opinion="Nansen의 Fund, Smart Trader, Hyperliquid 고수익 트레이더 라벨은 지갑을 이름이 아니라 행동 성과로 분류하게 해준다.", quote="Smart Money endpoints expose Fund, Smart Trader, and profitable Hyperliquid trader labels.", evidence="라벨별 보유, DEX 거래, 퍼프 거래, 넷플로우를 API나 대시보드로 추적 가능", counter="라벨은 플랫폼의 해석이므로 절대 진실이 아니다. 오래된 고수익 지갑은 다음 사이클에서 성과가 바뀔 수 있음"),
-    dict(group="crypto_flow", community="Cielo Finance / @CieloFinance", speaker="지갑 알림/리더보드 도구", asset="WALLET LIST", frame="순서를 바꿀 것", stance="관심 지갑 리스트화", emotion="실행 욕구", conviction=4.2, friction=3.9, url="https://cielo.finance/", title="좋은 지갑을 찾는 것보다 먼저 알림 기준을 정해야 한다", opinion="Cielo는 지갑을 많이 보는 도구지만, Editorial Life에는 어떤 지갑을 왜 추적하는지 기준을 만드는 장면이 더 중요하다.", quote="Wallet discovery, real-time alerts, Telegram and Discord bots.", evidence="EVM/Solana 지갑 추적, 알림, 고PnL 지갑 리더보드, 토큰 추적에 적합", counter="너무 많은 알림은 판단을 망친다. 알림은 매매 버튼이 아니라 복기 재료여야 함"),
-    dict(group="stock_flow", community="Unusual Whales / @unusual_whales", speaker="옵션/다크풀 플로우 피드", asset="OPTIONS", frame="덜어낼 것", stance="옵션 플로우 해석", emotion="흥분과 의심", conviction=4.3, friction=4.5, url="https://unusualwhales.com/", title="옵션 고래 주문은 방향이 아니라 구조를 먼저 봐야 한다", opinion="Unusual Whales의 옵션 플로우와 다크풀 데이터는 강력하지만, 매수/매도 방향과 헤지 여부를 모르면 자극적인 숫자에 끌려갈 수 있다.", quote="Full options flow, real-time news, dark pool and institutional transaction data.", evidence="미국 전체 옵션 플로우, 다크풀/기관 거래, 특이 옵션 알림, 뉴스 피드를 제공", counter="큰 옵션 거래가 반드시 방향성 베팅은 아니다. 스프레드, 헤지, 델타 중립 구조 가능성 확인 필요"),
-    dict(group="stock_flow", community="Quiver Quantitative / @QuiverQuant", speaker="대체데이터/공시 추적 피드", asset="ALT DATA", frame="남길 것", stance="공개 데이터 집계", emotion="차분한 추적", conviction=4.1, friction=3.4, url="https://www.quiverquant.com/", title="의회 거래와 내부자 데이터는 속보보다 지연 구조를 이해해야 한다", opinion="Quiver는 의회 거래, 내부자 거래, WSB, 특허, 정부 데이터 등을 모아주지만 각 데이터의 지연 시간을 먼저 표시해야 한다.", quote="Quiver aggregates alternative data from public companies, including public sources and social discussion.", evidence="대체데이터 대시보드와 API, r/wallstreetbets 데이터는 장중 업데이트, 여러 대시보드는 일별 업데이트", counter="일부 데이터는 신고 지연이 있기 때문에 실시간 매매 신호처럼 쓰면 안 됨"),
-    dict(group="stock_flow", community="SEC EDGAR + OpenInsider", speaker="내부자 거래 원천 데이터", asset="FORM 4", frame="순서를 바꿀 것", stance="원천 공시 우선", emotion="검증 중심", conviction=4.8, friction=3.6, url="https://www.sec.gov/edgar", title="내부자 매수는 X 요약보다 Form 4 원문이 먼저다", opinion="CEO, 임원, 10% 보유자의 매수/매도는 Form 4 원문에서 거래 코드, 수량, 가격, 보유 변화까지 확인해야 한다.", quote="Form 4 reports changes of beneficial ownership filed through SEC EDGAR.", evidence="SEC는 Form 3/4/5 소유권 신고 데이터를 EDGAR에서 제공하며, 투자 판단 전 원문 확인을 권고함", counter="옵션 행사, 보상 주식, 10b5-1 계획 매도는 단순 매수/매도 감정으로 해석하면 안 됨"),
-    dict(group="stock_flow", community="WhaleWisdom / Dataroma", speaker="13F 기반 큰손 포트폴리오 추적", asset="13F", frame="남길 것", stance="분기 포지션 관찰", emotion="느린 확신", conviction=3.9, friction=3.2, url="https://whalewisdom.com/", title="13F는 실시간 신호가 아니라 큰손의 구조를 보는 느린 자료다", opinion="헤지펀드와 슈퍼투자자 포트폴리오는 콘텐츠 관점에서는 좋지만, 신고 지연이 있어 데이 트레이딩 신호로 쓰면 안 된다.", quote="Research and replicate portfolios of the world's best investors.", evidence="13F 검색, 펀드 성과, 합산 보유, 13F 스크리너로 기관 포트폴리오 변화를 볼 수 있음", counter="13F에는 숏, 옵션, 해외 보유, 이후 매매가 빠질 수 있고 최대 45일 지연 가능성이 있음"),
-    dict(group="wallets", community="온체인 관찰 메모", speaker="고래 지갑 추종자", asset="WALLET", frame="남길 것", stance="정보와 기준 분리", emotion="경계와 호기심", conviction=4.1, friction=3.7, url="https://etherscan.io/", title="고래 지갑을 따라가는 건 정보일 수도 있지만 내 기준이 없으면 소음이다", opinion="큰 지갑 이동은 유용하지만 그걸 내 포지션의 이유로 삼는 순간 판단권을 남에게 넘기는 일이 된다.", quote="A whale moved funds. That is a signal, not a reason to abandon my own risk plan.", evidence="온체인 이벤트를 매매 명령이 아니라 관찰 자료로 제한함", counter="주소 하나의 이동만으로 매수, 매도, 담보 이동을 단정하기 어려움"),
-    dict(group="philosophy", community="돈과 삶의 철학 메모", speaker="Editorial Life 화자", asset="LIFE", frame="남길 것", stance="삶의 편집", emotion="차분한 관찰", conviction=4.8, friction=2.7, url="", title="돈은 숫자가 아니라 선택이 남은 상태다", opinion="돈이 많다는 건 모든 걸 살 수 있다는 뜻이 아니라 싫은 선택을 거절할 수 있는 장면이 늘어났다는 뜻이다.", quote="돈은 숫자가 아니라 선택이 남은 상태다. 돈이 머물 구조가 없으면 소득도 장면 밖으로 사라진다.", evidence="돈을 수익률이 아니라 선택권과 생활 구조로 해석함", counter="철학적 문장만 남으면 실행 도구가 약해질 수 있어 계좌 구조로 내려와야 함"),
+REDDIT_SOURCES = [
+    {"group": "community", "name": "Reddit r/EthereumClassic", "sub": "EthereumClassic", "weight": 1.25},
+    {"group": "community", "name": "Reddit r/CryptoCurrency", "sub": "CryptoCurrency", "weight": 1.15},
+    {"group": "community", "name": "Reddit r/CryptoMarkets", "sub": "CryptoMarkets", "weight": 1.05},
+    {"group": "community", "name": "Reddit r/ethtrader", "sub": "ethtrader", "weight": 1.0},
+    {"group": "community", "name": "Reddit r/ethereum", "sub": "ethereum", "weight": 0.95},
+    {"group": "community", "name": "Reddit r/wallstreetbets", "sub": "wallstreetbets", "weight": 0.9},
+    {"group": "community", "name": "Reddit r/stocks", "sub": "stocks", "weight": 0.9},
 ]
 
-for key, default in {"rows": [], "insights": [], "selected": None, "generated": {}, "archive": [], "status": []}.items():
+REFERENCE_SOURCES = [
+    {
+        "group": "market_intel",
+        "name": "Arkham",
+        "url": "https://intel.arkm.com/",
+        "use": "엔티티 지갑, 거래소 입금, 큰손 이동 검증",
+    },
+    {
+        "group": "market_intel",
+        "name": "Lookonchain",
+        "url": "https://lookonchain.com/",
+        "use": "고래 지갑과 스마트머니 이동을 빠르게 문장화하는 레이어",
+    },
+    {
+        "group": "market_intel",
+        "name": "Spot On Chain",
+        "url": "https://spotonchain.ai/",
+        "use": "지갑 평균단가, CEX 입출금, 잔여 포지션 확인",
+    },
+    {
+        "group": "market_intel",
+        "name": "Whale Alert",
+        "url": "https://whale-alert.io/",
+        "use": "대형 트랜잭션 알림과 체인 간 이동 확인",
+    },
+    {
+        "group": "market_intel",
+        "name": "Nansen",
+        "url": "https://www.nansen.ai/",
+        "use": "Smart Money 라벨, 펀드/트레이더 지갑 흐름",
+    },
+    {
+        "group": "market_intel",
+        "name": "DefiLlama",
+        "url": "https://defillama.com/",
+        "use": "TVL, 스테이블코인, ETF/DAT, CEX 투명성 데이터",
+    },
+    {
+        "group": "market_intel",
+        "name": "Unusual Whales",
+        "url": "https://unusualwhales.com/",
+        "use": "미국 주식 옵션 플로우, 다크풀, 의회 거래",
+    },
+    {
+        "group": "market_intel",
+        "name": "Quiver Quantitative",
+        "url": "https://www.quiverquant.com/",
+        "use": "대체 데이터, 의회 거래, 내부자 거래, WSB 추적",
+    },
+    {
+        "group": "market_intel",
+        "name": "SEC EDGAR",
+        "url": "https://www.sec.gov/search-filings",
+        "use": "Form 4, 13F, 8-K, 10-Q 등 원천 공시 확인",
+    },
+]
+
+BULLISH_WORDS = {
+    "surge",
+    "rally",
+    "breakout",
+    "approval",
+    "upgrade",
+    "inflow",
+    "accumulate",
+    "bull",
+    "rebound",
+    "record",
+    "상승",
+    "급등",
+    "반등",
+    "호재",
+    "승인",
+    "유입",
+    "업그레이드",
+    "매수",
+}
+
+BEARISH_WORDS = {
+    "dump",
+    "sell",
+    "lawsuit",
+    "hack",
+    "exploit",
+    "liquidation",
+    "outflow",
+    "bear",
+    "crash",
+    "plunge",
+    "하락",
+    "급락",
+    "매도",
+    "소송",
+    "해킹",
+    "청산",
+    "유출",
+    "규제",
+}
+
+NOISE_WORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "that",
+    "this",
+    "into",
+    "crypto",
+    "bitcoin",
+    "ethereum",
+    "classic",
+    "news",
+    "says",
+    "after",
+    "over",
+    "more",
+    "about",
+    "시장",
+    "관련",
+    "뉴스",
+    "코인",
+    "가상자산",
+    "암호화폐",
+    "이더리움",
+    "이더리움클래식",
+}
+
+
+for key, default in {
+    "items": [],
+    "brief": {},
+    "selected_url": "",
+    "archive": [],
+    "status": [],
+    "last_query": "",
+    "generated": {},
+}.items():
     st.session_state.setdefault(key, default)
 
 
-def split_terms(text: str) -> list[str]:
-    return [x.strip().lower() for x in text.replace(",", " ").replace("\n", " ").split(" ") if x.strip()]
+def clean_text(value: str | None, limit: int = 1000) -> str:
+    value = unescape(value or "")
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value[:limit]
 
 
-def matches(item: dict, terms: list[str]) -> bool:
+def normalize_term(term: str) -> str:
+    return re.sub(r"\s+", " ", term.strip().lower())
+
+
+def topic_terms(keyword: str) -> list[str]:
+    base = normalize_term(keyword)
+    terms: list[str] = []
+    for piece in re.split(r"[,/\n]", keyword):
+        piece = normalize_term(piece)
+        if piece:
+            terms.append(piece)
+    for key, aliases in TOPIC_ALIASES.items():
+        if base == key or key in base or base in [normalize_term(x) for x in aliases]:
+            terms.extend(aliases)
+    terms.append(keyword)
+    deduped = []
+    for term in terms:
+        n = normalize_term(term)
+        if n and n not in deduped:
+            deduped.append(n)
+    return deduped
+
+
+def query_string(keyword: str) -> str:
+    terms = topic_terms(keyword)
+    if len(terms) == 1:
+        return terms[0]
+    quoted = [f'"{term}"' if " " in term else term for term in terms[:5]]
+    return " OR ".join(quoted)
+
+
+def parse_date(value: str | None) -> tuple[str, float]:
+    if not value:
+        return "", 9999.0
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return clean_text(value, 80), 9999.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() / 3600
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), max(age, 0.0)
+
+
+def request_text(url: str, timeout: int = 9) -> str:
+    request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/json, text/xml, */*"})
+    with urlopen(request, timeout=timeout) as response:
+        raw = response.read()
+    return raw.decode("utf-8", errors="replace")
+
+
+def child_text(node: ET.Element, names: set[str]) -> str:
+    for child in list(node):
+        tag = child.tag.split("}")[-1].lower()
+        if tag in names:
+            return clean_text("".join(child.itertext()), 1400)
+    return ""
+
+
+def child_link(node: ET.Element) -> str:
+    link = child_text(node, {"link", "guid", "id"})
+    if link:
+        return link
+    for child in list(node):
+        tag = child.tag.split("}")[-1].lower()
+        if tag == "link" and child.attrib.get("href"):
+            return child.attrib["href"]
+    return ""
+
+
+def matches_topic(title: str, summary: str, terms: list[str]) -> bool:
+    text = normalize_term(f"{title} {summary}")
     if not terms:
         return True
-    hay = " ".join(str(item.get(k, "")) for k in ["asset", "title", "opinion", "quote", "stance", "community", "speaker"]).lower()
-    return any(term in hay for term in terms)
+    return any(term in text for term in terms)
 
 
-def row_from(item: dict, idx: int, category: str, origin: str) -> dict:
-    question, line = FRAMES[item["frame"]]
-    score = round(min(99, 30 + item["conviction"] * 8.5 + item["friction"] * 9 + max(0, 8 - idx % 6)))
+def mood_of(text: str) -> tuple[str, int, int]:
+    lower = normalize_term(text)
+    bull = sum(1 for word in BULLISH_WORDS if word in lower)
+    bear = sum(1 for word in BEARISH_WORDS if word in lower)
+    if bull > bear:
+        return "상방/호재", bull, bear
+    if bear > bull:
+        return "하방/리스크", bull, bear
+    return "중립/관망", bull, bear
+
+
+def theme_terms(items: list[dict], keyword: str, count: int = 8) -> list[tuple[str, int]]:
+    aliases = set(topic_terms(keyword))
+    bucket: dict[str, int] = {}
+    for item in items:
+        text = normalize_term(f"{item['title']} {item['summary']}")
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9$-]{2,}|[가-힣]{2,}", text):
+            token = token.lower().strip("$")
+            if token in NOISE_WORDS or token in aliases or len(token) < 2:
+                continue
+            bucket[token] = bucket.get(token, 0) + 1
+    return sorted(bucket.items(), key=lambda x: x[1], reverse=True)[:count]
+
+
+def item_score(source_weight: float, relevance: int, age_hours: float, popularity: float, bull: int, bear: int) -> int:
+    recency = max(0, 24 - min(age_hours, 24)) * 1.15
+    tension = min(14, (bull + bear) * 3.5)
+    score = 28 + source_weight * 12 + relevance * 8 + recency + popularity + tension
+    return int(max(1, min(99, round(score))))
+
+
+def make_item(
+    *,
+    source: str,
+    group: str,
+    source_type: str,
+    title: str,
+    summary: str,
+    url: str,
+    published: str = "",
+    age_hours: float = 9999.0,
+    source_weight: float = 1.0,
+    popularity_raw: int = 0,
+    comments: int = 0,
+    origin: str = "rss",
+    keyword: str,
+) -> dict:
+    terms = topic_terms(keyword)
+    text = f"{title} {summary}"
+    relevance = sum(1 for term in terms if term in normalize_term(text))
+    mood, bull, bear = mood_of(text)
+    popularity = min(24, log1p(max(popularity_raw, 0) + comments * 2) * 5)
+    score = item_score(source_weight, relevance, age_hours, popularity, bull, bear)
+    if origin == "reddit":
+        signal = f"upvote {popularity_raw} / comment {comments}"
+    elif origin == "hn":
+        signal = f"point {popularity_raw} / comment {comments}"
+    elif age_hours < 999:
+        signal = f"{age_hours:.0f}시간 전"
+    else:
+        signal = "발행일 미확인"
     return {
-        **item,
-        "id": f"{datetime.now().isoformat(timespec='seconds')}-{origin}-{idx}",
-        "origin": origin,
-        "category": category,
+        "id": f"{origin}-{abs(hash(url + title))}",
+        "source": source,
+        "group": group,
+        "source_type": source_type,
+        "title": clean_text(title, 180) or "Untitled",
+        "summary": clean_text(summary, 900),
+        "url": url,
+        "published": published,
+        "age_hours": age_hours,
         "score": score,
-        "question": question,
-        "editorial_line": line,
-        "captured_at": datetime.now().isoformat(timespec="seconds"),
+        "mood": mood,
+        "popularity_raw": popularity_raw,
+        "comments": comments,
+        "signal": signal,
+        "origin": origin,
+        "captured_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
 
 
-def infer_reddit(post: dict, sub: str) -> dict:
-    title = post.get("title", "Untitled discussion")[:150]
-    quote_text = (post.get("selftext") or title).strip()[:420]
-    text = f"{title} {quote_text}".lower()
-    asset = next((x for x in ["NVDA", "TSLA", "BTC", "ETH", "SOL", "SPY", "QQQ", "AAPL", "AMD"] if x.lower() in text), "MARKET")
-    if any(w in text for w in ["loss", "lost", "mistake", "revenge", "blew"]):
-        stance, emotion, frame = "손실 복기", "후회와 재정렬", "다시 찍을 것"
-    elif any(w in text for w in ["sell", "short", "bubble", "overvalued", "bear"]):
-        stance, emotion, frame = "과열 경계", "의심과 경계", "덜어낼 것"
-    elif any(w in text for w in ["hold", "long", "buy", "bull", "dca"]):
-        stance, emotion, frame = "보유 논리", "확신과 불안", "남길 것"
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_rss_source(source: dict, keyword: str, limit: int) -> tuple[list[dict], str]:
+    terms = topic_terms(keyword)
+    if source["mode"] == "query":
+        url = source["url_template"].format(query=quote(query_string(keyword)))
     else:
-        stance, emotion, frame = "시장 관찰", "호기심과 긴장", "순서를 바꿀 것"
-    comments = int(post.get("num_comments") or 0)
-    ups = int(post.get("ups") or 0)
-    return dict(
-        group="reddit",
-        community=f"Reddit r/{sub}",
-        speaker="Reddit 커뮤니티 작성자",
-        asset=asset,
-        frame=frame,
-        stance=stance,
-        emotion=emotion,
-        conviction=min(5.0, 2.8 + min(ups, 400) / 220),
-        friction=min(5.0, 2.8 + min(comments, 300) / 120),
-        url=f"https://www.reddit.com{post.get('permalink', f'/r/{sub}/')}",
-        title=title,
-        opinion="커뮤니티 작성자가 가격 자체보다 자신의 포지션, 확신, 불안, 행동 기준을 드러낸 글입니다.",
-        quote=quote_text,
-        evidence=f"댓글 {comments}개, 업보트 {ups}개. 토론 반응이 있는 의견글로 분류했습니다.",
-        counter="제목만 강한 글일 수 있으므로 원문과 댓글 맥락을 확인한 뒤 콘텐츠화해야 합니다.",
+        url = source["url"]
+    try:
+        xml_text = request_text(url)
+        root = ET.fromstring(xml_text)
+    except (HTTPError, URLError, TimeoutError, ET.ParseError, ValueError) as exc:
+        return [], f"{source['name']}: 실패 ({type(exc).__name__})"
+
+    nodes = root.findall(".//item")
+    if not nodes:
+        nodes = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+    items: list[dict] = []
+    for node in nodes[: limit * 4]:
+        title = child_text(node, {"title"})
+        summary = child_text(node, {"description", "summary", "content", "encoded"})
+        if source["mode"] == "feed" and not matches_topic(title, summary, terms):
+            continue
+        url_value = child_link(node)
+        published_raw = child_text(node, {"pubdate", "published", "updated", "dc:date"})
+        published, age_hours = parse_date(published_raw)
+        items.append(
+            make_item(
+                source=source["name"],
+                group=source["group"],
+                source_type="RSS",
+                title=title,
+                summary=summary,
+                url=url_value,
+                published=published,
+                age_hours=age_hours,
+                source_weight=float(source["weight"]),
+                origin="rss",
+                keyword=keyword,
+            )
+        )
+        if len(items) >= limit:
+            break
+    return items, f"{source['name']}: {len(items)}개"
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_reddit_source(source: dict, keyword: str, limit: int) -> tuple[list[dict], str]:
+    params = urlencode({"q": query_string(keyword), "restrict_sr": "1", "sort": "hot", "t": "week", "limit": limit})
+    url = f"https://www.reddit.com/r/{source['sub']}/search.json?{params}"
+    try:
+        data = json.loads(request_text(url, timeout=8))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
+        return [], f"{source['name']}: 실패 ({type(exc).__name__})"
+    posts = [child.get("data", {}) for child in data.get("data", {}).get("children", [])]
+    items = []
+    for post in posts:
+        if post.get("stickied") or not post.get("title"):
+            continue
+        created = datetime.fromtimestamp(float(post.get("created_utc", 0) or 0), tz=timezone.utc)
+        age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
+        summary = post.get("selftext") or post.get("url_overridden_by_dest") or ""
+        items.append(
+            make_item(
+                source=source["name"],
+                group="community",
+                source_type="Community",
+                title=post.get("title", ""),
+                summary=summary,
+                url=f"https://www.reddit.com{post.get('permalink', '')}",
+                published=created.strftime("%Y-%m-%d %H:%M UTC"),
+                age_hours=age_hours,
+                source_weight=float(source["weight"]),
+                popularity_raw=int(post.get("ups") or post.get("score") or 0),
+                comments=int(post.get("num_comments") or 0),
+                origin="reddit",
+                keyword=keyword,
+            )
+        )
+    return items, f"{source['name']}: {len(items)}개"
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_hacker_news(keyword: str, limit: int) -> tuple[list[dict], str]:
+    params = urlencode({"query": keyword, "tags": "story", "hitsPerPage": limit})
+    url = f"https://hn.algolia.com/api/v1/search?{params}"
+    try:
+        data = json.loads(request_text(url, timeout=8))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
+        return [], f"Hacker News: 실패 ({type(exc).__name__})"
+    items = []
+    for hit in data.get("hits", []):
+        created, age_hours = parse_date(hit.get("created_at"))
+        items.append(
+            make_item(
+                source="Hacker News",
+                group="community",
+                source_type="Community",
+                title=hit.get("title") or hit.get("story_title") or "",
+                summary=hit.get("comment_text") or "",
+                url=hit.get("url") or f"https://news.ycombinator.com/item?id={hit.get('objectID')}",
+                published=created,
+                age_hours=age_hours,
+                source_weight=0.95,
+                popularity_raw=int(hit.get("points") or 0),
+                comments=int(hit.get("num_comments") or 0),
+                origin="hn",
+                keyword=keyword,
+            )
+        )
+    return items, f"Hacker News: {len(items)}개"
+
+
+def dedupe_items(items: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    deduped = []
+    for item in sorted(items, key=lambda x: x["score"], reverse=True):
+        key = normalize_term(item["url"] or item["title"])
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def run_collection(keyword: str, active_groups: list[str], per_source: int) -> tuple[list[dict], list[str]]:
+    all_items: list[dict] = []
+    status: list[str] = []
+    for source in RSS_SOURCES:
+        if source["group"] not in active_groups:
+            continue
+        items, msg = fetch_rss_source(source, keyword, per_source)
+        all_items.extend(items)
+        status.append(msg)
+    if "community" in active_groups:
+        for source in REDDIT_SOURCES:
+            items, msg = fetch_reddit_source(source, keyword, max(3, per_source))
+            all_items.extend(items)
+            status.append(msg)
+        hn_items, hn_msg = fetch_hacker_news(keyword, per_source)
+        all_items.extend(hn_items)
+        status.append(hn_msg)
+    return dedupe_items(all_items), status
+
+
+def build_brief(items: list[dict], keyword: str) -> dict:
+    if not items:
+        return {
+            "tone": "자료 부족",
+            "one_line": f"{keyword} 관련 자료가 충분히 수집되지 않았습니다.",
+            "facts": [],
+            "risks": ["검색어를 영문/티커와 함께 입력하거나 소스 그룹을 넓혀 다시 수집하세요."],
+            "editorial": "지금은 판단보다 수집 범위를 먼저 편집해야 하는 구간입니다.",
+            "themes": [],
+            "top": [],
+        }
+    mood_counts = pd.Series([x["mood"] for x in items]).value_counts().to_dict()
+    top = sorted(items, key=lambda x: x["score"], reverse=True)[:6]
+    recent_count = len([x for x in items if x["age_hours"] <= 24])
+    community_count = len([x for x in items if x["group"] == "community"])
+    bull = mood_counts.get("상방/호재", 0)
+    bear = mood_counts.get("하방/리스크", 0)
+    if bull > bear * 1.35:
+        tone = "상방 재료 우세"
+    elif bear > bull * 1.35:
+        tone = "리스크 재료 우세"
+    else:
+        tone = "혼조/관망"
+
+    themes = theme_terms(items, keyword)
+    facts = [
+        f"총 {len(items)}개 자료 중 최근 24시간 자료는 {recent_count}개입니다.",
+        f"커뮤니티 반응 기반 자료는 {community_count}개이며, 뉴스/RSS와 함께 교차검토가 필요합니다.",
+        f"가장 강한 자료는 {top[0]['source']}의 '{top[0]['title']}'입니다.",
+    ]
+    if themes:
+        facts.append("반복 키워드: " + ", ".join([name for name, _ in themes[:5]]))
+
+    risk_words = []
+    joined = normalize_term(" ".join([f"{x['title']} {x['summary']}" for x in items]))
+    for label, words in {
+        "레버리지/청산": ["liquidation", "leverage", "청산", "레버리지"],
+        "규제/소송": ["lawsuit", "sec", "regulation", "소송", "규제"],
+        "해킹/보안": ["hack", "exploit", "해킹", "익스플로잇"],
+        "거래소/입출금": ["exchange", "deposit", "withdrawal", "거래소", "입금", "출금"],
+    }.items():
+        if any(word in joined for word in words):
+            risk_words.append(label)
+    risks = risk_words or ["강한 방향성보다 자료 간 온도 차이를 먼저 확인해야 합니다."]
+
+    editorial = (
+        "남길 것: 원천 링크, 발행 시간, 커뮤니티 반응 수치. "
+        "덜어낼 것: 단일 속보만 보고 방향을 확정하는 습관. "
+        "순서를 바꿀 것: 가격 판단보다 자료의 출처와 지연 시간을 먼저 확인."
+    )
+    return {
+        "tone": tone,
+        "one_line": f"{keyword} 장세는 '{tone}'입니다. 지금은 가격 예측보다 어떤 자료가 반복되고 어떤 자료가 과열인지 분리해야 합니다.",
+        "facts": facts,
+        "risks": risks,
+        "editorial": editorial,
+        "themes": themes,
+        "top": top,
+        "mood_counts": mood_counts,
+    }
+
+
+def source_badge(item: dict) -> str:
+    return (
+        f'<span class="pill pill-red">{escape(item["score"].__str__())} signal</span>'
+        f'<span class="pill">{escape(item["source"])}</span>'
+        f'<span class="pill">{escape(item["mood"])}</span>'
+        f'<span class="pill">{escape(item["signal"])}</span>'
     )
 
 
-@st.cache_data(ttl=900, show_spinner=False)
-def fetch_reddit(sub: str, query: str, limit: int = 3) -> tuple[list[dict], str]:
-    path = f"search.json?q={quote(query)}&restrict_sr=1&sort=new&limit={limit}" if query else f"hot.json?limit={limit}"
-    req = Request(f"https://www.reddit.com/r/{sub}/{path}", headers={"User-Agent": "EditorialLifeLab/0.1"})
-    try:
-        with urlopen(req, timeout=7) as res:
-            data = json.loads(res.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-        return [], f"r/{sub}: 실시간 접근 실패, seed 의견으로 대체 ({type(exc).__name__})"
-    posts = [c.get("data", {}) for c in data.get("data", {}).get("children", [])]
-    posts = [p for p in posts if p.get("title") and not p.get("stickied")]
-    return [infer_reddit(p, sub) for p in posts[:limit]], f"r/{sub}: {len(posts[:limit])}개 의견글 수집"
-
-
-def collect(active: list[str], keyword: str, minimum: float, live: bool, wallets: str, category: str) -> None:
-    keys = split_terms(keyword)
-    rows, status = [], []
-    if "reddit" in active and live:
-        query = " ".join(keys[:3])
-        for sub in ["wallstreetbets", "stocks", "investing", "CryptoCurrency", "Bitcoin", "daytrading"]:
-            items, msg = fetch_reddit(sub, query)
-            status.append(msg)
-            rows += [row_from(x, len(rows) + i, category, "live-reddit") for i, x in enumerate(items) if x["conviction"] >= minimum and matches(x, keys)]
-    rows += [row_from(x, len(rows) + i, category, "seed") for i, x in enumerate(SEEDS) if x["group"] in active and x["conviction"] >= minimum and matches(x, keys)]
-    if "wallets" in active:
-        for address in [x.strip() for x in wallets.replace(",", "\n").splitlines() if x.strip()]:
-            item = dict(SEEDS[-2], title=f"{address[:6]}...{address[-4:]} 지갑을 따라보려는 이유", quote=f"사용자가 관측 대상으로 입력한 지갑주소: {address}", url=f"https://etherscan.io/address/{address}" if address.startswith("0x") else "")
-            rows.append(row_from(item, len(rows), category, "wallet-input"))
-    rows = sorted(rows, key=lambda x: x["score"], reverse=True)
-    st.session_state["rows"] = rows
-    st.session_state["insights"] = rows
-    st.session_state["selected"] = rows[0]["id"] if rows else None
-    st.session_state["generated"] = {}
-    st.session_state["status"] = status or ["seed 의견글 기준으로 수집했습니다."]
-
-
-def selected() -> dict | None:
-    return next((x for x in st.session_state["insights"] if x["id"] == st.session_state["selected"]), None)
-
-
-def source_block(row: dict) -> None:
-    st.markdown(f"**커뮤니티 / 화자**  \n{row['community']} · {row['speaker']}")
-    st.markdown(f"**원문 제목**  \n{row['title']}")
-    if row["url"]:
-        st.markdown(f"**원문 링크**  \n[{row['url']}]({row['url']})")
-    else:
-        st.caption("외부 원문 링크가 없는 내부 브랜드/철학 메모입니다.")
-    st.markdown("**화자의 원문/발췌**")
-    st.markdown(f'<div class="quote">{escape(row["quote"])}</div>', unsafe_allow_html=True)
-    st.markdown("**근거로 볼 지점**")
-    st.write(row["evidence"])
-    st.markdown("**반론 포인트**")
-    st.write(row["counter"])
-
-
-def card(row: dict, action: bool = False) -> None:
+def item_card(item: dict, selectable: bool = False) -> None:
     with st.container(border=True):
-        st.markdown(f"#### {escape(row['title'])}")
-        st.markdown(f'<span class="pill">{escape(row["community"])}</span><span class="pill">{escape(row["stance"])}</span><span class="pill">{escape(row["emotion"])}</span>', unsafe_allow_html=True)
-        st.markdown("**화자의 주장**")
-        st.write(row["opinion"])
-        st.caption(f"{row['speaker']} · {row['asset']} · {row['frame']} · Signal {row['score']}")
-        with st.expander("원본과 근거 확인"):
-            source_block(row)
-        if action and st.button("제작실로", key=f"select-{row['id']}", use_container_width=True):
-            st.session_state["selected"] = row["id"]
+        st.markdown(f'<div class="item-title">{escape(item["title"])}</div>', unsafe_allow_html=True)
+        st.markdown(source_badge(item), unsafe_allow_html=True)
+        if item["summary"]:
+            st.write(item["summary"])
+        st.markdown(
+            f'<div class="source-meta">{escape(item["source_type"])} · {escape(item["published"] or "발행일 미확인")} · '
+            f'<a href="{escape(item["url"])}" target="_blank">원문 열기</a></div>',
+            unsafe_allow_html=True,
+        )
+        with st.expander("수집 근거와 검수 포인트"):
+            st.write(f"출처: {item['source']}")
+            st.write(f"인기/반응 신호: {item['signal']}")
+            st.write(f"자동 분류: {item['mood']}")
+            st.write("검수 질문: 이 자료는 가격 방향을 말하는가, 아니면 사람들의 포지션 변화를 말하는가?")
+        if selectable and st.button("제작실로 보내기", key=f"select-{item['id']}", use_container_width=True):
+            st.session_state["selected_url"] = item["url"]
             st.session_state["generated"] = {}
             st.rerun()
 
 
-def make_content(row: dict, tone: str) -> dict[str, str]:
-    title = TITLES.get(row["category"], TITLES["Market Note"])
-    longform = f"""제목: {title}
+def selected_item() -> dict | None:
+    return next((item for item in st.session_state["items"] if item["url"] == st.session_state["selected_url"]), None)
+
+
+def make_content(item: dict, brief: dict, tone: str) -> dict[str, str]:
+    top_titles = "\n".join([f"- {x['title']} ({x['source']})" for x in brief.get("top", [])[:4]])
+    longform = f"""제목: {item['title']}
 
 오프닝
-오늘 볼 것은 {row['asset']}의 가격 자체가 아닙니다.
-더 중요한 건 한 커뮤니티 화자가 왜 이런 판단을 했는지, 그리고 그 판단이 우리 삶과 계좌에 어떤 편집점을 남기는지입니다.
+오늘의 주제는 {st.session_state.get('last_query', '')}입니다.
+단순히 오른다, 내린다를 말하기 전에 지금 어떤 자료들이 반복되고 있는지 먼저 보겠습니다.
 
-원본 확인
-커뮤니티: {row['community']}
-화자: {row['speaker']}
-원문 링크: {row['url'] or '내부 메모'}
-원문 발췌: {row['quote']}
+현재 장세 브리프
+{brief.get('one_line', '')}
 
-화자의 주장
-{row['opinion']}
+핵심 자료
+{top_titles}
+
+오늘의 원문
+출처: {item['source']}
+링크: {item['url']}
+요약: {item['summary']}
 
 Editorial Life 관점
-이 의견을 그대로 믿을 필요는 없습니다.
-대신 이 사람이 무엇을 남기고, 무엇을 덜어내지 못했고, 어떤 순서를 놓쳤는지를 봐야 합니다.
+{brief.get('editorial', '')}
 
-Life Edit
-프레임: {row['frame']}
-핵심 질문: {row['question']}
-편집 문장: {row['editorial_line']}
+정리
+시장은 가격으로 움직이지만, 콘텐츠는 사람들이 어떤 자료를 붙잡고 있는지에서 시작됩니다.
+{tone} 톤으로 말하자면, 지금 해야 할 일은 더 많은 확신을 더하는 것이 아니라 쓸 자료와 버릴 소음을 나누는 일입니다."""
 
-반론까지 보기
-{row['counter']}
+    shorts = f"""1. {st.session_state.get('last_query', '')} 검색 결과에서 지금 반복되는 장면은 이것입니다.
+2. {brief.get('one_line', '')}
+3. 원문은 {item['source']}의 자료입니다.
+4. 결론: 가격보다 먼저 자료의 출처와 지연 시간을 편집해야 합니다."""
 
-클로징
-시장은 숫자로 움직이지만, 사람은 자기 해석으로 움직입니다.
-{tone} 말하자면, 투자 콘텐츠의 재료는 차트만이 아니라 사람들이 돈 앞에서 남기는 문장입니다."""
-    shorts = f"1. {row['asset']}보다 먼저 볼 것은 화자의 포지션입니다.\n\n2. {row['opinion']}\n\n3. Editorial Life식으로 묻겠습니다. {row['question']}"
-    cards = f"카드 1\n{title}\n\n카드 2\n커뮤니티: {row['community']}\n화자의 주장: {row['opinion']}\n\n카드 3\n편집점: {row['frame']}\n{row['editorial_line']}\n\n카드 4\n원문 출처: {row['url'] or '내부 메모'}"
+    cards = f"""카드 1
+{brief.get('tone', '장세 브리프')}
+
+카드 2
+핵심 자료: {item['title']}
+
+카드 3
+출처: {item['source']}
+반응 신호: {item['signal']}
+
+카드 4
+남길 것: 원천 링크와 발행 시간
+덜어낼 것: 단일 속보만 보고 방향을 확정하는 습관"""
     return {"롱폼": longform, "쇼츠": shorts, "카드뉴스": cards}
 
 
 st.sidebar.markdown('<p class="eyebrow">Editorial Life</p>', unsafe_allow_html=True)
-st.sidebar.title("Opinion Collector")
-st.sidebar.write("가격보다 먼저, 사람들이 돈 앞에서 남기는 문장을 수집합니다.")
+st.sidebar.title("Resource Collector")
+st.sidebar.write("검색어 하나로 RSS, 뉴스, 커뮤니티 반응을 모으고 장세 브리프까지 만듭니다.")
 st.sidebar.divider()
-active = [key for key, label in SOURCE_GROUPS.items() if st.sidebar.checkbox(label, value=True)]
-keyword = st.sidebar.text_input("관찰 키워드", "", placeholder="NVDA, BTC, 금리, 손절, 계좌")
-minimum = st.sidebar.slider("화자 확신도", 1.0, 5.0, 2.5, 0.1)
-live = st.sidebar.checkbox("Reddit 실시간 수집 시도", value=True)
-wallets = st.sidebar.text_area("지갑주소", placeholder="0x...")
-category = st.sidebar.selectbox("카테고리", list(TITLES.keys()))
-tone = st.sidebar.selectbox("톤", ["차분하고 날카롭게", "현실 조언 중심", "철학적 관찰자", "숏폼 훅 중심"])
-if st.sidebar.button("커뮤니티 의견 수집", type="primary", use_container_width=True):
-    collect(active, keyword, minimum, live, wallets, category)
-if st.sidebar.button("아카이브 초기화", use_container_width=True):
-    st.session_state["archive"] = []
 
-rows = st.session_state["rows"]
-avg = round(sum(x["score"] for x in rows) / len(rows)) if rows else 0
-live_count = len([x for x in rows if x["origin"] == "live-reddit"])
+keyword = st.sidebar.text_input("검색 주제", value=st.session_state.get("last_query") or "이더리움클래식", placeholder="이더리움클래식, BTC, NVDA")
+active_groups = [
+    key for key, label in SOURCE_GROUPS.items() if key != "market_intel" and st.sidebar.checkbox(label, value=True)
+]
+include_refs = st.sidebar.checkbox(SOURCE_GROUPS["market_intel"], value=True)
+per_source = st.sidebar.slider("소스별 최대 수집", 3, 12, 6)
+tone = st.sidebar.selectbox("제작 톤", ["차분하고 날카롭게", "시장 브리프 중심", "철학적 관찰자", "숏폼 훅 중심"])
+
+if st.sidebar.button("수집 + 장세 브리프 생성", type="primary", use_container_width=True):
+    with st.spinner("RSS와 커뮤니티 반응을 취합하는 중입니다."):
+        items, status = run_collection(keyword, active_groups, per_source)
+        st.session_state["items"] = items
+        st.session_state["brief"] = build_brief(items, keyword)
+        st.session_state["status"] = status
+        st.session_state["selected_url"] = items[0]["url"] if items else ""
+        st.session_state["generated"] = {}
+        st.session_state["last_query"] = keyword
+
+if st.sidebar.button("결과 초기화", use_container_width=True):
+    st.session_state["items"] = []
+    st.session_state["brief"] = {}
+    st.session_state["selected_url"] = ""
+    st.session_state["generated"] = {}
+
+items = st.session_state["items"]
+brief = st.session_state["brief"]
+query_label = st.session_state.get("last_query") or keyword
+community_count = len([x for x in items if x["group"] == "community"])
+recent_count = len([x for x in items if x["age_hours"] <= 24])
+avg_score = round(sum(x["score"] for x in items) / len(items)) if items else 0
 
 st.markdown('<p class="eyebrow">Financial Self-Editing Console</p>', unsafe_allow_html=True)
-st.title("Editorial Life 제작실")
-st.caption("주식, 코인, 데이 트레이딩, 지갑주소, 삶의 철학을 커뮤니티 화자의 의견 단위로 수집해 콘텐츠 재료로 편집합니다.")
-for col, (label, value) in zip(st.columns(4), [("의견 소재", len(rows)), ("평균 Signal", avg), ("실시간 Reddit", live_count), ("아카이브", len(st.session_state["archive"]))]):
-    col.markdown(f'<div class="metric-card"><span>{label}</span><strong>{value}</strong></div>', unsafe_allow_html=True)
+st.title("Editorial Life 인사이트 수집실")
+st.markdown(
+    '<p class="hero-line">주식, 코인, 지갑주소, 데이 트레이딩, 커뮤니티 반응을 하나의 자료 보드로 모읍니다. '
+    "검색어를 넣으면 관련 RSS와 커뮤니티 인기글을 취합하고, 현재 장세를 콘텐츠 관점으로 요약합니다.</p>",
+    unsafe_allow_html=True,
+)
+
+alias_preview = ", ".join(topic_terms(query_label)[:6])
+st.markdown(f'<span class="pill pill-red">검색어: {escape(query_label)}</span><span class="pill">확장어: {escape(alias_preview)}</span>', unsafe_allow_html=True)
+
+metric_cols = st.columns(4)
+metrics = [
+    ("수집 자료", len(items), "뉴스/RSS/커뮤니티 합산"),
+    ("평균 Signal", avg_score, "관련도, 최신성, 반응 점수"),
+    ("커뮤니티 반응", community_count, "Reddit/HN 기반 인기 자료"),
+    ("최근 24시간", recent_count, "현재 장세에 가까운 자료"),
+]
+for col, (label, value, help_text) in zip(metric_cols, metrics):
+    col.markdown(f'<div class="metric-card"><span>{label}</span><strong>{value}</strong><small>{help_text}</small></div>', unsafe_allow_html=True)
+
 st.divider()
 
-radar, source_viewer, community_map, insights, studio, archive = st.tabs(["Opinion Radar", "Source Viewer", "Community Map", "Insight Board", "Content Studio", "Archive"])
+brief_tab, feed_tab, matrix_tab, studio_tab, library_tab = st.tabs(
+    ["Market Brief", "Live Feed", "Source Matrix", "Content Studio", "Source Library"]
+)
 
-with radar:
-    st.subheader("의견 레이더")
-    if not rows:
-        st.info("왼쪽에서 커뮤니티 소스를 고르고 의견 수집을 시작하세요.")
+with brief_tab:
+    st.subheader("자동 장세 브리프")
+    if not brief:
+        st.info("왼쪽에서 검색 주제를 입력하고 수집을 실행하면 장세 브리프가 자동 생성됩니다.")
+    else:
+        st.markdown(f'<div class="quote">{escape(brief["one_line"])}</div>', unsafe_allow_html=True)
+        cols = st.columns(3)
+        brief_cards = [
+            ("시장 톤", brief.get("tone", "-")),
+            ("핵심 리스크", ", ".join(brief.get("risks", []))),
+            ("반복 테마", ", ".join([x[0] for x in brief.get("themes", [])[:5]]) or "테마 부족"),
+        ]
+        for col, (title, body) in zip(cols, brief_cards):
+            col.markdown(f'<div class="brief-card"><h4>{escape(title)}</h4><p>{escape(body)}</p></div>', unsafe_allow_html=True)
+
+        st.markdown("#### 핵심 관찰")
+        for fact in brief.get("facts", []):
+            st.write(f"- {fact}")
+        st.markdown("#### Editorial Life 편집점")
+        st.write(brief.get("editorial", ""))
+
+        st.markdown("#### 오늘의 핵심 자료")
+        for item in brief.get("top", [])[:5]:
+            item_card(item, selectable=True)
+
+with feed_tab:
+    st.subheader("수집 자료 피드")
+    if not items:
+        st.info("수집된 자료가 없습니다.")
     else:
         with st.expander("수집 상태"):
             for msg in st.session_state["status"]:
                 st.caption(msg)
-        left, right = st.columns([1.05, .95])
+        mood_filter = st.multiselect("시장 톤 필터", sorted({x["mood"] for x in items}), default=sorted({x["mood"] for x in items}))
+        group_filter = st.multiselect("소스 그룹 필터", sorted({SOURCE_GROUPS.get(x["group"], x["group"]) for x in items}), default=sorted({SOURCE_GROUPS.get(x["group"], x["group"]) for x in items}))
+        filtered = [
+            item
+            for item in items
+            if item["mood"] in mood_filter and SOURCE_GROUPS.get(item["group"], item["group"]) in group_filter
+        ]
+        left, right = st.columns([1.05, 0.95])
         with left:
-            for row in rows[:6]:
-                card(row)
+            for item in filtered[:12]:
+                item_card(item, selectable=True)
         with right:
-            chart = pd.DataFrame({"Conviction": [x["conviction"] for x in rows], "Friction": [x["friction"] for x in rows], "Signal": [x["score"] for x in rows], "Asset": [x["asset"] for x in rows]})
-            st.scatter_chart(chart, x="Conviction", y="Friction", size="Signal", color="#c9443e")
-            st.dataframe(chart, use_container_width=True, hide_index=True)
+            table = pd.DataFrame(
+                [
+                    {
+                        "score": x["score"],
+                        "source": x["source"],
+                        "mood": x["mood"],
+                        "signal": x["signal"],
+                        "title": x["title"],
+                    }
+                    for x in filtered
+                ]
+            )
+            st.dataframe(table, use_container_width=True, hide_index=True)
 
-with source_viewer:
-    st.subheader("수집 원본 검수")
-    if not rows:
-        st.info("수집을 실행하면 커뮤니티 원문 링크, 화자의 발췌문, 수집 판단이 여기에 표시됩니다.")
-    for row in rows:
-        with st.expander(f"{row['asset']} · {row['community']} · {row['title']}"):
-            st.caption(f"{row['captured_at']} · {row['origin']}")
-            source_block(row)
-            st.markdown("**화자의 주장**")
-            st.write(row["opinion"])
-
-with community_map:
-    st.subheader("커뮤니티 소스 맵")
-    st.write("이 수집기는 가격 데이터가 아니라 의견이 들어있는 글을 우선합니다. 아래 소스들은 화자의 포지션과 감정이 드러나는 곳입니다.")
-    for group, name, why, url in COMMUNITIES:
-        with st.container(border=True):
-            st.markdown(f"#### {name}")
-            st.caption(SOURCE_GROUPS[group])
-            st.write(why)
-            st.markdown("**수집해야 할 의견**")
-            st.write("왜 샀는지, 왜 못 파는지, 어떤 불안이나 확신 때문에 같은 선택을 반복하는지.")
-            st.markdown(f"[소스 보기]({url})")
-
-with insights:
-    st.subheader("브랜드식 재해석")
-    if not st.session_state["insights"]:
-        st.info("수집된 의견글을 Editorial Life 관점으로 변환하면 여기에 표시됩니다.")
-    for row in st.session_state["insights"]:
-        card(row, action=True)
-
-with studio:
-    st.subheader("롱폼 / 쇼츠 / 카드뉴스")
-    row = selected()
-    if not row:
-        st.info("먼저 Insight Board에서 제작 소재를 선택하세요.")
+with matrix_tab:
+    st.subheader("소스 매트릭스")
+    if not items:
+        st.info("수집을 실행하면 소스별 커버리지와 시장 톤 분포가 표시됩니다.")
     else:
-        left, right = st.columns([.85, 1.35])
+        df = pd.DataFrame(items)
+        group_summary = (
+            df.groupby(["group", "mood"])
+            .size()
+            .reset_index(name="count")
+            .replace({"group": {key: value for key, value in SOURCE_GROUPS.items()}})
+        )
+        st.bar_chart(group_summary, x="group", y="count", color="mood")
+        source_summary = (
+            df.groupby("source")
+            .agg(count=("title", "count"), avg_score=("score", "mean"), community=("comments", "sum"))
+            .reset_index()
+            .sort_values(["count", "avg_score"], ascending=False)
+        )
+        source_summary["avg_score"] = source_summary["avg_score"].round(1)
+        st.dataframe(source_summary, use_container_width=True, hide_index=True)
+
+with studio_tab:
+    st.subheader("콘텐츠 제작실")
+    item = selected_item()
+    if not item:
+        st.info("Market Brief나 Live Feed에서 제작실로 보낼 자료를 선택하세요.")
+    else:
+        left, right = st.columns([0.85, 1.15])
         with left:
-            card(row)
+            item_card(item)
         with right:
-            c1, c2, _ = st.columns([1, 1, 2])
-            if c1.button("대본 생성", type="primary", use_container_width=True):
-                st.session_state["generated"] = make_content(row, tone)
-            if c2.button("저장", use_container_width=True):
-                if st.session_state["generated"]:
-                    st.session_state["archive"].insert(0, {"created_at": datetime.now().isoformat(timespec="seconds"), "row": row})
-                    st.success("아카이브에 저장했습니다.")
-                else:
-                    st.warning("먼저 대본을 생성하세요.")
+            if st.button("브리프 기반 대본 생성", type="primary", use_container_width=True):
+                st.session_state["generated"] = make_content(item, brief or build_brief(items, query_label), tone)
             if st.session_state["generated"]:
                 output_type = st.radio("결과 유형", ["롱폼", "쇼츠", "카드뉴스"], horizontal=True)
                 st.markdown(f'<div class="output">{escape(st.session_state["generated"][output_type])}</div>', unsafe_allow_html=True)
+                if st.button("아카이브 저장", use_container_width=True):
+                    st.session_state["archive"].insert(
+                        0,
+                        {
+                            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "query": query_label,
+                            "item": item,
+                            "brief": brief,
+                        },
+                    )
+                    st.success("아카이브에 저장했습니다.")
             else:
-                st.info("선택한 의견글로 대본을 생성하세요.")
+                st.info("선택 자료와 장세 브리프를 묶어 대본을 생성할 수 있습니다.")
 
-with archive:
-    st.subheader("저장된 제작 패키지")
+with library_tab:
+    st.subheader("소스 라이브러리")
+    st.write("RSS는 자동 수집 대상이고, 큰손/온체인 레퍼런스는 원천 검증용 링크로 사용합니다.")
+    st.markdown("#### 자동 수집 RSS")
+    for source in RSS_SOURCES:
+        with st.container(border=True):
+            st.markdown(f"**{source['name']}**")
+            st.caption(SOURCE_GROUPS[source["group"]])
+            st.markdown(f"[피드 열기]({source.get('url') or source.get('url_template', '').format(query=quote(query_string(query_label)))})")
+    if include_refs:
+        st.markdown("#### 원천 검증 레퍼런스")
+        for source in REFERENCE_SOURCES:
+            with st.container(border=True):
+                st.markdown(f"**{source['name']}**")
+                st.caption(SOURCE_GROUPS[source["group"]])
+                st.write(source["use"])
+                st.markdown(f"[사이트 열기]({source['url']})")
+
+    st.markdown("#### 아카이브")
     if not st.session_state["archive"]:
         st.info("저장된 제작 패키지가 없습니다.")
     for package in st.session_state["archive"]:
-        st.caption(package["created_at"])
-        card(package["row"])
+        st.caption(f"{package['created_at']} · {package['query']}")
+        st.write(package["item"]["title"])
