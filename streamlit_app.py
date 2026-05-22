@@ -55,9 +55,9 @@ SOURCE_GROUPS = {
 }
 
 TOPIC_ALIASES = {
-    "이더리움클래식": ["이더리움클래식", "이더리움 클래식", "Ethereum Classic", "ETC", "$ETC", "ethereumclassic"],
-    "이더리움 클래식": ["이더리움클래식", "이더리움 클래식", "Ethereum Classic", "ETC", "$ETC", "ethereumclassic"],
-    "etc": ["Ethereum Classic", "ETC", "$ETC", "이더리움클래식", "ethereumclassic"],
+    "이더리움클래식": ["이더리움클래식", "이더리움 클래식", "Ethereum Classic", "$ETC", "ETC coin", "ETC/USDT", "ethereumclassic"],
+    "이더리움 클래식": ["이더리움클래식", "이더리움 클래식", "Ethereum Classic", "$ETC", "ETC coin", "ETC/USDT", "ethereumclassic"],
+    "etc": ["Ethereum Classic", "$ETC", "ETC coin", "ETC/USDT", "이더리움클래식", "ethereumclassic"],
     "비트코인": ["비트코인", "Bitcoin", "BTC", "$BTC"],
     "btc": ["Bitcoin", "BTC", "$BTC", "비트코인"],
     "이더리움": ["이더리움", "Ethereum", "ETH", "$ETH"],
@@ -137,6 +137,8 @@ def topic_terms(keyword: str) -> list[str]:
     deduped = []
     for term in terms:
         n = normalize_term(term)
+        if n == "etc":
+            continue
         if n and n not in deduped:
             deduped.append(n)
     return deduped
