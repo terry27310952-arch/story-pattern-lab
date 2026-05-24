@@ -76,6 +76,30 @@ STATUS_LABELS = {
     "archived": "보관",
 }
 
+TIME_WINDOWS = {
+    "week": {"label": "최근 1주일", "days": 7, "reddit_t": "week", "google_when": "7d"},
+    "month": {"label": "최근 1달", "days": 30, "reddit_t": "month", "google_when": "30d"},
+    "all": {"label": "전체 기간", "days": None, "reddit_t": "all", "google_when": ""},
+}
+
+CONTENT_STATUS_LABELS = {
+    "html_body": "HTML 원문 확보",
+    "rss_excerpt_fallback": "RSS 긴 요약 대체",
+    "metadata_only": "메타데이터만 있음",
+    "feed_summary": "피드 요약",
+    "body_too_short": "본문 너무 짧음",
+    "body_unavailable": "본문 미확보",
+    "non_article_price_page": "비기사 가격 페이지 제외",
+}
+
+FETCH_ATTEMPTED_STATUSES = {
+    "html_body",
+    "rss_excerpt_fallback",
+    "body_too_short",
+    "body_unavailable",
+    "non_article_price_page",
+}
+
 TOPIC_ALIASES = {
     "이더리움클래식": ["이더리움클래식", "이더리움 클래식", "Ethereum Classic", "$ETC", "ETC coin", "ETC/USDT", "ethereumclassic"],
     "이더리움 클래식": ["이더리움클래식", "이더리움 클래식", "Ethereum Classic", "$ETC", "ETC coin", "ETC/USDT", "ethereumclassic"],
@@ -194,6 +218,29 @@ def community_query(keyword: str) -> str:
 def query_string(keyword: str) -> str:
     terms = topic_terms(keyword)
     return terms[0] if len(terms) == 1 else " OR ".join([f'"{term}"' if " " in term else term for term in terms[:6]])
+
+
+def time_window_meta(time_window: str) -> dict:
+    return TIME_WINDOWS.get(time_window, TIME_WINDOWS["week"])
+
+
+def time_window_label(time_window: str) -> str:
+    return time_window_meta(time_window)["label"]
+
+
+def google_news_query(keyword: str, time_window: str) -> str:
+    query = query_string(keyword)
+    when = time_window_meta(time_window).get("google_when")
+    return f"{query} when:{when}" if when else query
+
+
+def within_time_window(age_hours: float, time_window: str) -> bool:
+    days = time_window_meta(time_window).get("days")
+    if days is None:
+        return True
+    if age_hours >= 999:
+        return False
+    return age_hours <= float(days) * 24
 
 
 def parse_date(value: str | None) -> tuple[str, float]:
@@ -426,6 +473,23 @@ def has_meaningful_text(text: str) -> bool:
     return len(cleaned) >= 260 and len(lines) >= 3
 
 
+def base_content_status(status: str) -> str:
+    return re.sub(r"_(HTTPError|URLError|TimeoutError|ValueError|OSError)$", "", status or "")
+
+
+def item_original_fetch_attempted(item: dict) -> bool:
+    return bool(item.get("body_collected_at")) or base_content_status(item.get("content_status", "")) in FETCH_ATTEMPTED_STATUSES
+
+
+def item_has_original_text(item: dict) -> bool:
+    return item_original_fetch_attempted(item) and has_meaningful_text(item.get("original_text", ""))
+
+
+def content_status_label(status: str) -> str:
+    base_status = base_content_status(status)
+    return CONTENT_STATUS_LABELS.get(base_status, status or "unknown")
+
+
 def source_status_for_short_body(url: str, body: str, fallback: str) -> tuple[str, str]:
     fallback_clean = clean_text(fallback, 5000)
     parsed = urlparse(url)
@@ -653,9 +717,9 @@ def make_item(
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_rss_source(source: dict, keyword: str, limit: int) -> tuple[list[dict], str]:
+def fetch_rss_source(source: dict, keyword: str, limit: int, time_window: str) -> tuple[list[dict], str]:
     terms = topic_terms(keyword)
-    url = source["url_template"].format(query=quote(query_string(keyword))) if source["mode"] == "query" else source["url"]
+    url = source["url_template"].format(query=quote(google_news_query(keyword, time_window))) if source["mode"] == "query" else source["url"]
     try:
         root = ET.fromstring(request_text(url))
     except (HTTPError, URLError, TimeoutError, ET.ParseError, ValueError) as exc:
@@ -668,6 +732,8 @@ def fetch_rss_source(source: dict, keyword: str, limit: int) -> tuple[list[dict]
         if source["mode"] == "feed" and source.get("match", "topic") != "latest" and not matches_topic(title, summary, terms):
             continue
         published, age_hours = parse_date(child_text(node, {"pubdate", "published", "updated", "date"}))
+        if not within_time_window(age_hours, time_window):
+            continue
         raw_link = child_link(node)
         source_url = resolve_source_url(raw_link)
         if is_low_value_news_item(title, summary, source_url):
@@ -697,8 +763,8 @@ def fetch_rss_source(source: dict, keyword: str, limit: int) -> tuple[list[dict]
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_reddit_source(source: dict, keyword: str, limit: int) -> tuple[list[dict], str]:
-    url = f"https://www.reddit.com/r/{source['sub']}/search.json?{urlencode({'q': community_query(keyword), 'restrict_sr': '1', 'sort': 'hot', 't': 'week', 'limit': limit})}"
+def fetch_reddit_source(source: dict, keyword: str, limit: int, time_window: str) -> tuple[list[dict], str]:
+    url = f"https://www.reddit.com/r/{source['sub']}/search.json?{urlencode({'q': community_query(keyword), 'restrict_sr': '1', 'sort': 'top', 't': time_window_meta(time_window)['reddit_t'], 'limit': limit})}"
     try:
         data = json.loads(request_text(url, timeout=8, accept="application/json,*/*"))
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
@@ -709,6 +775,8 @@ def fetch_reddit_source(source: dict, keyword: str, limit: int) -> tuple[list[di
             continue
         created = datetime.fromtimestamp(float(post.get("created_utc", 0) or 0), tz=timezone.utc)
         age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
+        if not within_time_window(age_hours, time_window):
+            continue
         items.append(
             make_item(
                 source["name"],
@@ -730,8 +798,13 @@ def fetch_reddit_source(source: dict, keyword: str, limit: int) -> tuple[list[di
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_hacker_news(keyword: str, limit: int) -> tuple[list[dict], str]:
-    url = f"https://hn.algolia.com/api/v1/search?{urlencode({'query': community_query(keyword), 'tags': 'story', 'hitsPerPage': limit})}"
+def fetch_hacker_news(keyword: str, limit: int, time_window: str) -> tuple[list[dict], str]:
+    params = {"query": community_query(keyword), "tags": "story", "hitsPerPage": limit}
+    days = time_window_meta(time_window).get("days")
+    if days is not None:
+        cutoff = int(datetime.now(timezone.utc).timestamp() - float(days) * 86400)
+        params["numericFilters"] = f"created_at_i>{cutoff}"
+    url = f"https://hn.algolia.com/api/v1/search?{urlencode(params)}"
     try:
         data = json.loads(request_text(url, timeout=8, accept="application/json,*/*"))
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
@@ -739,6 +812,8 @@ def fetch_hacker_news(keyword: str, limit: int) -> tuple[list[dict], str]:
     items = []
     for hit in data.get("hits", []):
         created, age_hours = parse_date(hit.get("created_at"))
+        if not within_time_window(age_hours, time_window):
+            continue
         items.append(
             make_item(
                 "Hacker News",
@@ -769,19 +844,19 @@ def dedupe_items(items: list[dict]) -> list[dict]:
     return deduped
 
 
-def run_collection(keyword: str, active_groups: list[str], per_source: int) -> tuple[list[dict], list[str]]:
+def run_collection(keyword: str, active_groups: list[str], per_source: int, time_window: str) -> tuple[list[dict], list[str]]:
     all_items, status = [], []
     for source in RSS_SOURCES:
         if source["group"] in active_groups:
-            items, msg = fetch_rss_source(source, keyword, per_source)
+            items, msg = fetch_rss_source(source, keyword, per_source, time_window)
             all_items.extend(items)
             status.append(msg)
     if "community" in active_groups:
         for source in REDDIT_SOURCES:
-            items, msg = fetch_reddit_source(source, keyword, max(3, per_source))
+            items, msg = fetch_reddit_source(source, keyword, max(3, per_source), time_window)
             all_items.extend(items)
             status.append(msg)
-        hn_items, hn_msg = fetch_hacker_news(keyword, per_source)
+        hn_items, hn_msg = fetch_hacker_news(keyword, per_source, time_window)
         all_items.extend(hn_items)
         status.append(hn_msg)
     return dedupe_items(all_items), status
@@ -809,15 +884,18 @@ def status_badge(status: str) -> str:
     return f'<span class="pill {css}">{escape(STATUS_LABELS.get(status, status))}</span>'
 
 
-def export_rows(items: list[dict], keyword: str) -> list[dict]:
+def export_rows(items: list[dict], keyword: str, time_window: str) -> list[dict]:
     rows = []
     for index, item in enumerate(items, start=1):
+        export_original_text = item.get("original_text", "") if item_original_fetch_attempted(item) else ""
         rows.append(
             {
                 "rank": index,
                 "status": STATUS_LABELS.get(item_status(item["id"]), item_status(item["id"])),
                 "query": keyword,
+                "search_period": time_window_label(time_window),
                 "captured_at": item.get("captured_at", ""),
+                "body_collected_at": item.get("body_collected_at", ""),
                 "source_group": item.get("source_group", SOURCE_GROUPS.get(item.get("group", ""), item.get("group", ""))),
                 "country_group": item.get("country_group", ""),
                 "collection_method": item.get("collection_method", ""),
@@ -827,7 +905,8 @@ def export_rows(items: list[dict], keyword: str) -> list[dict]:
                 "origin": item.get("origin", ""),
                 "title": item.get("title", ""),
                 "summary": item.get("summary", ""),
-                "original_text": item.get("original_text", ""),
+                "original_text": export_original_text,
+                "original_text_chars": len(export_original_text or ""),
                 "content_status": item.get("content_status", "feed_summary"),
                 "url": item.get("url", ""),
                 "rss_url": item.get("rss_url", ""),
@@ -853,8 +932,8 @@ def export_rows(items: list[dict], keyword: str) -> list[dict]:
     return rows
 
 
-def csv_payload(items: list[dict], keyword: str) -> bytes:
-    return pd.DataFrame(export_rows(items, keyword)).to_csv(index=False).encode("utf-8-sig")
+def csv_payload(items: list[dict], keyword: str, time_window: str) -> bytes:
+    return pd.DataFrame(export_rows(items, keyword, time_window)).to_csv(index=False).encode("utf-8-sig")
 
 
 def table_rows(items: list[dict]) -> list[dict]:
@@ -979,7 +1058,13 @@ def render_detail(item: dict) -> None:
     if st.button("이 소재만 원문 본문 보강", key=f"enrich_{item['id']}", width="stretch"):
         with st.spinner("원문 본문을 가져오는 중입니다."):
             text, status = fetch_original_text(item.get("url", ""), item.get("summary", ""))
-            update_item(item["id"], original_text=text, content_status=status)
+            update_item(
+                item["id"],
+                original_text=text,
+                content_status=status,
+                body_collected_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+                original_text_chars=len(text or ""),
+            )
         st.success("본문 보강을 시도했습니다.")
         st.rerun()
 
@@ -999,7 +1084,16 @@ def render_leaderboard(items: list[dict], title: str, sort_key: str, ascending: 
     )
 
 
-for key, default in {"items": [], "status": [], "last_query": "", "item_statuses": {}, "last_collected_at": ""}.items():
+for key, default in {
+    "items": [],
+    "status": [],
+    "last_query": "",
+    "last_time_window": "week",
+    "item_statuses": {},
+    "last_collected_at": "",
+    "last_body_collected_at": "",
+    "bulk_fetch_stats": {},
+}.items():
     st.session_state.setdefault(key, default)
 
 
@@ -1009,29 +1103,41 @@ st.sidebar.write("검색 주제에 맞는 원자료를 모으고, 제작 후보�
 st.sidebar.caption("LLM 제작실은 비활성화되어 있습니다. 현재 단계는 수집, 점수화, 후보 선별에 집중합니다.")
 st.sidebar.divider()
 keyword = st.sidebar.text_input("검색 주제", value=st.session_state.get("last_query") or "이더리움클래식", placeholder="이더리움클래식, BTC, NVDA")
+time_window_keys = list(TIME_WINDOWS)
+time_window = st.sidebar.selectbox(
+    "검색 기간",
+    time_window_keys,
+    index=time_window_keys.index(st.session_state.get("last_time_window", "week")) if st.session_state.get("last_time_window", "week") in time_window_keys else 0,
+    format_func=time_window_label,
+)
 active_groups = [key for key, label in SOURCE_GROUPS.items() if key != "market_intel" and st.sidebar.checkbox(label, value=key in DEFAULT_GROUPS)]
 include_refs = st.sidebar.checkbox(SOURCE_GROUPS["market_intel"], value=True)
 per_source = st.sidebar.slider("소스별 최대 수집", 3, 12, 6)
 if st.sidebar.button("수집하고 점수화", type="primary", width="stretch"):
     with st.spinner("RSS와 커뮤니티 반응을 수집하고 점수화하는 중입니다."):
-        collected_items, status = run_collection(keyword, active_groups, per_source)
+        collected_items, status = run_collection(keyword, active_groups, per_source, time_window)
         st.session_state["items"] = collected_items
         st.session_state["status"] = status
         st.session_state["last_query"] = keyword
+        st.session_state["last_time_window"] = time_window
         st.session_state["last_collected_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        st.session_state["last_body_collected_at"] = ""
+        st.session_state["bulk_fetch_stats"] = {}
         for item in collected_items:
             st.session_state["item_statuses"].setdefault(item["id"], "collected")
 if st.sidebar.button("결과 초기화", width="stretch"):
     st.session_state["items"], st.session_state["status"], st.session_state["last_query"] = [], [], ""
-    st.session_state["item_statuses"], st.session_state["last_collected_at"] = {}, ""
+    st.session_state["last_time_window"], st.session_state["last_body_collected_at"] = "week", ""
+    st.session_state["item_statuses"], st.session_state["last_collected_at"], st.session_state["bulk_fetch_stats"] = {}, "", {}
     st.rerun()
 
 items = st.session_state["items"]
 query_label = st.session_state.get("last_query") or keyword
+current_time_window = st.session_state.get("last_time_window", time_window)
 approved_count = len([item for item in items if item_status(item["id"]) == "approved"])
 candidate_count = len([item for item in items if item_status(item["id"]) in {"candidate", "approved"}])
 recent_count = len([item for item in items if item["age_hours"] <= 24])
-body_count = len([item for item in items if item.get("content_status") == "html_body"])
+body_count = len([item for item in items if item_has_original_text(item)])
 avg_production = round(sum(item["production_score"] for item in items) / len(items), 1) if items else 0
 
 st.markdown('<p class="eyebrow">Discovery to Decision</p>', unsafe_allow_html=True)
@@ -1043,6 +1149,7 @@ st.markdown(
 )
 st.markdown(
     f'<span class="pill pill-red">검색어: {escape(query_label)}</span>'
+    f'<span class="pill">검색 기간: {escape(time_window_label(current_time_window))}</span>'
     f'<span class="pill">확장어: {escape(", ".join(topic_terms(query_label)[:6]))}</span>'
     f'<span class="pill">최근 수집: {escape(st.session_state.get("last_collected_at") or "아직 없음")}</span>',
     unsafe_allow_html=True,
@@ -1056,7 +1163,7 @@ for col, (label, value, help_text) in zip(
         ("평균 Production", avg_production, "제작 후보 종합 점수"),
         ("후보/승인", candidate_count, "candidate 또는 approved"),
         ("최근 24시간", recent_count, "발행 시점 기준"),
-        ("본문 보강", body_count, "HTML 원문 추출 완료"),
+        ("원문 확보", body_count, "CSV에 들어갈 본문 텍스트 확보"),
     ],
 ):
     with col:
@@ -1136,6 +1243,7 @@ with matrix_tab:
         st.info("수집을 실행하면 소스별 커버리지와 점수 분포가 표시됩니다.")
     else:
         df = pd.DataFrame(items)
+        df["has_original_text"] = [item_has_original_text(item) for item in items]
         st.bar_chart(df.groupby(["source_group", "mood"]).size().reset_index(name="count"), x="source_group", y="count", color="mood")
         source_summary = (
             df.groupby(["source_group", "source", "source_type", "policy_risk_level"])
@@ -1144,7 +1252,7 @@ with matrix_tab:
                 avg_production=("production_score", "mean"),
                 avg_viral=("viral_score", "mean"),
                 comments=("comments", "sum"),
-                body_ready=("content_status", lambda values: int((values == "html_body").sum())),
+                body_ready=("has_original_text", "sum"),
             )
             .reset_index()
             .sort_values(["source_group", "count", "avg_production"], ascending=[True, False, False])
@@ -1159,40 +1267,70 @@ with export_tab:
         st.info("수집된 후보가 없습니다.")
     else:
         export_cols = st.columns(3)
+        pending_fetch_count = len([item for item in items if not item_original_fetch_attempted(item)])
         with export_cols[0]:
             score_card("CSV 행", len(items), "상태와 점수 포함")
         with export_cols[1]:
-            score_card("본문 보강", body_count, "HTML 원문 추출 완료")
+            score_card("원문 확보", body_count, "다운로드 CSV에 포함될 본문")
         with export_cols[2]:
-            score_card("최근 24시간", recent_count, "발행 시점 기준")
+            score_card("수집 미시도", pending_fetch_count, "일괄 수집 대상")
+
+        refresh_existing = st.checkbox("이미 확보된 원문도 다시 수집", value=False)
+        target_indexes = [
+            index for index, item in enumerate(items)
+            if refresh_existing or not item_original_fetch_attempted(item)
+        ]
+        if st.button("전체 소스 원문 일괄 수집", type="primary", width="stretch", disabled=not target_indexes):
+            updated_items = [dict(item) for item in items]
+            progress = st.progress(0)
+            status_line = st.empty()
+            stats: dict[str, int] = {}
+            collected_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+            total_targets = len(target_indexes)
+            for done_count, item_index in enumerate(target_indexes, start=1):
+                item = updated_items[item_index]
+                status_line.caption(f"{done_count}/{total_targets} · {item.get('source', '')} · {item.get('title', '')[:80]}")
+                text, status = fetch_original_text(item.get("url", ""), item.get("summary", ""))
+                item["original_text"] = text
+                item["content_status"] = status
+                item["body_collected_at"] = collected_at
+                item["original_text_chars"] = len(text or "")
+                stats[status] = stats.get(status, 0) + 1
+                progress.progress(done_count / total_targets)
+            st.session_state["items"] = updated_items
+            st.session_state["last_body_collected_at"] = collected_at
+            st.session_state["bulk_fetch_stats"] = stats
+            st.success(f"전체 대상 {total_targets}개 원문 수집을 완료했습니다. 바로 아래 CSV 다운로드에 반영됩니다.")
+            st.rerun()
+
+        if st.session_state.get("last_body_collected_at"):
+            st.caption(f"마지막 원문 일괄 수집: {st.session_state['last_body_collected_at']}")
+        if st.session_state.get("bulk_fetch_stats"):
+            stat_text = " · ".join(
+                f"{content_status_label(status)} {count}개"
+                for status, count in sorted(st.session_state["bulk_fetch_stats"].items())
+            )
+            st.caption(stat_text)
+
         st.download_button(
-            "CSV 다운로드",
-            data=csv_payload(items, query_label),
+            "원문 포함 CSV 다운로드",
+            data=csv_payload(items, query_label, current_time_window),
             file_name=f"story_radar_{safe_filename(query_label)}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
             mime="text/csv",
             type="primary",
             width="stretch",
             key="download-story-radar-csv",
         )
-        enrich_count = 1 if len(items) == 1 else st.slider("본문을 추가로 가져올 상위 후보 수", 1, len(items), min(len(items), 20))
-        if st.button("상위 후보 원문 본문 보강", width="stretch"):
-            updated_items = [dict(item) for item in items]
-            progress = st.progress(0)
-            for index, item in enumerate(updated_items[:enrich_count], start=1):
-                item["original_text"], item["content_status"] = fetch_original_text(item.get("url", ""), item.get("summary", ""))
-                progress.progress(index / enrich_count)
-            st.session_state["items"] = updated_items
-            st.success(f"{enrich_count}개 후보의 원문 본문 보강을 시도했습니다.")
-            st.rerun()
         with st.expander("수집 로그"):
             for msg in st.session_state["status"]:
                 st.caption(msg)
-        preview = pd.DataFrame(export_rows(items, query_label))
+        preview = pd.DataFrame(export_rows(items, query_label, current_time_window))
         st.dataframe(
             preview[
                 [
                     "rank",
                     "status",
+                    "search_period",
                     "production_score",
                     "viral_score",
                     "velocity_score",
@@ -1201,6 +1339,7 @@ with export_tab:
                     "source_group",
                     "source",
                     "content_status",
+                    "original_text_chars",
                     "published",
                     "title",
                     "url",
