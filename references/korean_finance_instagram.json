@@ -1,0 +1,65 @@
+[
+  {
+    "category": "경제신문/뉴스",
+    "handle": "@hankyungmedia_official",
+    "name": "한국경제신문",
+    "url": "https://www.instagram.com/hankyungmedia_official/",
+    "use": "뉴스형 카드뉴스, 부동산/증시 이슈 후킹 참고용"
+  },
+  {
+    "category": "경제신문/뉴스",
+    "handle": "@mk.co.kr",
+    "name": "매일경제",
+    "url": "https://www.instagram.com/mk.co.kr/",
+    "use": "넓은 경제 이슈를 대중형 썸네일로 뽑는 방식 참고"
+  },
+  {
+    "category": "경제 방송",
+    "handle": "@3protv.official",
+    "name": "삼프로TV",
+    "url": "https://www.instagram.com/3protv.official/",
+    "use": "전문가 인터뷰, 시장 해석, 릴스형 금융 인사이트 참고"
+  },
+  {
+    "category": "2030 경제미디어",
+    "handle": "@uppity.official",
+    "name": "어피티",
+    "url": "https://www.instagram.com/uppity.official/",
+    "use": "경제 뉴스레터 기반으로 쉬운 경제 콘텐츠를 카드화하는 방식 참고"
+  },
+  {
+    "category": "금융 브랜드 미디어",
+    "handle": "@toss_feed",
+    "name": "토스피드",
+    "url": "https://www.instagram.com/toss_feed/",
+    "use": "금융과 삶을 엮는 토스피드 계정. 경제를 라이프스타일 콘텐츠처럼 푸는 방식 참고"
+  },
+  {
+    "category": "증권/투자",
+    "handle": "@toss.securities",
+    "name": "토스증권",
+    "url": "https://www.instagram.com/toss.securities/",
+    "use": "증시 이슈, 투자자 공감형 콘텐츠, 빠른 시장 반응형 포맷 참고"
+  },
+  {
+    "category": "경제TV",
+    "handle": "@sen__tv",
+    "name": "서울경제TV",
+    "url": "https://www.instagram.com/sen__tv/",
+    "use": "경제/금융 이슈를 젊은 채널 톤으로 가공하는 참고 계정"
+  },
+  {
+    "category": "카드뉴스형",
+    "handle": "@economy_cardnews",
+    "name": "경제 카드뉴스",
+    "url": "https://www.instagram.com/economy_cardnews/",
+    "use": "경제신문·경제 흐름을 카드뉴스로 정리하는 계정. 초보자용 카드 구성 참고"
+  },
+  {
+    "category": "재테크 개인/브랜드",
+    "handle": "@rich_tcher",
+    "name": "리치티처",
+    "url": "https://www.instagram.com/rich_tcher/",
+    "use": "재테크·경제공부·투자 카드뉴스형 개인 브랜드 참고"
+  }
+]
