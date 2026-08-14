@@ -99,6 +99,15 @@ def as_plain_number(value: object) -> str:
         return str(value)
 
 
+def to_float(value: object, default: float | None = None) -> float | None:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
 def rsi_state(value: object) -> str:
     try:
         number = float(value)
@@ -176,6 +185,142 @@ def level_trigger(market_summary: dict, side: str) -> str:
     if side == "resistance":
         return as_price(market_summary.get("btc_nearest_resistance"))
     return as_price(market_summary.get("btc_nearest_support"))
+
+
+def build_trader_stance(market_summary: dict, topics: list[str], findings: list[dict]) -> dict:
+    price = to_float(market_summary.get("btc_price"))
+    support = to_float(market_summary.get("btc_nearest_support"))
+    resistance = to_float(market_summary.get("btc_nearest_resistance"))
+    ma20 = to_float(market_summary.get("btc_ma20"))
+    ma50 = to_float(market_summary.get("btc_ma50"))
+    ma200 = to_float(market_summary.get("btc_ma200"))
+    rsi_value = to_float(market_summary.get("btc_rsi14"))
+    funding = to_float(market_summary.get("btc_funding_rate"))
+    btc_7d = to_float(market_summary.get("btc_7d"), 0.0) or 0.0
+    eth_7d = to_float(market_summary.get("eth_7d"), 0.0) or 0.0
+    macd_bias = market_summary.get("btc_macd_bias")
+    risk_points = int(to_float(market_summary.get("risk_points"), 0) or 0)
+
+    score = 50 + risk_points * 5
+    if price and ma20:
+        score += 8 if price > ma20 else -8
+    if price and ma50:
+        score += 8 if price > ma50 else -8
+    if price and ma200:
+        score += 10 if price > ma200 else -10
+    if rsi_value is not None:
+        score += 8 if 50 <= rsi_value <= 65 else -8 if rsi_value < 42 or rsi_value > 75 else 0
+    score += 8 if macd_bias == "bullish" else -8 if macd_bias == "bearish" else 0
+    if funding is not None:
+        score += -4 if funding > 0.04 else 3 if funding < 0 else 0
+    score = max(5, min(95, score))
+
+    above_resistance = price is not None and resistance is not None and price > resistance
+    below_support = price is not None and support is not None and price < support
+    below_ma200 = price is not None and ma200 is not None and price < ma200
+    below_ma20 = price is not None and ma20 is not None and price < ma20
+    eth_outperform = eth_7d > btc_7d
+
+    if score >= 68 or above_resistance:
+        bias = "상방 추세 재개를 우선 의심"
+        posture = "돌파 확인 후 분할 롱"
+        market_read = (
+            "내 관점에서는 시장이 이미 공포 구간을 지나 저항 흡수 여부를 테스트하는 단계입니다. "
+            "다만 돌파 직후 한 번의 되돌림은 흔하므로 첫 양봉을 추격하기보다 돌파 가격을 다시 지키는지를 봅니다."
+        )
+        expected_path = (
+            f"내가 보는 우선 경로는 {level_trigger(market_summary, 'resistance')} 돌파 후 얕은 되돌림, "
+            "그 다음 MA20/MA50 위 안착을 확인하는 흐름입니다. 이 흐름이 나오면 알트는 후행으로 붙을 가능성이 큽니다."
+        )
+    elif score <= 38 or below_support:
+        bias = "하방 리스크 우선"
+        posture = "현금 비중 우위, 반등은 짧게"
+        market_read = (
+            "내 관점에서는 지금 시장을 싸다고 보기보다 아직 매물이 정리되지 않은 구간으로 봅니다. "
+            "호재가 나와도 지지 회복 전에는 반등 매매 이상으로 의미를 키우지 않습니다."
+        )
+        expected_path = (
+            f"내가 보는 우선 경로는 {level_trigger(market_summary, 'support')} 재시험입니다. "
+            f"여기서 빠른 회복이 나오면 {level_trigger(market_summary, 'resistance')}까지 짧은 반등, "
+            "회복이 실패하면 다음 지지 확인 전까지 알트가 더 크게 흔들릴 가능성을 봅니다."
+        )
+    elif below_ma200 or below_ma20:
+        bias = "중립-약세, 돌파 확인 전 관망"
+        posture = "박스권 대응, 추격 금지"
+        market_read = (
+            "내 관점에서는 현재 구간을 추세 상승장으로 보지 않습니다. "
+            "가격은 단기 지지 위에 있지만 주요 이동평균을 완전히 회복하지 못해, 좋은 뉴스도 박스권 안에서 소모될 가능성을 먼저 봅니다."
+        )
+        expected_path = (
+            f"내가 보는 기본 경로는 {level_trigger(market_summary, 'support')}~{level_trigger(market_summary, 'resistance')} 박스권 소모입니다. "
+            "한쪽으로 튀는 첫 움직임보다, 그 가격을 다시 지키는 두 번째 반응이 더 중요합니다."
+        )
+    else:
+        bias = "중립-상방, 눌림 확인"
+        posture = "지지 확인 후 소액 분할"
+        market_read = (
+            "내 관점에서는 무리하게 비관할 구간은 아니지만, 아직 확신을 크게 싣기보다 눌림이 얕은지 확인해야 하는 자리입니다. "
+            "강한 종목보다 BTC가 먼저 구조를 지키는지가 우선입니다."
+        )
+        expected_path = (
+            f"내가 보는 우선 경로는 {level_trigger(market_summary, 'support')} 위에서 눌림을 버티고 "
+            f"{level_trigger(market_summary, 'resistance')}을 다시 두드리는 흐름입니다. 실패하면 관망으로 돌아갑니다."
+        )
+
+    entry_plan = (
+        f"1차 진입은 {level_trigger(market_summary, 'support')} 부근에서 꼬리 회복과 거래량 반응이 같이 나올 때만 작게 봅니다. "
+        f"추가 진입은 {level_trigger(market_summary, 'resistance')} 위 종가 안착 후 되돌림이 얕을 때로 제한합니다."
+    )
+    if below_support:
+        entry_plan = (
+            f"현재가가 지지 아래라면 신규 롱은 보류합니다. 먼저 {level_trigger(market_summary, 'support')} 회복을 확인하고, "
+            "회복 실패 시 반등은 매도 유동성으로 봅니다."
+        )
+    elif above_resistance:
+        entry_plan = (
+            f"{level_trigger(market_summary, 'resistance')} 돌파가 이미 나온 상태라면 첫 추격보다 되돌림에서 해당 가격을 지지로 바꾸는지 봅니다. "
+            "지지 전환이 확인될 때만 분할 롱을 인정합니다."
+        )
+
+    profit_plan = (
+        "익절은 한 번에 맞추는 방식보다 저항 돌파 후 1차 청산, MA20/MA50 재이탈 시 잔여 축소, "
+        "강한 거래량이 유지될 때만 일부를 추세 포지션으로 남기는 방식을 선호합니다."
+    )
+    risk_plan = (
+        f"무효화는 {level_trigger(market_summary, 'support')} 이탈입니다. 이탈 후 빠른 회복이 없으면 내 시나리오는 틀린 것으로 보고, "
+        "알트와 레버리지 노출을 먼저 줄입니다."
+    )
+    no_trade = (
+        f"{level_trigger(market_summary, 'support')}와 {level_trigger(market_summary, 'resistance')} 사이에서 거래량 없이 흔들리는 구간은 내 기준에서 매매 금지에 가깝습니다. "
+        "이 구간은 예측보다 기다림의 가치가 큽니다."
+    )
+    alt_plan = (
+        "알트는 BTC보다 먼저 사지 않습니다. "
+        + (
+            "ETH가 BTC보다 강하므로 BTC 지지 유지가 확인되면 ETH/SOL/XRP 쪽으로 베타를 일부 열 수 있습니다."
+            if eth_outperform
+            else "ETH 상대강도가 아직 강하지 않으므로 알트 뉴스는 콘텐츠 소재로만 보고, 실제 비중은 BTC 구조 확인 뒤에 둡니다."
+        )
+    )
+    subjective_note = (
+        "내 매매법은 바닥 맞히기가 아니라 '틀렸을 때 빨리 나올 수 있는 자리'만 고르는 방식입니다. "
+        "그래서 좋은 기사보다 더 중요한 것은 가격이 그 기사를 지지/저항에서 어떻게 소화했는가입니다."
+    )
+
+    return {
+        "persona": "BTC 구조 우선 스윙 트레이더",
+        "conviction_score": round(score, 1),
+        "directional_bias": bias,
+        "preferred_posture": posture,
+        "market_read": market_read,
+        "expected_path": expected_path,
+        "entry_plan": entry_plan,
+        "profit_plan": profit_plan,
+        "risk_plan": risk_plan,
+        "no_trade_zone": no_trade,
+        "alt_strategy": alt_plan,
+        "subjective_note": subjective_note,
+    }
 
 
 def source_line(row: dict, index: int) -> str:
@@ -320,26 +465,38 @@ def build_source_findings(resources: list[dict], market_summary: dict) -> list[d
     return findings
 
 
-def directional_thesis(market_summary: dict, topics: list[str], findings: list[dict]) -> str:
+def directional_thesis(market_summary: dict, topics: list[str], findings: list[dict], trader_stance: dict | None = None) -> str:
     bias = market_summary.get("bias")
     has_reg = "REG" in topics or "ETF" in topics
     has_alt = any(topic in topics for topic in ["ETH", "SOL", "XRP", "ALT", "WEB3"])
     full_sources = sum(1 for item in findings if item.get("material_chars", 0) >= 800)
     base = f"선택 원문 {len(findings)}건 중 {full_sources}건은 본문을 길게 확보했고, 핵심 축은 {', '.join(topics)}입니다."
     level_context = btc_level_context(market_summary)
+    stance_prefix = ""
+    if trader_stance:
+        stance_prefix = (
+            f"내 주관적 포지션은 '{trader_stance.get('preferred_posture')}'이며, "
+            f"방향 편향은 '{trader_stance.get('directional_bias')}'입니다. "
+        )
     if bias == "risk_on" and has_alt:
-        return f"{base} {level_context} 현재 해석은 BTC가 리스크 온 구조를 먼저 열어둔 뒤 알트가 후행 확산을 시도하는 국면입니다. 다만 알트는 뉴스 강도가 아니라 BTC 지지 유지와 ETH 상대강도 회복이 같이 확인될 때만 공격적으로 해석합니다."
+        return f"{stance_prefix}{base} {level_context} 현재 해석은 BTC가 리스크 온 구조를 먼저 열어둔 뒤 알트가 후행 확산을 시도하는 국면입니다. 다만 알트는 뉴스 강도가 아니라 BTC 지지 유지와 ETH 상대강도 회복이 같이 확인될 때만 공격적으로 해석합니다."
     if bias == "risk_off":
-        return f"{base} {level_context} 현재는 반등 기대보다 방어적 자금 이동을 먼저 봐야 합니다. BTC가 가까운 저항을 회복하기 전까지 알트 뉴스는 단기 반등 소재일 뿐 추세 전환 근거로 보기 어렵습니다."
+        return f"{stance_prefix}{base} {level_context} 현재는 반등 기대보다 방어적 자금 이동을 먼저 봐야 합니다. BTC가 가까운 저항을 회복하기 전까지 알트 뉴스는 단기 반등 소재일 뿐 추세 전환 근거로 보기 어렵습니다."
     if has_reg:
-        return f"{base} {level_context} 이번 묶음은 가격 차트보다 규제, ETF, 제도권 플로우가 방향을 흔드는 조합입니다. 발표 확인 전 포지션 확대보다 이벤트 전후 변동성 구간을 분리하는 판단이 우선입니다."
-    return f"{base} {level_context} 현재는 BTC 기준축, 니케이의 아시아 위험자산 심리, 골드의 방어 수요가 서로 엇갈리는 혼조 장세입니다. 방향 단정보다 시나리오별 조건을 두고 대응하는 문서가 필요합니다."
+        return f"{stance_prefix}{base} {level_context} 이번 묶음은 가격 차트보다 규제, ETF, 제도권 플로우가 방향을 흔드는 조합입니다. 발표 확인 전 포지션 확대보다 이벤트 전후 변동성 구간을 분리하는 판단이 우선입니다."
+    return f"{stance_prefix}{base} {level_context} 현재는 BTC 기준축, 니케이의 아시아 위험자산 심리, 골드의 방어 수요가 서로 엇갈리는 혼조 장세입니다. 방향 단정보다 시나리오별 조건을 두고 대응하는 문서가 필요합니다."
 
 
-def build_key_points(resources: list[dict], market_summary: dict, findings: list[dict]) -> list[str]:
+def build_key_points(resources: list[dict], market_summary: dict, findings: list[dict], trader_stance: dict | None = None) -> list[str]:
     topics = top_topics(resources)
     coverage = material_coverage(resources)
     points = [
+        (
+            f"내 관점: {trader_stance.get('directional_bias')} / {trader_stance.get('preferred_posture')} "
+            f"/ 확신도 {trader_stance.get('conviction_score')}점입니다."
+            if trader_stance
+            else "내 관점: 가격 레벨 확인 전까지 포지션 판단을 보류합니다."
+        ),
         f"원문 취합: 선택 {coverage['selected_sources']}건, 본문 확보 {coverage['full_text_sources']}건, 총 {coverage['total_material_chars']:,}자 기준으로 분석했습니다.",
         f"시장 체제: {market_summary.get('label')} / 내부 위험선호 점수 {market_summary.get('risk_points')}입니다.",
         btc_level_context(market_summary),
@@ -356,7 +513,7 @@ def build_key_points(resources: list[dict], market_summary: dict, findings: list
     return points
 
 
-def market_structure(market_summary: dict, topics: list[str]) -> dict:
+def market_structure(market_summary: dict, topics: list[str], trader_stance: dict | None = None) -> dict:
     btc = as_percent(market_summary.get("btc_7d"))
     eth = as_percent(market_summary.get("eth_7d"))
     nikkei = as_percent(market_summary.get("nikkei_7d"))
@@ -374,8 +531,18 @@ def market_structure(market_summary: dict, topics: list[str]) -> dict:
         regime = "현금화/방어자산 우위 경계 구간"
     else:
         regime = "방향성 확인 전 혼조 구간"
+    stance = trader_stance or {}
     return {
         "regime": regime,
+        "trader_bias": f"{stance.get('directional_bias', '데이터 확인 중')} / {stance.get('preferred_posture', '관망')} / 확신도 {stance.get('conviction_score', '데이터 미수집')}점",
+        "trader_market_read": stance.get("market_read", ""),
+        "trader_expected_path": stance.get("expected_path", ""),
+        "trader_entry_plan": stance.get("entry_plan", ""),
+        "trader_profit_plan": stance.get("profit_plan", ""),
+        "trader_risk_plan": stance.get("risk_plan", ""),
+        "trader_no_trade_zone": stance.get("no_trade_zone", ""),
+        "trader_alt_strategy": stance.get("alt_strategy", ""),
+        "trader_subjective_note": stance.get("subjective_note", ""),
         "critical_levels": f"BTC 현재가 {price}. 가까운 지지 {support}({support_distance}), 가까운 저항 {resistance}({resistance_distance})입니다. 이 두 가격이 이번 브리핑의 1차 시나리오 경계입니다.",
         "technical_indicators": btc_indicator_context(market_summary),
         "derivatives": btc_derivatives_context(market_summary),
@@ -442,6 +609,16 @@ def build_weekly_sections(thesis: str, market: dict, scenarios: list[dict], find
     )
     return [
         {
+            "heading": "내 매매 관점",
+            "body": (
+                f"{market.get('trader_market_read', '')}\n\n"
+                f"예상 경로: {market.get('trader_expected_path', '')}\n\n"
+                f"진입: {market.get('trader_entry_plan', '')}\n\n"
+                f"리스크: {market.get('trader_risk_plan', '')}\n\n"
+                f"하지 않을 행동: {market.get('trader_no_trade_zone', '')}"
+            ),
+        },
+        {
             "heading": "이번 주 핵심 논지",
             "body": f"{thesis}\n\n{source_summary} 따라서 이번 주 문서는 단순 가격 전망보다 BTC 기준축과 이벤트성 변동성을 분리해야 합니다.",
         },
@@ -507,10 +684,11 @@ def local_generate_brief(resources: list[dict], market_snapshot: dict, briefing_
     market_summary = summarize_market(market_snapshot)
     topics = top_topics(resources)
     findings = build_source_findings(resources, market_summary)
-    thesis = directional_thesis(market_summary, topics, findings)
-    market = market_structure(market_summary, topics)
+    trader_stance = build_trader_stance(market_summary, topics, findings)
+    thesis = directional_thesis(market_summary, topics, findings, trader_stance)
+    market = market_structure(market_summary, topics, trader_stance)
     scenarios = build_scenarios(market_summary, topics, findings)
-    key_points = build_key_points(resources, market_summary, findings)
+    key_points = build_key_points(resources, market_summary, findings, trader_stance)
     source_lines = [source_line(row, index) for index, row in enumerate(resources[:20], start=1)]
     today = datetime.now().strftime("%Y-%m-%d")
     title_prefix = "주간 시장 방향 리서치" if briefing_type == "weekly" else "일간 시간대별 BTC 리서치"
@@ -525,22 +703,30 @@ def local_generate_brief(resources: list[dict], market_snapshot: dict, briefing_
         "reference_perspective": BITCOIN_ILLUMINATI_VIEWPOINT,
         "material_coverage": material_coverage(resources),
         "market_summary": market_summary,
+        "trader_stance": trader_stance,
         "market_structure": market,
         "source_findings": findings,
         "key_points": key_points,
         "trader_sentences": [
             thesis,
+            trader_stance["market_read"],
+            trader_stance["expected_path"],
+            trader_stance["entry_plan"],
+            trader_stance["risk_plan"],
             market["critical_levels"],
             market["technical_indicators"],
             market["btc_axis"],
             market["alts"],
-            market["defensive_assets"],
-            "핵심은 예측이 아니라 조건입니다. BTC가 구조를 지키면 알트 뉴스는 로테이션으로 승격되고, BTC가 무너지면 같은 뉴스도 단기 노이즈로 내려갑니다.",
+            trader_stance["subjective_note"],
         ],
         "scenarios": scenarios,
         "invalidation_points": build_invalidation_points(market_summary, findings),
         "action_plan": [
+            f"현재 입장: {trader_stance['directional_bias']} / {trader_stance['preferred_posture']} / 확신도 {trader_stance['conviction_score']}점.",
             f"1차 필터: BTC가 {level_trigger(market_summary, 'support')}을 지키는지, {level_trigger(market_summary, 'resistance')}을 회복하는지 먼저 판별합니다.",
+            f"진입 계획: {trader_stance['entry_plan']}",
+            f"익절 계획: {trader_stance['profit_plan']}",
+            f"하지 않을 행동: {trader_stance['no_trade_zone']}",
             "2차 필터: ETH 7D-BTC 7D 상대 변화율과 주요 알트 거래대금으로 알트 로테이션 여부를 확인합니다.",
             "3차 필터: 일본/글로벌 기사에서 공식 발표, 거래소 공지, ETF/규제 일정을 분리합니다.",
             "콘텐츠화: 카드뉴스는 강세 단정이 아니라 '조건이 충족되면 무엇이 바뀌는가'를 중심으로 구성합니다.",
@@ -658,7 +844,8 @@ def brief_prompt(resources: list[dict], market_snapshot: dict, briefing_type: st
                 "선택된 모든 리소스의 원문 full_material을 읽고 전문 트레이더 리서치 문서를 작성한다. "
                 "가벼운 요약, 단순 수치 나열, '중요합니다' 식 문장을 금지한다. "
                 "각 원문별 핵심 주장과 트레이더 해석을 분리하고, BTC 기준축과 알트 로테이션 조건을 명확히 쓴다. "
-                "market_snapshot.price_levels, technicals, derivatives의 숫자를 사용해 현재가, 지지, 저항, MA, RSI, MACD, ATR, 펀딩비를 반드시 포함한다."
+                "market_snapshot.price_levels, technicals, derivatives의 숫자를 사용해 현재가, 지지, 저항, MA, RSI, MACD, ATR, 펀딩비를 반드시 포함한다. "
+                "반드시 한 명의 주관적 트레이더처럼 directional_bias, entry_plan, profit_plan, risk_plan, no_trade_zone을 입장 표명 문장으로 쓴다."
             ),
             "briefing_type": briefing_type,
             "tone": tone,
@@ -670,8 +857,31 @@ def brief_prompt(resources: list[dict], market_snapshot: dict, briefing_type: st
                 "one_line": "2-3 sentence professional thesis",
                 "material_coverage": "object",
                 "market_summary": "object",
+                "trader_stance": {
+                    "persona": "string",
+                    "conviction_score": "number",
+                    "directional_bias": "subjective stance",
+                    "preferred_posture": "positioning style",
+                    "market_read": "first-person professional market read",
+                    "expected_path": "how this trader expects price to move from here",
+                    "entry_plan": "subjective entry plan",
+                    "profit_plan": "subjective take-profit plan",
+                    "risk_plan": "invalidation and stop plan",
+                    "no_trade_zone": "what this trader refuses to trade",
+                    "alt_strategy": "how this trader handles alts",
+                    "subjective_note": "personal trading philosophy",
+                },
                 "market_structure": {
                     "regime": "string",
+                    "trader_bias": "string",
+                    "trader_market_read": "paragraph",
+                    "trader_expected_path": "paragraph",
+                    "trader_entry_plan": "paragraph",
+                    "trader_profit_plan": "paragraph",
+                    "trader_risk_plan": "paragraph",
+                    "trader_no_trade_zone": "paragraph",
+                    "trader_alt_strategy": "paragraph",
+                    "trader_subjective_note": "paragraph",
                     "critical_levels": "current BTC price, nearest support/resistance and distances",
                     "technical_indicators": "MA20/50/200, RSI14, MACD, ATR14",
                     "derivatives": "funding, mark price, open interest",
@@ -718,6 +928,7 @@ def normalize_external_brief(parsed: dict, local: dict, provider: str) -> dict:
     parsed.setdefault("reference_perspective", BITCOIN_ILLUMINATI_VIEWPOINT)
     parsed.setdefault("material_coverage", local["material_coverage"])
     parsed.setdefault("market_summary", local["market_summary"])
+    parsed.setdefault("trader_stance", local["trader_stance"])
     parsed.setdefault("market_structure", local["market_structure"])
     parsed.setdefault("source_findings", local["source_findings"])
     parsed.setdefault("source_digest", local["source_digest"])
@@ -752,7 +963,8 @@ def generate_trader_brief(resources: list[dict], market_snapshot: dict, briefing
 
 def card_blueprint(count: int) -> list[str]:
     base = [
-        "시장 논지",
+        "내 관점",
+        "매매 계획",
         "BTC 가격 레벨",
         "보조지표",
         "원문 근거 1",
@@ -772,10 +984,20 @@ def make_card_set(brief: dict, resources: list[dict], count: int, label: str) ->
     market = brief.get("market_structure") or {}
     headings = card_blueprint(count)
     cards: list[dict] = []
+    stance = brief.get("trader_stance") or {}
     for index, heading in enumerate(headings, start=1):
         finding = findings[(index - 1) % len(findings)] if findings else {}
         scenario = scenarios[(index - 1) % len(scenarios)] if scenarios else {}
-        if "원문 근거" in heading and finding:
+        if heading == "내 관점":
+            body = clean_text(
+                f"{stance.get('directional_bias', '')} / {stance.get('preferred_posture', '')}. {stance.get('market_read', brief.get('one_line', ''))}",
+                220,
+            )
+            caption = clean_text(f"예상 경로: {stance.get('expected_path', '')}", 180)
+        elif heading == "매매 계획":
+            body = clean_text(f"{stance.get('entry_plan', '')} {stance.get('risk_plan', '')}", 220)
+            caption = clean_text(stance.get("no_trade_zone", ""), 180)
+        elif "원문 근거" in heading and finding:
             body = f"{finding.get('source')}의 원문은 {finding.get('role')}로 읽힙니다. 핵심은 {clean_text(finding.get('trader_read'), 140)}"
             caption = clean_text(" / ".join(finding.get("evidence", [])[:2]), 180)
         elif heading == "BTC 가격 레벨":
@@ -816,17 +1038,36 @@ def make_card_set(brief: dict, resources: list[dict], count: int, label: str) ->
 
 def build_note_markdown(brief: dict, resources: list[dict]) -> str:
     lines = [f"# {brief.get('title', 'Crypto Trader Briefing')}", "", brief.get("one_line", ""), ""]
-    lines.append("## 1. 결론")
+    stance = brief.get("trader_stance") or {}
+    lines.append("## 1. 내 매매 관점")
+    for key, label in [
+        ("persona", "관점"),
+        ("directional_bias", "방향 편향"),
+        ("preferred_posture", "선호 포지션"),
+        ("conviction_score", "확신도"),
+        ("market_read", "시장 해석"),
+        ("expected_path", "예상 경로"),
+        ("entry_plan", "진입 계획"),
+        ("profit_plan", "익절 계획"),
+        ("risk_plan", "무효화/리스크"),
+        ("no_trade_zone", "매매 금지 구간"),
+        ("alt_strategy", "알트 대응"),
+        ("subjective_note", "매매 철학"),
+    ]:
+        if stance.get(key) != "":
+            lines.append(f"- {label}: {stance.get(key)}")
+    lines.append("")
+    lines.append("## 2. 결론")
     for point in brief.get("key_points", []):
         lines.append(f"- {point}")
     lines.append("")
-    lines.append("## 2. 현재 가격·핵심 레벨")
+    lines.append("## 3. 현재 가격·핵심 레벨")
     market = brief.get("market_structure") or {}
     for key in ["critical_levels", "technical_indicators", "derivatives", "btc_axis", "alts"]:
         if market.get(key):
             lines.append(f"- {key}: {market.get(key)}")
     lines.append("")
-    lines.append("## 3. 원문별 해석")
+    lines.append("## 4. 원문별 해석")
     for item in brief.get("source_findings", []):
         lines.append(f"### {item.get('source')} - {item.get('title')}")
         lines.append(f"- 역할: {item.get('role')}")
@@ -834,18 +1075,18 @@ def build_note_markdown(brief: dict, resources: list[dict]) -> str:
             lines.append(f"- 근거: {evidence}")
         lines.append(f"- 트레이더 해석: {item.get('trader_read')}")
         lines.append("")
-    lines.append("## 4. 시장 구조")
+    lines.append("## 5. 시장 구조")
     for key, value in (brief.get("market_structure") or {}).items():
         lines.append(f"- {key}: {value}")
     lines.append("")
-    lines.append("## 5. 시나리오")
+    lines.append("## 6. 시나리오")
     for scenario in brief.get("scenarios", []):
         lines.append(f"### {scenario.get('case')}")
         lines.append(f"- 조건: {scenario.get('trigger')}")
         lines.append(f"- 경로: {scenario.get('expected_path')}")
         lines.append(f"- 체크: {scenario.get('watch')}")
     lines.append("")
-    lines.append("## 6. 무효화 조건")
+    lines.append("## 7. 무효화 조건")
     for item in brief.get("invalidation_points", []):
         lines.append(f"- {item}")
     lines.append("")

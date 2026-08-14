@@ -32,11 +32,20 @@ except Exception:
     fetch_article_body = None
 
 
-APP_VERSION = "2026-08-14 price-depth-refresh-v4"
+APP_VERSION = "2026-08-14 trader-stance-v5"
 
 
 MARKET_STRUCTURE_LABELS = {
     "regime": "시장 체제",
+    "trader_bias": "내 방향 편향",
+    "trader_market_read": "내 시장 해석",
+    "trader_expected_path": "내 예상 경로",
+    "trader_entry_plan": "내 진입 계획",
+    "trader_profit_plan": "내 익절 계획",
+    "trader_risk_plan": "내 무효화/리스크",
+    "trader_no_trade_zone": "내 매매 금지 구간",
+    "trader_alt_strategy": "내 알트 대응",
+    "trader_subjective_note": "내 매매 철학",
     "critical_levels": "현재 가격·핵심 레벨",
     "technical_indicators": "보조지표",
     "derivatives": "파생 포지션",
@@ -190,6 +199,26 @@ def markdown_brief(brief: dict) -> str:
     if not brief:
         return ""
     lines = [f"# {brief.get('title', 'Crypto Trader Briefing')}", "", brief.get("one_line", ""), ""]
+    if brief.get("trader_stance"):
+        stance = brief["trader_stance"]
+        lines.append("## 내 매매 관점")
+        for key, label in [
+            ("persona", "관점"),
+            ("directional_bias", "방향 편향"),
+            ("preferred_posture", "선호 포지션"),
+            ("conviction_score", "확신도"),
+            ("market_read", "시장 해석"),
+            ("expected_path", "예상 경로"),
+            ("entry_plan", "진입 계획"),
+            ("profit_plan", "익절 계획"),
+            ("risk_plan", "무효화/리스크"),
+            ("no_trade_zone", "매매 금지 구간"),
+            ("alt_strategy", "알트 대응"),
+            ("subjective_note", "매매 철학"),
+        ]:
+            if stance.get(key) != "":
+                lines.append(f"- {label}: {stance.get(key)}")
+        lines.append("")
     if brief.get("material_coverage"):
         coverage = brief["material_coverage"]
         lines.append("## 원문 취합 범위")
@@ -392,6 +421,21 @@ def render_brief(brief: dict) -> None:
         c3.metric("분석 글자수", f"{coverage.get('total_material_chars', 0):,}")
     st.markdown(f"### {brief.get('title', 'Briefing')}")
     st.markdown(f"<div class='brief-box'><strong>{brief.get('one_line', '')}</strong></div>", unsafe_allow_html=True)
+    stance = brief.get("trader_stance") or {}
+    if stance:
+        st.markdown("#### 내 매매 관점")
+        s1, s2, s3 = st.columns(3)
+        s1.metric("방향 편향", stance.get("directional_bias", "N/A"))
+        s2.metric("선호 포지션", stance.get("preferred_posture", "N/A"))
+        s3.metric("확신도", f"{stance.get('conviction_score', 'N/A')}점")
+        st.markdown(
+            f"<div class='brief-box'><strong>{stance.get('persona', '')}</strong><br>{stance.get('market_read', '')}<br><br>"
+            f"<strong>예상 경로:</strong> {stance.get('expected_path', '')}<br>"
+            f"<strong>진입:</strong> {stance.get('entry_plan', '')}<br>"
+            f"<strong>리스크:</strong> {stance.get('risk_plan', '')}<br>"
+            f"<strong>하지 않을 행동:</strong> {stance.get('no_trade_zone', '')}</div>",
+            unsafe_allow_html=True,
+        )
     col_a, col_b = st.columns([1, 1])
     with col_a:
         st.markdown("#### 핵심 포인트")

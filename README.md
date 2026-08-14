@@ -31,11 +31,15 @@ briefings, card news, Note content, and Excel packages.
    `https://www.youtube.com/@bitcoinilluminati`: BTC structure first, alts as
    downstream rotation, chart invalidation before conviction, and sentiment as
    a secondary signal.
-9. Split the briefing into card news sets: 5 slides, 6 slides, 7 slides, and a
+9. Generate a subjective `trader_stance` layer: directional bias, preferred
+   posture, conviction score, expected price path, entry plan, profit plan,
+   risk/invalidation, no trade zone, alt strategy, and personal trading
+   philosophy.
+10. Split the briefing into card news sets: 5 slides, 6 slides, 7 slides, and a
    custom AI suggestion.
-10. Export Markdown, JSON, and `.xlsx` files with separate sheets for briefing,
+11. Export Markdown, JSON, and `.xlsx` files with separate sheets for briefing,
     source findings, scenarios, card news, Note, sources, market data, price
-    levels, indicators, and derivatives.
+    levels, indicators, derivatives, and trader stance.
 
 ## Free Reasoning Options
 

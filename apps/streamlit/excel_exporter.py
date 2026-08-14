@@ -56,6 +56,7 @@ def add_brief_sheet(wb: Workbook, brief: dict) -> None:
         ("제목", brief.get("title", "")),
         ("한 줄 판단", brief.get("one_line", "")),
         ("생성 방식", brief.get("provider", "")),
+        ("내 매매 관점", brief.get("trader_stance", {})),
         ("시장 요약", brief.get("market_summary", {})),
         ("리스크", "\n".join(brief.get("risk_notes", []))),
     ]
@@ -95,6 +96,26 @@ def add_scenarios_sheet(wb: Workbook, brief: dict) -> None:
         ["case", "probability_view", "trigger", "expected_path", "watch"],
         brief.get("scenarios", []) or [],
     )
+
+
+def add_trader_stance_sheet(wb: Workbook, brief: dict) -> None:
+    ws = wb.create_sheet("Trader_Stance")
+    stance = brief.get("trader_stance", {}) or {}
+    rows = [
+        {"item": "persona", "value": stance.get("persona", "")},
+        {"item": "conviction_score", "value": stance.get("conviction_score", "")},
+        {"item": "directional_bias", "value": stance.get("directional_bias", "")},
+        {"item": "preferred_posture", "value": stance.get("preferred_posture", "")},
+        {"item": "market_read", "value": stance.get("market_read", "")},
+        {"item": "expected_path", "value": stance.get("expected_path", "")},
+        {"item": "entry_plan", "value": stance.get("entry_plan", "")},
+        {"item": "profit_plan", "value": stance.get("profit_plan", "")},
+        {"item": "risk_plan", "value": stance.get("risk_plan", "")},
+        {"item": "no_trade_zone", "value": stance.get("no_trade_zone", "")},
+        {"item": "alt_strategy", "value": stance.get("alt_strategy", "")},
+        {"item": "subjective_note", "value": stance.get("subjective_note", "")},
+    ]
+    append_table(ws, ["item", "value"], rows)
 
 
 def add_card_sheet(wb: Workbook, name: str, cards: list[dict]) -> None:
@@ -197,6 +218,7 @@ def add_derivatives_sheet(wb: Workbook, market_snapshot: dict) -> None:
 def build_excel_bytes(brief: dict, content_package: dict, resources: list[dict], market_snapshot: dict) -> bytes:
     wb = Workbook()
     add_brief_sheet(wb, brief)
+    add_trader_stance_sheet(wb, brief)
     add_source_findings_sheet(wb, brief)
     add_scenarios_sheet(wb, brief)
     for name, cards in (content_package.get("cards") or {}).items():
