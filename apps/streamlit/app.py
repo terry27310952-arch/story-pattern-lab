@@ -32,7 +32,7 @@ except Exception:
     fetch_article_body = None
 
 
-APP_VERSION = "2026-08-14 trader-stance-v5"
+APP_VERSION = "2026-08-14 perspective-briefing-v6"
 
 
 MARKET_STRUCTURE_LABELS = {
@@ -251,6 +251,10 @@ def markdown_brief(brief: dict) -> str:
             lines.append(f"### {scenario.get('case')}")
             lines.append(f"- 조건: {scenario.get('trigger')}")
             lines.append(f"- 예상 경로: {scenario.get('expected_path')}")
+            if scenario.get("trader_view"):
+                lines.append(f"- 내 해석: {scenario.get('trader_view')}")
+            if scenario.get("positioning"):
+                lines.append(f"- 포지션: {scenario.get('positioning')}")
             lines.append(f"- 체크: {scenario.get('watch')}")
         lines.append("")
     if brief.get("invalidation_points"):
@@ -475,6 +479,10 @@ def render_brief(brief: dict) -> None:
             st.markdown(f"#### {scenario.get('case')}")
             st.write(f"**조건:** {scenario.get('trigger')}")
             st.write(f"**예상 경로:** {scenario.get('expected_path')}")
+            if scenario.get("trader_view"):
+                st.write(f"**내 해석:** {scenario.get('trader_view')}")
+            if scenario.get("positioning"):
+                st.write(f"**포지션:** {scenario.get('positioning')}")
             st.caption(f"체크: {scenario.get('watch')}")
         if brief.get("invalidation_points"):
             st.markdown("#### 무효화 조건")
@@ -493,6 +501,8 @@ def render_brief(brief: dict) -> None:
             st.markdown(f"#### {block.get('time_zone', '')}")
             for item in block.get("watch", []):
                 st.write(f"- {item}")
+            if block.get("decision"):
+                st.write(f"**내 결정:** {block.get('decision')}")
             st.caption(block.get("trader_read", ""))
     with brief_tabs[5]:
         st.dataframe(brief.get("source_digest", []), hide_index=True, use_container_width=True)

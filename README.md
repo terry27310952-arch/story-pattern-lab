@@ -35,6 +35,9 @@ briefings, card news, Note content, and Excel packages.
    posture, conviction score, expected price path, entry plan, profit plan,
    risk/invalidation, no trade zone, alt strategy, and personal trading
    philosophy.
+   The same first-person trader perspective is embedded directly into
+   scenarios, weekly notes, and daily time-zone notes so the output reads like
+   a personal market view rather than a list of collected facts.
 10. Split the briefing into card news sets: 5 slides, 6 slides, 7 slides, and a
    custom AI suggestion.
 11. Export Markdown, JSON, and `.xlsx` files with separate sheets for briefing,

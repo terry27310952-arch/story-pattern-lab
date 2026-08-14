@@ -93,9 +93,29 @@ def add_scenarios_sheet(wb: Workbook, brief: dict) -> None:
     ws = wb.create_sheet("Scenarios")
     append_table(
         ws,
-        ["case", "probability_view", "trigger", "expected_path", "watch"],
+        ["case", "probability_view", "trigger", "expected_path", "trader_view", "positioning", "watch"],
         brief.get("scenarios", []) or [],
     )
+
+
+def add_weekly_sheet(wb: Workbook, brief: dict) -> None:
+    ws = wb.create_sheet("Weekly_View")
+    append_table(ws, ["heading", "body"], brief.get("weekly_brief", []) or [])
+
+
+def add_daily_sheet(wb: Workbook, brief: dict) -> None:
+    ws = wb.create_sheet("Daily_View")
+    rows = []
+    for block in brief.get("daily_brief", []) or []:
+        rows.append(
+            {
+                "time_zone": block.get("time_zone", ""),
+                "decision": block.get("decision", ""),
+                "watch": "\n".join(block.get("watch", [])),
+                "trader_read": block.get("trader_read", ""),
+            }
+        )
+    append_table(ws, ["time_zone", "decision", "watch", "trader_read"], rows)
 
 
 def add_trader_stance_sheet(wb: Workbook, brief: dict) -> None:
@@ -221,6 +241,8 @@ def build_excel_bytes(brief: dict, content_package: dict, resources: list[dict],
     add_trader_stance_sheet(wb, brief)
     add_source_findings_sheet(wb, brief)
     add_scenarios_sheet(wb, brief)
+    add_weekly_sheet(wb, brief)
+    add_daily_sheet(wb, brief)
     for name, cards in (content_package.get("cards") or {}).items():
         add_card_sheet(wb, f"Cards_{name}", cards)
     add_note_sheet(wb, content_package.get("note_markdown", ""))

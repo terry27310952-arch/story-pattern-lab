@@ -555,7 +555,7 @@ def market_structure(market_summary: dict, topics: list[str], trader_stance: dic
     }
 
 
-def build_scenarios(market_summary: dict, topics: list[str], findings: list[dict]) -> list[dict]:
+def build_scenarios(market_summary: dict, topics: list[str], findings: list[dict], trader_stance: dict) -> list[dict]:
     has_alt = any(topic in topics for topic in ["ETH", "SOL", "XRP", "ALT", "WEB3"])
     has_reg = "REG" in topics or "ETF" in topics
     support = level_trigger(market_summary, "support")
@@ -563,40 +563,54 @@ def build_scenarios(market_summary: dict, topics: list[str], findings: list[dict
     price = as_price(market_summary.get("btc_price"))
     indicator_context = btc_indicator_context(market_summary)
     derivative_context = btc_derivatives_context(market_summary)
+    preferred_posture = trader_stance.get("preferred_posture", "관망")
+    risk_plan = trader_stance.get("risk_plan", "")
+    no_trade = trader_stance.get("no_trade_zone", "")
+    alt_strategy = trader_stance.get("alt_strategy", "")
     return [
         {
             "case": "Bull",
             "probability_view": "조건부 우세",
             "trigger": f"BTC가 현재 {price} 부근에서 {support}을 지키고, 4H/일봉 종가가 {resistance} 위로 회복하는 경우",
-            "expected_path": "가까운 저항 회복은 단기 매물대 흡수 신호입니다. 이후 MA20/MA50 위 체류와 RSI 50선 이상 유지가 붙으면 ETH/SOL/XRP 등 선택 소스에 반복 등장한 섹터로 관심이 이동합니다.",
+            "expected_path": f"내가 보는 강세 경로는 {resistance} 위 종가 안착 후 되돌림이 얕아지고, MA20/MA50 위에서 가격이 버티는 흐름입니다. 이때만 현재 기본 포지션인 '{preferred_posture}'에서 위험 노출을 조금 더 열 수 있습니다.",
+            "trader_view": "나는 첫 돌파 양봉을 따라붙기보다 돌파 가격을 다시 지지로 바꾸는 장면을 기다립니다. 시장이 진짜 강하면 기회를 다시 주기 때문에, 첫 움직임을 놓치는 것보다 가짜 돌파에 물리는 것을 더 경계합니다.",
+            "positioning": f"{resistance} 위 안착 확인 전에는 소액 관찰, 안착 후 눌림에서 분할 진입. 손절 기준은 다시 {resistance} 아래로 빠르게 말려드는 경우입니다.",
             "watch": f"{resistance} 위 종가, 거래량 증가, {indicator_context}, 일본 거래소/기관 관련 후속 공지",
         },
         {
             "case": "Base",
             "probability_view": "기본 경로",
             "trigger": f"BTC가 {support}~{resistance} 사이에서 체류하고 니케이와 골드 신호가 엇갈리는 경우",
-            "expected_path": "뉴스가 가격을 밀어 올리기보다 단기 콘텐츠 소재로 소비됩니다. 이 구간은 강한 결론보다 관찰 리스트와 무효화 조건이 중요합니다.",
+            "expected_path": f"내 기본 경로는 {support}~{resistance} 박스권 소모입니다. 뉴스는 계속 나오지만 가격이 한쪽을 확정하지 못하면, 나는 이 구간을 방향 맞히기보다 체력 소모 구간으로 봅니다.",
+            "trader_view": f"이 구간에서 내가 가장 싫어하는 매매는 박스 중간 추격입니다. {no_trade} 그래서 좋은 뉴스가 나와도 가격이 박스 상단/하단 중 어느 쪽을 실제로 먹는지 먼저 봅니다.",
+            "positioning": "박스 하단 반응은 짧게, 박스 상단 추격은 보류. 포지션보다 대기 주문과 알림을 세팅하는 시간이 더 중요합니다.",
             "watch": f"뉴스 발표 시각, 공식 출처, 거래소 공지, BTC {support}/{resistance} 반응",
         },
         {
             "case": "Bear",
             "probability_view": "경계 경로",
             "trigger": f"골드/DXY가 강하고 BTC가 {support} 아래로 종가 이탈하거나 규제성 헤드라인이 공식 확인되는 경우",
-            "expected_path": "알트 호재는 개별 반등에 그치고, 시장은 현금화와 변동성 축소를 우선합니다. 지지 이탈 뒤에는 MA50/MA200과 30D 저점이 다음 방어선으로 재평가됩니다.",
+            "expected_path": f"내가 보는 약세 경로는 {support} 이탈 후 짧은 되돌림이 다시 매도로 막히는 흐름입니다. 이 경우 원문상 호재가 있어도 시장은 먼저 리스크를 줄이고, 알트는 BTC보다 더 크게 흔들릴 수 있습니다.",
+            "trader_view": f"나는 이 경우 싸게 산다는 접근을 하지 않습니다. {risk_plan} 회복 없는 이탈은 내 시나리오가 틀렸다는 뜻이고, 반등은 매수 기회보다 노출 축소 기회로 봅니다.",
+            "positioning": "신규 롱 보류, 알트/레버리지 축소, 지지 회복 전까지 반등 매매는 짧게 제한합니다.",
             "watch": f"{support} 이탈, ETF/규제 악재 확인, 커뮤니티 과열 후 급랭, {derivative_context}",
         },
         {
             "case": "Alt Season Validation",
             "probability_view": "아직 검증 필요" if has_alt else "대기",
             "trigger": f"BTC가 {support}을 지키며 {resistance} 아래에서 과열 없이 횡보하고, {eth_relative_context(market_summary)}가 개선되는 경우",
-            "expected_path": "알트 시즌은 선언이 아니라 검증입니다. 단일 호재보다 여러 섹터가 동시에 거래대금 확산을 보일 때 인정합니다.",
+            "expected_path": "내가 보는 알트 확산 경로는 BTC가 무너지지 않는 횡보를 만든 뒤 ETH가 먼저 상대강도를 회복하고, 그 다음 SOL/XRP 같은 반복 언급 섹터로 거래대금이 번지는 흐름입니다.",
+            "trader_view": f"{alt_strategy} 알트는 뉴스가 아니라 BTC가 시간을 벌어주는지로 판단합니다. BTC가 흔들리면 알트 호재는 독립 베팅이 아니라 유동성 회수 리스크로 봅니다.",
+            "positioning": "BTC 지지 유지 확인 후 ETH/SOL 중심으로 소액, 섹터 거래대금이 붙을 때만 추가합니다.",
             "watch": "ETH 7D-BTC 7D 상대 변화율, SOL/XRP/SUI 등 반복 언급 종목의 거래량, BTC 도미넌스 변화",
         },
         {
             "case": "Event Volatility",
             "probability_view": "높음" if has_reg else "보통",
             "trigger": "규제, ETF, 기관, 거래소 공지의 발표 전후",
-            "expected_path": "발표 전 기대감과 발표 후 차익실현이 분리됩니다. 기사 제목만 보고 방향을 정하지 않습니다.",
+            "expected_path": "내가 보는 이벤트 경로는 발표 전 기대감, 발표 직후 1차 변동성, 이후 가격이 지지/저항을 재확정하는 2차 반응으로 나뉩니다. 방향은 뉴스 제목보다 2차 반응에서 정해집니다.",
+            "trader_view": "나는 발표 직후 첫 캔들로 결론을 내리지 않습니다. 원문과 공식 발표가 일치하는지 보고, 시장이 그 재료를 가격으로 받아들이는지까지 확인한 뒤 포지션을 정합니다.",
+            "positioning": "발표 전 과도한 레버리지 금지, 발표 후 2차 반응에서만 방향성 매매를 고려합니다.",
             "watch": f"공식 문서 원문, 발표 시간, 시장 반응 1차/2차 파동, {support}/{resistance} 종가 확정",
         },
     ]
@@ -612,35 +626,39 @@ def build_weekly_sections(thesis: str, market: dict, scenarios: list[dict], find
             "heading": "내 매매 관점",
             "body": (
                 f"{market.get('trader_market_read', '')}\n\n"
-                f"예상 경로: {market.get('trader_expected_path', '')}\n\n"
-                f"진입: {market.get('trader_entry_plan', '')}\n\n"
-                f"리스크: {market.get('trader_risk_plan', '')}\n\n"
-                f"하지 않을 행동: {market.get('trader_no_trade_zone', '')}"
+                f"이번 주 내가 먼저 보는 움직임은 이겁니다. {market.get('trader_expected_path', '')}\n\n"
+                f"그래서 진입은 공격적으로 열지 않습니다. {market.get('trader_entry_plan', '')}\n\n"
+                f"틀렸다고 인정하는 기준도 분명히 둡니다. {market.get('trader_risk_plan', '')}\n\n"
+                f"내가 일부러 하지 않을 매매는 이것입니다. {market.get('trader_no_trade_zone', '')}"
             ),
         },
         {
             "heading": "이번 주 핵심 논지",
-            "body": f"{thesis}\n\n{source_summary} 따라서 이번 주 문서는 단순 가격 전망보다 BTC 기준축과 이벤트성 변동성을 분리해야 합니다.",
+            "body": f"{thesis}\n\n{source_summary} 이 원문들을 종합해도 내 결론은 하나입니다. 이번 주는 맞히는 장이 아니라, BTC가 어느 가격을 실제로 지키는지 확인하고 거기에 포지션을 맞추는 장입니다.",
         },
         {
             "heading": "BTC 기준축",
-            "body": f"{market['btc_axis']} BTC가 기준선을 지키면 알트 뉴스는 후행 확산 재료가 되고, 반대로 BTC가 무너지면 같은 뉴스도 단기 반등 소재로 격하됩니다. 이 관점이 브리핑 전체의 1번 필터입니다.",
+            "body": f"{market['btc_axis']} 내 기준에서 BTC는 이번 주 모든 매매의 문지기입니다. BTC가 기준선을 지키면 알트 뉴스는 후행 확산 재료가 되고, 반대로 BTC가 무너지면 같은 뉴스도 단기 반등 소재로 격하합니다.",
         },
         {
             "heading": "중요 가격대와 보조지표",
-            "body": f"{market['critical_levels']}\n\n{market['technical_indicators']}\n\n{market['derivatives']} 이 숫자들은 예측값이 아니라 시나리오 경계입니다. 저항 회복 전에는 강세 확정이 아니고, 지지 이탈 뒤에는 원문 호재도 방어적으로 재분류합니다.",
+            "body": f"{market['critical_levels']}\n\n{market['technical_indicators']}\n\n{market['derivatives']} 나는 이 숫자들을 목표가처럼 보지 않고 행동 경계로 봅니다. 저항 회복 전에는 강세 확정이 아니고, 지지 이탈 뒤에는 원문 호재도 방어적으로 재분류합니다.",
         },
         {
             "heading": "니케이, 골드, 달러로 보는 자산 이동",
-            "body": f"{market['japan_risk']} {market['defensive_assets']} 일본 크립토 기사와 니케이를 같이 보는 이유는 일본발 자금/상장/제도권 채택 뉴스가 아시아 위험자산 심리와 붙어 움직일 때가 많기 때문입니다.",
+            "body": f"{market['japan_risk']} {market['defensive_assets']} 내가 일본발 기사와 니케이를 같이 보는 이유는 단순 상관관계 때문이 아닙니다. 일본발 자금/상장/제도권 채택 뉴스가 아시아 위험자산 심리와 붙을 때만 크립토 호재가 오래 남는다고 보기 때문입니다.",
         },
         {
             "heading": "알트 로테이션 판별",
-            "body": f"{market['alts']} 선택 소스 중 알트성 재료는 BTC 안정 이후에만 공격적으로 해석합니다. 알트 시즌은 제목이 아니라 ETH/BTC, BTC 도미넌스, 섹터 거래대금 확산으로 검증합니다.",
+            "body": f"{market['alts']} 내 알트 대응은 보수적입니다. 선택 소스 중 알트성 재료가 많아도 BTC 안정 이후에만 공격적으로 해석합니다. 알트 시즌은 제목이 아니라 ETH 상대강도, BTC 도미넌스, 섹터 거래대금 확산으로 검증합니다.",
         },
         {
             "heading": "시나리오와 무효화",
-            "body": " / ".join(f"{case['case']}: {case['trigger']}" for case in scenarios[:3]) + "\n\n강세 시나리오의 무효화는 BTC 지지 이탈, 방어자산 강세, 공식 출처와 다른 루머 확인입니다.",
+            "body": "\n\n".join(
+                f"{case['case']}: {case['trigger']}\n내 대응: {case.get('trader_view', '')}\n포지션: {case.get('positioning', '')}"
+                for case in scenarios[:3]
+            )
+            + "\n\n내 강세 시나리오의 무효화는 BTC 지지 이탈, 방어자산 강세, 공식 출처와 다른 루머 확인입니다.",
         },
     ]
 
@@ -657,11 +675,36 @@ def build_time_blocks(resources: list[dict], findings: list[dict], market: dict)
     for index, (label, guide) in enumerate(labels):
         chunk = sorted_rows[index:: len(labels)] or sorted_rows[:3]
         related = [clean_text(row.get("title"), 150) for row in chunk[:4]]
+        if index == 0:
+            personal_read = (
+                f"아시아 장에서는 내가 먼저 매매 금지 구간을 의식합니다. {market.get('trader_no_trade_zone', '')} "
+                f"{guide} 일본발 원문이 좋아도 {market.get('critical_levels', '')} 이 가격대에서 어느 쪽을 선택하는지 보기 전에는 포지션을 키우지 않습니다."
+            )
+            decision = "지지 반응 확인 전 추격 금지"
+        elif index == 1:
+            personal_read = (
+                f"유럽 장에서는 미국 장 전에 포지션이 과하게 한쪽으로 쏠리는지 봅니다. "
+                f"내 예상 경로는 {market.get('trader_expected_path', '')}이므로, 중간 가격에서 흔들리는 움직임은 매매 신호보다 소음으로 봅니다."
+            )
+            decision = "박스 중간은 관망, 상단/하단 반응만 체크"
+        elif index == 2:
+            personal_read = (
+                f"미국 장에서는 방향이 가장 잘 드러납니다. 나는 {market.get('trader_entry_plan', '')} "
+                f"동시에 {market.get('trader_risk_plan', '')} 이 기준을 벗어나면 원문 호재보다 가격 반응을 우선합니다."
+            )
+            decision = "종가와 거래량 확인 후만 포지션 판단"
+        else:
+            personal_read = (
+                f"익일 체크에서는 내 판단이 맞았는지보다 틀렸을 때 빨리 고칠 수 있는지를 봅니다. "
+                f"{market.get('trader_subjective_note', '')} 관련 원문은 다시 읽되, 가격이 남기지 못한 뉴스는 비중을 낮춥니다."
+            )
+            decision = "뉴스 잔존 효과와 가격 확정 여부 재평가"
         blocks.append(
             {
                 "time_zone": label,
                 "watch": related,
-                "trader_read": f"{guide} 관련 태그는 {', '.join(top_topics(chunk, 3))}입니다. {market.get('critical_levels', '')} 여기서 확인할 것은 뉴스 수가 아니라 BTC가 그 뉴스를 가격으로 인정하는지입니다.",
+                "decision": decision,
+                "trader_read": f"{personal_read} 관련 태그는 {', '.join(top_topics(chunk, 3))}입니다.",
             }
         )
     return blocks
@@ -687,7 +730,7 @@ def local_generate_brief(resources: list[dict], market_snapshot: dict, briefing_
     trader_stance = build_trader_stance(market_summary, topics, findings)
     thesis = directional_thesis(market_summary, topics, findings, trader_stance)
     market = market_structure(market_summary, topics, trader_stance)
-    scenarios = build_scenarios(market_summary, topics, findings)
+    scenarios = build_scenarios(market_summary, topics, findings, trader_stance)
     key_points = build_key_points(resources, market_summary, findings, trader_stance)
     source_lines = [source_line(row, index) for index, row in enumerate(resources[:20], start=1)]
     today = datetime.now().strftime("%Y-%m-%d")
@@ -845,7 +888,8 @@ def brief_prompt(resources: list[dict], market_snapshot: dict, briefing_type: st
                 "가벼운 요약, 단순 수치 나열, '중요합니다' 식 문장을 금지한다. "
                 "각 원문별 핵심 주장과 트레이더 해석을 분리하고, BTC 기준축과 알트 로테이션 조건을 명확히 쓴다. "
                 "market_snapshot.price_levels, technicals, derivatives의 숫자를 사용해 현재가, 지지, 저항, MA, RSI, MACD, ATR, 펀딩비를 반드시 포함한다. "
-                "반드시 한 명의 주관적 트레이더처럼 directional_bias, entry_plan, profit_plan, risk_plan, no_trade_zone을 입장 표명 문장으로 쓴다."
+                "반드시 한 명의 주관적 트레이더처럼 directional_bias, entry_plan, profit_plan, risk_plan, no_trade_zone을 입장 표명 문장으로 쓴다. "
+                "scenarios, weekly_brief, daily_brief도 정보 나열이 아니라 같은 트레이더가 자기 관점으로 말하는 문체여야 한다."
             ),
             "briefing_type": briefing_type,
             "tone": tone,
@@ -908,13 +952,15 @@ def brief_prompt(resources: list[dict], market_snapshot: dict, briefing_type: st
                         "case": "Bull/Base/Bear/Alt Season/Event Volatility",
                         "trigger": "price-level based trigger with exact BTC support/resistance when available",
                         "expected_path": "string",
+                        "trader_view": "first-person interpretation of this scenario",
+                        "positioning": "how this trader would position in this scenario",
                         "watch": "string",
                     }
                 ],
                 "invalidation_points": ["string"],
                 "action_plan": ["string"],
-                "weekly_brief": [{"heading": "string", "body": "2-4 paragraph body"}],
-                "daily_brief": [{"time_zone": "string", "watch": ["string"], "trader_read": "string"}],
+                "weekly_brief": [{"heading": "string", "body": "2-4 paragraph first-person trader note"}],
+                "daily_brief": [{"time_zone": "string", "watch": ["string"], "decision": "string", "trader_read": "first-person time-zone trader note"}],
                 "source_digest": [{"source": "string", "title": "string", "url": "string", "excerpt": "string"}],
                 "risk_notes": ["string"],
             },
@@ -1016,8 +1062,8 @@ def make_card_set(brief: dict, resources: list[dict], count: int, label: str) ->
             body = clean_text(market.get("alts") or "", 190)
             caption = "알트 시즌은 선언이 아니라 BTC 안정, ETH 상대강도, 거래량 확산으로 검증합니다."
         elif heading == "Bull/Base/Bear" and scenario:
-            body = clean_text(f"{scenario.get('case', 'Scenario')}: {scenario.get('expected_path', brief.get('one_line', ''))}", 190)
-            caption = clean_text(scenario.get("trigger", ""), 160)
+            body = clean_text(f"{scenario.get('case', 'Scenario')}: {scenario.get('trader_view') or scenario.get('expected_path', brief.get('one_line', ''))}", 210)
+            caption = clean_text(f"{scenario.get('positioning', '')} / 조건: {scenario.get('trigger', '')}", 180)
         else:
             body = clean_text(brief.get("one_line", ""), 190)
             caption = clean_text((brief.get("key_points") or [""])[0], 160)
@@ -1084,9 +1130,22 @@ def build_note_markdown(brief: dict, resources: list[dict]) -> str:
         lines.append(f"### {scenario.get('case')}")
         lines.append(f"- 조건: {scenario.get('trigger')}")
         lines.append(f"- 경로: {scenario.get('expected_path')}")
+        if scenario.get("trader_view"):
+            lines.append(f"- 내 해석: {scenario.get('trader_view')}")
+        if scenario.get("positioning"):
+            lines.append(f"- 포지션: {scenario.get('positioning')}")
         lines.append(f"- 체크: {scenario.get('watch')}")
     lines.append("")
-    lines.append("## 7. 무효화 조건")
+    lines.append("## 7. 일간 시간대별 내 판단")
+    for block in brief.get("daily_brief", []):
+        lines.append(f"### {block.get('time_zone')}")
+        if block.get("decision"):
+            lines.append(f"- 내 결정: {block.get('decision')}")
+        for item in block.get("watch", []):
+            lines.append(f"- 체크: {item}")
+        lines.append(f"- 내 해석: {block.get('trader_read', '')}")
+    lines.append("")
+    lines.append("## 8. 무효화 조건")
     for item in brief.get("invalidation_points", []):
         lines.append(f"- {item}")
     lines.append("")
