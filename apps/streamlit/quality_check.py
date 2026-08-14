@@ -192,6 +192,33 @@ OUTLINE_LEAK_PATTERNS = [
     "이 구간에서는", "핵심 포인트", "요약하자면", "다음 단계", "목표는", "분석:", "상담:", "채팅 반응:",
 ]
 
+CRYPTO_TOPIC_PATTERNS = [
+    "비트코인", "BTC", "이더리움", "ETH", "리플", "XRP", "솔라나", "SOL", "알트", "코인", "토큰",
+    "암호자산", "암호화폐", "크립토", "블록체인", "Web3", "DeFi", "NFT", "스테이블코인",
+    "거래소", "상장", "ETF", "SEC", "CFTC", "금융청", "금융庁", "규제", "해킹", "피싱",
+    "CoinPost", "CoinMarketCap", "CoinDesk", "NADA", "5ch", "仮想通貨", "暗号資産",
+]
+
+CRYPTO_SOURCE_PATTERNS = [
+    "출처", "원문", "공식 발표", "공식", "기사", "보도", "RSS", "CoinPost", "CoinMarketCap",
+    "CoinDesk", "NADA", "CRYPTO TIMES", "5ch", "커뮤니티", "헤드라인",
+]
+
+CRYPTO_MARKET_PATTERNS = [
+    "가격", "시세", "차트", "거래량", "변동성", "유동성", "상승", "하락", "반등", "조정",
+    "고래", "ETF", "스테이킹", "온체인", "매크로", "금리", "CPI", "FRB", "달러",
+]
+
+CRYPTO_RISK_PATTERNS = [
+    "투자 조언", "매수 추천", "단정", "확인", "리스크", "루머", "공식 발표", "분리해서",
+    "주의", "손실", "변동성", "검증", "출처", "시간", "이미 반영", "과열",
+]
+
+CRYPTO_STRUCTURE_PATTERNS = [
+    "첫 번째", "두 번째", "세 번째", "체크", "포인트", "정리", "핵심", "먼저", "다음",
+    "결론부터", "요약하면", "이슈", "재료", "시장 반응", "커뮤니티 반응",
+]
+
 
 def count_any(text: str, words: list[str]) -> int:
     return sum(text.count(word) for word in words)
@@ -260,8 +287,138 @@ def hook_score(text: str) -> tuple[int, dict]:
     }
 
 
+def is_crypto_script(text: str) -> bool:
+    return count_any(text, CRYPTO_TOPIC_PATTERNS) >= 5
+
+
+def quality_check_crypto_script(script: str) -> dict:
+    text = script or ""
+    length = len(text)
+    sections = timecode_sections(text)
+    timecodes = len(sections)
+
+    crypto_hits = count_any(text, CRYPTO_TOPIC_PATTERNS)
+    source_hits = count_any(text, CRYPTO_SOURCE_PATTERNS)
+    market_hits = count_any(text, CRYPTO_MARKET_PATTERNS)
+    risk_hits = count_any(text, CRYPTO_RISK_PATTERNS)
+    structure_hits = count_any(text, CRYPTO_STRUCTURE_PATTERNS)
+    chat_hits = count_any(text, LIVE_CHAT_PATTERNS + ["커뮤니티", "댓글", "5ch", "반응", "갈리"])
+    hook_devices = count_any(text, HOOK_DEVICE_PATTERNS + ["호재", "악재", "리스크", "재료", "반영"])
+    forbidden_ai = count_any(text, FORBIDDEN_AI_PHRASES)
+    low_value_cta = count_any(text, LOW_VALUE_CTA_PATTERNS)
+    generic_outro = count_any(text, GENERIC_OUTRO_PATTERNS)
+    outline_leak = count_any(text, OUTLINE_LEAK_PATTERNS)
+
+    section_structure_score, section_metrics = section_score(sections)
+    length_score = ratio_score(length, 6500, 2200)
+    topic_score = ratio_score(crypto_hits, 24, 6)
+    source_score = ratio_score(source_hits, 12, 2)
+    market_score = ratio_score(market_hits, 18, 4)
+    risk_score = ratio_score(risk_hits, 12, 3)
+    structure_score = ratio_score(structure_hits, 20, 4)
+    community_score = ratio_score(chat_hits, 10, 2)
+    hook_score_value = ratio_score(hook_devices, 14, 2)
+    banality_penalty = min(45, forbidden_ai * 8 + low_value_cta * 8 + generic_outro * 6 + outline_leak * 12)
+
+    scores = {
+        "대본_분량": length_score,
+        "타임코드_구조": section_structure_score,
+        "크립토_주제성": topic_score,
+        "출처_검증성": source_score,
+        "시장_맥락": market_score,
+        "리스크_고지": risk_score,
+        "구조화": structure_score,
+        "커뮤니티_반응": community_score,
+        "후킹_강도": hook_score_value,
+    }
+    weights = {
+        "대본_분량": 0.12,
+        "타임코드_구조": 0.11,
+        "크립토_주제성": 0.14,
+        "출처_검증성": 0.13,
+        "시장_맥락": 0.13,
+        "리스크_고지": 0.14,
+        "구조화": 0.10,
+        "커뮤니티_반응": 0.06,
+        "후킹_강도": 0.07,
+    }
+    overall = clamp_score(sum(scores[name] * weight for name, weight in weights.items()) - banality_penalty)
+
+    critical_failures: list[str] = []
+    warnings: list[str] = []
+    rewrite_guidance: list[str] = []
+    if length < 4500:
+        critical_failures.append("분량 부족: 크립토 롱폼 해설은 최소 4,500자 이상이 필요합니다.")
+        rewrite_guidance.append("이슈 배경, 관련 토큰, 시장 반응, 리스크 체크, 커뮤니티 반응을 각각 확장하세요.")
+    if timecodes < 7:
+        critical_failures.append("타임코드 부족: 최소 7개 이상 필요합니다.")
+    if crypto_hits < 10:
+        critical_failures.append("크립토 주제성이 약합니다. 관련 토큰, 거래소, 규제, 시장 맥락을 더 분명히 넣으세요.")
+    if source_hits < 4:
+        warnings.append("출처 검증 언급이 부족합니다.")
+        rewrite_guidance.append("기사 원문, 공식 발표, 커뮤니티발 루머를 분리해서 설명하세요.")
+    if risk_hits < 5:
+        critical_failures.append("리스크 고지가 부족합니다. 매수/매도 단정 없이 확인 포인트를 제시해야 합니다.")
+    if market_hits < 6:
+        warnings.append("시장 맥락이 부족합니다. 가격, 거래량, ETF/규제/매크로 연결을 보강하세요.")
+    if low_value_cta:
+        warnings.append("저품질 댓글 유도 문장이 있습니다. 호재/악재/관망처럼 갈리는 질문으로 바꾸세요.")
+    if forbidden_ai:
+        warnings.append(f"AI식 일반 문장 감지: {forbidden_ai}개. 도입과 마무리를 더 날카롭게 바꾸세요.")
+    if outline_leak:
+        critical_failures.append("제작 메모/목차형 표현이 감지됐습니다. 실제 방송 멘트로 바꾸세요.")
+
+    passed = (
+        overall >= 78
+        and not critical_failures
+        and scores["대본_분량"] >= 65
+        and scores["크립토_주제성"] >= 70
+        and scores["출처_검증성"] >= 55
+        and scores["리스크_고지"] >= 65
+    )
+    if overall >= 88 and passed:
+        grade = "A"
+    elif overall >= 78 and not critical_failures:
+        grade = "B"
+    elif overall >= 65:
+        grade = "C"
+    elif overall >= 50:
+        grade = "D"
+    else:
+        grade = "F"
+
+    return {
+        "overall_score": overall,
+        "grade": grade,
+        "passed": passed,
+        "scores": scores,
+        "weights": weights,
+        "metrics": {
+            "length": length,
+            "timecodes": timecodes,
+            "crypto_topic_markers": crypto_hits,
+            "source_markers": source_hits,
+            "market_markers": market_hits,
+            "risk_markers": risk_hits,
+            "structure_markers": structure_hits,
+            "community_markers": chat_hits,
+            "hook_markers": hook_devices,
+            "forbidden_ai_phrases": forbidden_ai,
+            "low_value_cta_markers": low_value_cta,
+            "generic_outro_markers": generic_outro,
+            "outline_leak_markers": outline_leak,
+            **section_metrics,
+        },
+        "critical_failures": critical_failures,
+        "warnings": warnings,
+        "rewrite_guidance": rewrite_guidance,
+    }
+
+
 def quality_check_live_script(script: str) -> dict:
     text = script or ""
+    if is_crypto_script(text):
+        return quality_check_crypto_script(text)
     length = len(text)
     sections = timecode_sections(text)
     timecodes = len(sections)

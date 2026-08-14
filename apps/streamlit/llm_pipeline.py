@@ -435,12 +435,24 @@ LIVE_SCRIPT_CONTRACT = """
 - 결말은 단순 정답 발표가 아니라 "지금 당장 할 행동", "하지 말아야 할 행동", "댓글에서 갈릴 질문"으로 닫는다.
 """
 
+CRYPTO_CONTENT_OVERRIDE = """
+크립토 콘텐츠 전환 규칙:
+- 이 앱은 커뮤니티 사연 상담 앱이 아니라 일본/글로벌 크립토 이슈 레이더다.
+- 아래의 라이브/리텐션 레퍼런스는 말투와 몰입 구조만 참고한다. 사연자님, 관계 상담, 연애/가족 갈등, 사주/궁합/점성술 표현은 쓰지 않는다.
+- 소재는 일본 크립토 미디어, 5ch 仮想通貨板, CoinMarketCap, Yahoo Finance JP 같은 출처에서 온 코인 기사/스레드다.
+- 핵심은 관련 토큰, 출처 신뢰도, 게시 시간, 공식 발표 여부, 가격/거래량 반응, 커뮤니티 과열도, 규제/거래소/보안 리스크를 분리하는 것이다.
+- 투자 조언처럼 매수/매도/가격을 단정하지 않는다. "확인할 포인트", "리스크", "이미 반영됐는지", "공식 발표와 커뮤니티 반응의 차이"로 말한다.
+- 한국어 콘텐츠로 로컬라이징하되 일본어 고유명사와 출처명은 필요한 만큼 유지한다.
+- 카드뉴스와 Note는 투자 권유가 아니라 시장 이슈 해설/리스크 체크 콘텐츠로 만든다.
+"""
+
 
 def analyze_story(source_text: str, row: dict, model: str, temperature: float) -> tuple[dict, Optional[str]]:
-    system = f"""너는 커뮤니티 사연을 유튜브 라이브 상담 콘텐츠로 개발하는 PD다.
-원문을 복제하지 말고, 개인정보와 식별 요소를 일반화한다.
-대본을 쓰지 말고, 사람들이 끝까지 보게 만드는 판단 구조와 상담 구조만 해부한다.
+    system = f"""너는 일본/글로벌 크립토 이슈를 유튜브·카드뉴스·Note 콘텐츠로 개발하는 PD다.
+원문을 복제하지 말고, 출처와 확인 필요 지점을 분리한다.
+대본을 쓰지 말고, 사람들이 끝까지 보게 만드는 시장 이슈 구조와 리스크 체크 구조만 해부한다.
 
+{CRYPTO_CONTENT_OVERRIDE}
 {STORY_IMMERSION_ENGINE}
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
@@ -453,17 +465,17 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
 
 반드시 JSON만 반환한다."""
     schema = {
-        "story_summary": "사연 핵심 요약. 번역투 없이 자연스러운 한국어",
-        "case_thesis": "이 사연을 한 문장으로 해부한 PD 관점. 표면 사건이 아니라 숨은 관계 엔진을 말한다",
-        "surface_event": "겉으로 보이는 사건",
-        "real_engine": "실제로 사람을 붙잡는 돈/수치심/권력/비밀/가족/몸/역할 기대 중 핵심 작동축",
-        "one_line_viral_premise": "시청자가 3초 안에 이해할 바이럴 전제. 누가 무엇을 했고 왜 갈리는지",
-        "episode_title_candidates": ["한국 라이브 제목 후보. 자극보다 갈등 구조가 보이게"],
-        "cold_open_bomb": "대본 첫 문장으로 쓸 수 있는 사건 폭탄. 인사 금지",
-        "first_5_second_cue": "첫 5초 안에 들어갈 결과/논쟁/감정 폭탄. 배경 설명 금지",
-        "first_30_second_contract": "시청자가 30초 안에 이해할 시청 계약: 끝까지 보면 무엇을 판단/해결하게 되는지",
-        "embodied_entry_seed": "화자가 자신의 개인적 하루나 몸의 감각으로 들어갈 수 있는 도입 소재. 사연의 상징과 연결",
-        "judgment_question": "댓글이 갈릴 핵심 질문. 예: 이건 예민함인가, 선 넘은 행동인가",
+        "story_summary": "크립토 이슈 핵심 요약. 번역투 없이 자연스러운 한국어",
+        "case_thesis": "이 이슈를 한 문장으로 해부한 PD 관점. 가격 재료/규제/거래소/보안/커뮤니티 심리 중 핵심 엔진을 말한다",
+        "surface_event": "겉으로 보이는 뉴스 또는 스레드 제목",
+        "real_engine": "실제로 시장 관심을 붙잡는 가격 재료, 규제 변화, 거래소 이슈, 보안 리스크, 커뮤니티 과열 중 핵심 작동축",
+        "one_line_viral_premise": "시청자가 3초 안에 이해할 바이럴 전제. 어떤 코인/기관/거래소가 왜 갈리는지",
+        "episode_title_candidates": ["한국어 크립토 콘텐츠 제목 후보. 자극보다 이슈 구조가 보이게"],
+        "cold_open_bomb": "대본 첫 문장으로 쓸 수 있는 시장 이슈 폭탄. 인사 금지",
+        "first_5_second_cue": "첫 5초 안에 들어갈 결과/논쟁/가격·리스크 폭탄. 배경 설명 금지",
+        "first_30_second_contract": "시청자가 30초 안에 이해할 시청 계약: 끝까지 보면 어떤 이슈/리스크를 판단하게 되는지",
+        "embodied_entry_seed": "화자가 시장을 볼 때 느낄 수 있는 장면형 도입 소재. 차트 알림, 거래소 공지, 커뮤니티 과열 등과 연결",
+        "judgment_question": "댓글이 갈릴 핵심 질문. 예: 이건 호재인가, 이미 반영된 재료인가",
         "curiosity_gap": "시청자가 다음 내용을 기다리게 만드는 미해결 의문",
         "localized_context": "원문 문화권/플랫폼 맥락을 한국 시청자가 이해할 수 있게 변환한 설명",
         "translation_notes": ["직역하면 어색하거나 위험한 표현과 권장 표현"],
@@ -568,7 +580,8 @@ def analyze_story(source_text: str, row: dict, model: str, temperature: float) -
 
 
 def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: float) -> tuple[dict, Optional[str]]:
-    system = f"""너는 라이브 사연 상담형 유튜브 대본의 구성 작가다.
+    system = f"""너는 크립토 이슈 해설형 유튜브 대본의 구성 작가다.
+{CRYPTO_CONTENT_OVERRIDE}
 {LIVE_NARRATOR_RULES}
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
@@ -580,10 +593,10 @@ def build_live_blueprint(analysis: dict, row: dict, model: str, temperature: flo
 {STORY_IMMERSION_ENGINE}
 {localization_prompt()}
 
-10분 분량 대본을 위한 연출 비트시트를 만든다. 아직 최종 대본은 쓰지 않는다.
-각 비트는 최종 대본에서 긴 실제 멘트로 확장될 수 있도록 장면, 갈등, 채팅 충돌, 사주/점성술 렌즈, 상담 행동을 구체적으로 설계한다.
+10분 분량 크립토 이슈 해설 대본을 위한 연출 비트시트를 만든다. 아직 최종 대본은 쓰지 않는다.
+각 비트는 최종 대본에서 긴 실제 멘트로 확장될 수 있도록 출처, 관련 토큰, 시장 반응, 커뮤니티 충돌, 공식 확인 포인트, 리스크 체크를 구체적으로 설계한다.
 타임코드마다 새 정보나 새 판단 변화를 넣어야 한다. 같은 이야기를 반복하는 비트는 실패다.
-role/purpose/tone_note만 있는 빈 설계는 실패다. 각 비트는 실제 방송 멘트 샘플, 채팅 반론, 상담 문장, 다음 궁금증을 포함해야 한다.
+role/purpose/tone_note만 있는 빈 설계는 실패다. 각 비트는 실제 방송 멘트 샘플, 댓글/커뮤니티 반론, 체크리스트 문장, 다음 궁금증을 포함해야 한다.
 반드시 JSON만 반환한다."""
     schema = {
         "production_thesis": "이 사연을 라이브 상담으로 만들 때 끝까지 붙잡을 핵심 관점",
@@ -692,7 +705,8 @@ role/purpose/tone_note만 있는 빈 설계는 실패다. 각 비트는 실제 �
 
 
 def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: dict, model: str, temperature: float) -> tuple[str, Optional[str]]:
-    system = f"""너는 실제 한국 라이브 유튜버 말투를 잘 쓰는 대본 작가이자 고급 로컬라이징 에디터다.
+    system = f"""너는 실제 한국 크립토 유튜버 말투를 잘 쓰는 대본 작가이자 고급 로컬라이징 에디터다.
+{CRYPTO_CONTENT_OVERRIDE}
 {LIVE_NARRATOR_RULES}
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
@@ -705,37 +719,34 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
 {localization_prompt()}
 
 절대 조건:
-- 10분 롱폼 내레이션 대본을 쓴다.
-- 총 8,500자 이상, 가능하면 9,000~11,000자.
-- 타임코드 11개 이상 포함. 타임코드 줄은 반드시 00:00 형식만 쓴다.
-- 각 타임코드마다 최소 650자 이상 실제 말로 작성한다. 제목/요약/목차만 쓰면 실패다.
-- 오프닝은 흔한 인사 금지. 바로 사연의 이상한 지점으로 들어간다.
-- 첫 5초는 결과/논쟁/책임 갈림 중 하나로 시작한다. 인사, 맥락 설명, 사연 제목 낭독 금지.
-- 첫 30초 안에 "끝까지 봐야 하는 이유"를 만든다. 오늘 판단할 질문, 뒤에 남은 반전, 얻어갈 상담 문장을 약속한다.
-- 00:00~01:35 안에 화자의 개인적 경험형 도입을 넣는다. "나도 그런 날이 있었거든" 수준이 아니라 몸에 남은 감각, 반복된 상징, 말이 꼬이는 순간을 구체적으로 보여준다.
+- 10분 크립토 이슈 해설형 롱폼 내레이션 대본을 쓴다.
+- 총 6,500자 이상, 가능하면 7,500~9,500자.
+- 타임코드 8개 이상 포함. 타임코드 줄은 반드시 00:00 형식만 쓴다.
+- 각 타임코드마다 최소 500자 이상 실제 말로 작성한다. 제목/요약/목차만 쓰면 실패다.
+- 오프닝은 흔한 인사 금지. 바로 호재/악재/리스크가 갈리는 지점으로 들어간다.
+- 첫 5초는 가격 재료/규제 리스크/커뮤니티 논쟁 중 하나로 시작한다. 인사, 맥락 설명, 제목 낭독 금지.
+- 첫 30초 안에 "끝까지 봐야 하는 이유"를 만든다. 오늘 확인할 출처, 관련 토큰, 이미 반영됐는지, 리스크 체크를 약속한다.
+- 00:00~01:35 안에 화자가 시장 알림, 차트 급변, 거래소 공지, 커뮤니티 과열을 본 장면형 도입을 넣는다.
 - "안녕하세요 여러분", "함께 고민해볼까요", "다양한 시각이 있네요", "정말 서운하셨겠어요" 같은 AI식 문장 금지.
 - "사생활이 터졌다", "성 정체성이 드러났다"처럼 과격하거나 부정확한 번역투 금지. 맥락에 따라 "개인적인 일이 원치 않게 알려졌다", "아웃팅처럼 받아들여질 수 있었다", "사적인 부분이 사람들 입에 오르내리게 됐다"처럼 쓴다.
-- 친밀관계/몸/기기/촬영 가능성이 있는 사연은 동의, 사전 설명, 촬영·녹화·저장 여부, 프라이버시, 즉시 중단 기준을 반드시 다룬다.
-- "불을 켜보세요", "취향을 공유해보세요", "관계를 더 깊게" 같은 노출 적응/미화 조언 금지. 불편함을 느낀 사람에게 적응을 요구하지 않는다.
-- 존댓말 진행 50%, 반말 리액션 30%, 채팅 받아치기 10%, 혼잣말/자기정정 10% 정도로 섞는다.
-- "사연자님" 8회 이상, "여러분" 10회 이상, "채팅" 또는 "댓글" 반응 5회 이상, 현실 조언 4개 이상 포함한다.
-- "아니 잠깐만", "야 이건", "근데", "제가 보기엔요", "저기요", "작두 살짝만", "사주로 치면", "기운", "궁합", "운의 흐름" 중 여러 개를 자연스럽게 사용한다.
-- 사주/점성술 표현은 허용한다. 다만 무조건 악연, 100%, 운명 확정 같은 단정은 금지한다.
-- MBTI/사주 궁합/오행 인사이트는 은근히 넣는다. 내담자를 확정 진단하지 말고, 성향 충돌과 관계 리듬을 설명한 뒤 바로 실제 상담 문장으로 연결한다.
-- 대본 전체에 반복 상징을 하나 세운다. 처음엔 개인 경험, 중간엔 사연의 관계 패턴, 후반엔 시대/댓글/구설의 공기로 확장한다.
-- 사연 원문은 읽어주는 느낌으로 재구성하되, 원문 문장을 그대로 복제하지 않는다.
-- 반드시 해결 방법을 자세히 준다. '대화해보세요' 한 줄 금지. 어떤 문장으로 물어볼지, 상대 반응별로 어떻게 할지까지 말한다.
+- 존댓말 진행 55%, 반말 리액션 20%, 댓글/커뮤니티 받아치기 15%, 혼잣말/자기정정 10% 정도로 섞는다.
+- "여러분" 8회 이상, "댓글", "커뮤니티", "5ch" 또는 "시장 반응" 언급 5회 이상, 확인 포인트 5개 이상 포함한다.
+- "아니 잠깐만", "근데", "제가 보기엔요", "저기요", "이건 호재냐 악재냐보다", "이미 반영됐는지", "출처부터 보자" 중 여러 개를 자연스럽게 사용한다.
+- 사주/점성술, MBTI, 연애상담 표현은 금지한다.
+- 대본 전체에 반복 상징을 하나 세운다. 예: 새벽 알림, 빨간 차트, 거래소 공지, 5ch 스레드 속도, 헤드라인 도미노.
+- 원문은 읽어주는 느낌으로 재구성하되, 원문 문장을 그대로 복제하지 않는다.
+- 반드시 체크 방법을 자세히 준다. '조심하세요' 한 줄 금지. 어떤 출처를 보고, 어떤 가격/거래량/공식 발표를 확인할지까지 말한다.
 - 초반 3분 안에 시청자들이 갈릴 해석 두 개를 모두 제시한다.
 - 중반에는 화자 판단이 한 번 흔들려야 한다. 처음부터 끝까지 같은 주장만 밀면 실패다.
-- 후반 상담 파트에는 상대가 사과할 때, 회피할 때, 역공할 때의 대응 문장을 분리해서 말한다.
+- 후반 파트에는 호재로 보일 때, 이미 반영됐을 때, 루머 가능성이 있을 때의 대응 기준을 분리해서 말한다.
 - 매 타임코드 첫 1~2문장에는 마이크로 후킹을 넣는다. 새 정보, 반대 해석, 채팅 충돌, "아까 말한 것" 회수, 다음 구간 궁금증 중 하나가 있어야 한다.
 - 설명문이 4~5문장 이상 같은 톤으로 이어지면 실패다. 패턴 인터럽트로 리듬을 꺾어라.
 - 오픈루프 3개 이상을 열고 반드시 회수한다. 회수 없이 궁금증만 던지는 것은 실패다.
 - 반환은 대본 텍스트만. JSON 금지.
 
 출력 구조:
-00:00부터 09:20 이후까지 작성하되, 각 구간은 실제 방송 멘트로 길게 쓴다.
-각 구간은 최소 5~8문단으로 쓴다. 짧은 문단과 긴 문단을 섞는다.
+00:00부터 08:00 이후까지 작성하되, 각 구간은 실제 방송 멘트로 길게 쓴다.
+각 구간은 최소 4~7문단으로 쓴다. 짧은 문단과 긴 문단을 섞는다.
 타임코드 외의 소제목은 쓰지 않는다.
 """
     user = {
@@ -743,17 +754,17 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
         "source_text_for_context_only": clean_text(source_text, 16000),
         "analysis": analysis,
         "blueprint": blueprint,
-        "mission": "짧고 점잖은 상담 대본이 아니라, 진짜 라이브 유튜버가 사연 읽으며 채팅과 티키타카하고 사주/점성술 감각으로 풀이하는 10분짜리 장문 대본을 작성하라. 번역투를 없애고 현지화 수준을 최대로 끌어올려라.",
-        "embodied_insight_mission": "화자의 개인 경험형 도입으로 사연의 공기를 먼저 몸에 입힌 뒤, MBTI식 성향/사주 궁합/오행 렌즈를 은근한 상담 인사이트로 녹여라. 확정 진단이나 예언처럼 쓰지 말고 관계 리듬 설명으로 처리하라.",
+        "mission": "짧고 점잖은 뉴스 요약이 아니라, 진짜 크립토 라이브 유튜버가 일본 미디어/5ch/CoinMarketCap 헤드라인을 보며 시장 재료와 리스크를 해설하는 10분짜리 장문 대본을 작성하라. 번역투를 없애고 한국 크립토 시청자에게 맞게 로컬라이징하라.",
+        "embodied_insight_mission": "화자의 시장 관찰 장면으로 도입하라. 새벽 알림, 빨간 차트, 거래소 공지, 커뮤니티 스레드 속도 같은 감각을 통해 이슈의 공기를 먼저 입힌 뒤 출처/가격/리스크 체크로 연결하라.",
         "retention_mission": "100만 뷰급 팟캐스트/라이브처럼 첫 5초 cue, 첫 30초 시청 계약, 매 타임코드 리훅, 오픈루프와 회수를 설계하라. 모든 구간은 시청자가 다음 구간을 궁금해하도록 끝나야 한다.",
         "script_contract": {
             "timecodes": ["00:00", "00:45", "01:35", "02:30", "03:25", "04:20", "05:20", "06:20", "07:25", "08:25", "09:20"],
-            "minimum_total_chars": 8500,
-            "recommended_total_chars": "9000~11000",
-            "minimum_section_chars": 650,
+            "minimum_total_chars": 6500,
+            "recommended_total_chars": "7500~9500",
+            "minimum_section_chars": 500,
             "required_chat_reactions": 5,
-            "required_exact_advice_sentences": 4,
-            "required_astrology_pattern_reads": 4,
+            "required_exact_check_sentences": 5,
+            "required_source_risk_reads": 5,
             "required_embodied_personal_anchor": 1,
             "required_implicit_profile_insights": 3,
             "required_open_loops": 3,
@@ -761,8 +772,8 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
             "required_micro_hooks_per_timecode": True,
             "required_boundary_or_privacy_checks_when_relevant": 4,
         },
-        "section_fill_rule": "각 타임코드는 마이크로 후킹, 장면 재구성, 화자 리액션, 채팅 충돌, 사주/점성술 패턴 읽기, 현실 상담 문장, 다음 궁금증 연결 중 최소 5개 이상을 포함해야 한다.",
-        "minimum_length_reminder": "8,500자 미만이면 실패다. 모든 타임코드를 충분히 확장하라.",
+        "section_fill_rule": "각 타임코드는 마이크로 후킹, 이슈 배경, 관련 토큰/기관, 시장 반응, 커뮤니티 충돌, 출처 검증, 리스크 체크, 다음 궁금증 연결 중 최소 5개 이상을 포함해야 한다.",
+        "minimum_length_reminder": "6,500자 미만이면 실패다. 모든 타임코드를 충분히 확장하라.",
     }
     raw, error = openai_chat([
         {"role": "system", "content": system},
@@ -772,7 +783,8 @@ def write_live_longform(source_text: str, analysis: dict, blueprint: dict, row: 
 
 
 def generate_derivatives(longform_script: str, analysis: dict, row: dict, model: str, temperature: float) -> tuple[dict, Optional[str]]:
-    system = f"""너는 롱폼 대본을 쇼츠, Threads, 카드뉴스로 재가공하는 콘텐츠 편집자이자 고급 로컬라이징 에디터다.
+    system = f"""너는 롱폼 대본을 쇼츠, Threads, 카드뉴스, Note 콘텐츠로 재가공하는 콘텐츠 편집자이자 고급 로컬라이징 에디터다.
+{CRYPTO_CONTENT_OVERRIDE}
 {LIVE_NARRATOR_RULES}
 {PERSONA_EMBODIMENT_ENGINE}
 {EMBODIED_INSIGHT_ENGINE}
@@ -782,29 +794,78 @@ def generate_derivatives(longform_script: str, analysis: dict, row: dict, model:
 {STRUCTURAL_OUTPUT_GUARD}
 {STYLE_REFERENCE_BLOCK}
 {localization_prompt()}
-롱폼의 화자 말투와 로컬라이징 수준을 유지한다. 반드시 JSON만 반환한다."""
+롱폼의 화자 말투와 로컬라이징 수준을 유지한다. 카드뉴스는 슬라이드 단위로 바로 디자인 툴에 옮길 수 있게 쓰고, Note 콘텐츠는 Notion/블로그에 바로 붙여 넣을 수 있는 Markdown 본문으로 쓴다.
+반드시 JSON만 반환한다."""
     schema = {
         "shorts": {"30s": "", "60s": "", "90s": ""},
         "threads": {"5_post": "", "10_post": ""},
-        "card_news": {"8_cards": [{"title": "", "body": "", "image_prompt": "", "design_note": ""}]},
+        "card_news": {
+            "deck_title": "",
+            "format": "8장 또는 10장 카드뉴스",
+            "design_system": "톤앤매너, 컬러, 폰트 무드, 이미지 스타일",
+            "8_cards": [
+                {
+                    "title": "",
+                    "hook": "",
+                    "body": "",
+                    "image_prompt": "",
+                    "design_note": "",
+                    "cta": "",
+                }
+            ],
+        },
+        "note_content": {
+            "title": "",
+            "subtitle": "",
+            "platform": "Notion / 블로그 공용",
+            "opening_hook": "",
+            "body_markdown": "",
+            "key_takeaways": [""],
+            "cta": "",
+            "tags": [""],
+            "platform_adaptations": {
+                "naver_blog": "",
+                "brunch": "",
+                "notion": "",
+            },
+        },
         "titles": [""],
         "thumbnail_text": [""],
         "comment_question": "",
     }
-    user = {"title": row.get("title"), "analysis": analysis, "longform_script": clean_text(longform_script, 18000), "required_schema": schema}
+    user = {
+        "title": row.get("title"),
+        "analysis": analysis,
+        "longform_script": clean_text(longform_script, 18000),
+        "required_schema": schema,
+        "content_requirements": {
+            "card_news": [
+                "첫 장은 호재/악재/리스크가 갈리는 지점을 바로 던지는 강한 훅",
+                "중간 장은 뉴스 요약이 아니라 출처, 관련 토큰, 시장 반응, 리스크 체크로 재구성",
+                "마지막 장은 댓글을 부르는 질문 또는 저장/공유 CTA. 단, 투자 권유 금지",
+                "각 장은 1~2문장 중심으로 짧고 선명하게 작성",
+            ],
+            "note_content": [
+                "후킹 도입, 이슈 배경, 시장 맥락, 확인 체크리스트, 질문으로 끝나는 구조",
+                "Markdown 소제목을 포함하되 목차식 요약만 쓰지 않기",
+                "원문 문장 복제 없이 롱폼의 핵심 판단과 리스크 체크 문장만 재가공",
+                "분량은 최소 1,500자 이상을 목표로 작성",
+            ],
+        },
+    }
     raw, error = openai_chat([
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
-    ], model=model, temperature=temperature, max_tokens=5500, json_mode=True)
+    ], model=model, temperature=temperature, max_tokens=7500, json_mode=True)
     if error:
         return {}, error
-    parsed, parse_error = parse_or_regenerate_json("derivatives", raw or "", user, model, temperature, 6500)
+    parsed, parse_error = parse_or_regenerate_json("derivatives", raw or "", user, model, temperature, 8500)
     return parsed or {}, parse_error
 
 
 def build_package(row: dict, source_text: str, analysis: dict, blueprint: dict, longform_script: str, quality: dict, derivatives: dict) -> dict:
     return {
-        "source": "openai_live_advice_pipeline",
+        "source": "openai_japan_crypto_pipeline",
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         "source_text_meta": {
             "body_fetched": bool(source_text),
@@ -821,6 +882,7 @@ def build_package(row: dict, source_text: str, analysis: dict, blueprint: dict, 
         "shorts": derivatives.get("shorts", {}),
         "threads": derivatives.get("threads", {}),
         "card_news": derivatives.get("card_news", {}),
+        "note_content": derivatives.get("note_content", {}),
         "titles": derivatives.get("titles", []),
         "thumbnail_text": derivatives.get("thumbnail_text", []),
         "comment_question": derivatives.get("comment_question", ""),

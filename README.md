@@ -1,17 +1,21 @@
-# Story Pattern Lab
+# Japan Crypto Pattern Lab
 
-Story Pattern Lab is a beginner-friendly viral story radar for overseas storytime content.
+Japan Crypto Pattern Lab is a Streamlit radar for Japanese crypto community
+signals, Japanese crypto media, CoinMarketCap-style global headlines, and
+publishable card news / Note content.
 
 The first version starts with Streamlit so the full product flow can be tested quickly:
 
-1. Collect story candidates from public RSS sources.
-2. Sort them with a basic viral score.
-3. Classify story angles.
-4. Generate a first shorts script draft.
+1. Collect crypto candidates from Japanese and global RSS sources.
+2. Pull public-list signals from 5ch's crypto board and CoinMarketCap headlines.
+3. Sort them with freshness, community reaction, and production scores.
+4. Classify each item as BTC, altcoin, regulation, exchange, security, macro, or Web3.
+5. Repurpose selected issues into shorts, Threads, card news, and Note content.
 
-The OpenAI-backed production flow defaults to `gpt-5.5` for richer story
-analysis, live counseling structure, and longform script generation. You can
-override it with the `OPENAI_MODEL` environment/Streamlit secret.
+The OpenAI-backed production flow defaults to `gpt-5.5` for richer issue
+analysis, longform script generation, and derivative content packages for card
+news and Note publishing. You can override it with the `OPENAI_MODEL`
+environment/Streamlit secret.
 
 ## Local Streamlit Test
 
@@ -31,4 +35,4 @@ http://localhost:8501
 
 - This repository is separated from `ai-pd-studio` to avoid confusion.
 - Start with Streamlit only.
-- Add Reddit API, LLM generation, DB storage, FastAPI, and Next.js later.
+- Add exchange APIs, market data, DB storage, FastAPI, and Next.js later.

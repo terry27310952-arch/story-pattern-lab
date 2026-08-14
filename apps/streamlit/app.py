@@ -63,7 +63,7 @@ except Exception:
         return [], "supabase_store.py 모듈을 불러오지 못했습니다."
 
 
-st.set_page_config(page_title="Story Pattern Lab", page_icon="🔮", layout="wide")
+st.set_page_config(page_title="Japan Crypto Pattern Lab", page_icon="₿", layout="wide")
 
 st.markdown(
     """
@@ -97,42 +97,68 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.5; public-list-metadata-only"
+USER_AGENT = "Mozilla/5.0 StoryPatternLab/0.7; japan-crypto-radar-public-list-only"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
-STREAMLIT_PATCH_VERSION = "2026-05-17 autopilot-v9"
+STREAMLIT_PATCH_VERSION = "2026-08-13 japan-crypto-radar-v1"
 TOKEN_PARAMETER_POLICY = "max_completion_tokens only"
 DEPLOYMENT_ENTRYPOINT = "streamlit_app.py -> apps/streamlit/app.py"
 
-OVERSEAS_SOURCES = {
-    "Reddit AITA": {"url": "https://www.reddit.com/r/AmItheAsshole/.rss", "category": "AITA / Moral Debate", "status": "Active RSS", "region": "해외"},
-    "Reddit Relationship Advice": {"url": "https://www.reddit.com/r/relationship_advice/.rss", "category": "Relationship Drama", "status": "Active RSS", "region": "해외"},
-    "Reddit TrueOffMyChest": {"url": "https://www.reddit.com/r/TrueOffMyChest/.rss", "category": "Confession / Personal Story", "status": "Active RSS", "region": "해외"},
-    "Reddit BestOfRedditorUpdates": {"url": "https://www.reddit.com/r/BestofRedditorUpdates/.rss", "category": "Update Story / Longform", "status": "Active RSS", "region": "해외"},
+CRYPTO_RSS_SOURCES = {
+    "CoinPost JP": {"url": "https://coinpost.jp/?feed=rss2", "category": "일본 암호자산 뉴스", "status": "Active RSS", "region": "일본 미디어"},
+    "NADA NEWS / CoinDesk Japan": {"url": "https://www.coindeskjapan.com/feed/", "category": "일본 Web3·디지털자산 뉴스", "status": "Active RSS", "region": "일본 미디어"},
+    "CRYPTO TIMES JP": {"url": "https://crypto-times.jp/feed/", "category": "일본 블록체인·Web3 뉴스", "status": "Active RSS", "region": "일본 미디어"},
+    "CryptoNews JP": {"url": "https://cryptonews.com/jp/feed/", "category": "일본어 크립토 글로벌 뉴스", "status": "Active RSS", "region": "일본어 미디어"},
+    "Coinspeaker JP": {"url": "https://www.coinspeaker.com/jp/feed/", "category": "일본어 크립토·금융 뉴스", "status": "Active RSS", "region": "일본어 미디어"},
+    "99Bitcoins JP": {"url": "https://99bitcoins.com/jp/feed/", "category": "일본어 BTC·알트코인 뉴스", "status": "Active RSS", "region": "일본어 미디어"},
+    "CryptoDnes JP": {"url": "https://cryptodnes.bg/jp/feed/", "category": "일본어 글로벌 크립토 뉴스", "status": "Active RSS", "region": "일본어 미디어"},
+    "CoinDesk Global": {"url": "https://www.coindesk.com/arc/outboundfeeds/rss/", "category": "글로벌 크립토 뉴스", "status": "Active RSS", "region": "글로벌 미디어"},
 }
 
-DOMESTIC_COLLECTABLE_SOURCES = {
-    "네이트판 랭킹": {"url": "https://pann.nate.com/talk/ranking", "category": "연애/결혼/가족 사연", "status": "실험 수집", "region": "국내", "parser": "nate_pann", "note": "공개 랭킹 목록에서 제목/URL 중심 수집"},
-    "보배드림 베스트": {"url": "https://www.bobaedream.co.kr/list?code=best", "category": "사건/가족/직장/이슈", "status": "실험 수집", "region": "국내", "parser": "bobaedream", "note": "공개 베스트 목록에서 제목/URL 중심 수집"},
+CRYPTO_PUBLIC_LIST_SOURCES = {
+    "5ch 仮想通貨板": {
+        "url": "https://fate.5ch.io/cryptocoin/subject.txt",
+        "thread_base_url": "https://fate.5ch.io/test/read.cgi/cryptocoin/",
+        "category": "일본 커뮤니티 스레드",
+        "status": "공개 subject.txt",
+        "region": "일본 커뮤니티",
+        "parser": "5ch_subject",
+        "note": "스레드 제목과 댓글 수만 수집합니다. 본문/댓글 원문 대량 저장은 하지 않습니다.",
+    },
+    "CoinMarketCap Headlines": {
+        "url": "https://coinmarketcap.com/headlines/news/",
+        "category": "글로벌 코인 헤드라인",
+        "status": "공개 헤드라인",
+        "region": "글로벌 미디어",
+        "parser": "coinmarketcap_headlines",
+        "note": "CoinMarketCap 커뮤니티 기사 링크와 제목 중심 수집",
+    },
+    "Yahoo Finance JP Crypto": {
+        "url": "https://finance.yahoo.co.jp/news/search?q=%E4%BB%AE%E6%83%B3%E9%80%9A%E8%B2%A8",
+        "category": "일본 금융 포털 크립토 뉴스",
+        "status": "공개 검색목록",
+        "region": "일본 미디어",
+        "parser": "yahoo_finance_jp_news",
+        "note": "Yahoo!ファイナンス 검색 결과에서 암호자산 관련 기사 제목과 링크만 수집",
+    },
 }
 
-DOMESTIC_SOURCES = [
-    {"site": "디시인사이드", "category": "익명 커뮤니티", "status": "검토 필요", "note": "약관/자동수집 제한 검토 후 결정"},
-    {"site": "네이트판", "category": "연애/결혼/가족 사연", "status": "실험 수집", "note": "공개 랭킹 목록에서 제목/URL 중심 수집"},
-    {"site": "더쿠", "category": "이슈/썰", "status": "보류", "note": "원문 저장 금지 원칙과 접근 구조 검토 필요"},
-    {"site": "인스티즈", "category": "커뮤니티 썰", "status": "보류", "note": "로그인/약관 검토 필요"},
-    {"site": "쭉빵닷컴", "category": "여성 커뮤니티", "status": "보류", "note": "접근/약관/개인정보 위험도 확인 필요"},
-    {"site": "보배드림", "category": "사건/가족/직장", "status": "실험 수집", "note": "공개 베스트 목록에서 제목/URL 중심 수집"},
-    {"site": "블라인드", "category": "직장 썰", "status": "제외/보류", "note": "로그인 기반, 자동 수집 부적합 가능성 높음"},
+SOURCE_NOTES = [
+    {"site": "CoinPost JP", "category": "일본 대표 암호자산 미디어", "status": "기본 수집", "note": "RSS 정상 응답. 일본 시장 반응과 주요 공시·ETF·거래소 이슈 감지용"},
+    {"site": "NADA NEWS / CoinDesk Japan", "category": "디지털자산·Web3", "status": "기본 수집", "note": "CoinDesk Japan 계열 RSS가 NADA NEWS로 리다이렉트되어 정상 응답"},
+    {"site": "CRYPTO TIMES JP", "category": "일본 Web3·프로젝트 뉴스", "status": "기본 수집", "note": "프로젝트·규제·거래소 이슈 감지용"},
+    {"site": "5ch 仮想通貨板", "category": "일본 커뮤니티", "status": "옵션 수집", "note": "제목/댓글 수 기반으로 커뮤니티 화제성만 확인"},
+    {"site": "CoinMarketCap Headlines", "category": "글로벌 헤드라인", "status": "옵션 수집", "note": "글로벌 기사 흐름 보정용. 영문 제목이 섞일 수 있음"},
+    {"site": "Cointelegraph JP", "category": "일본어 글로벌 뉴스", "status": "보류", "note": "확인 시점 RSS가 410 Gone으로 응답해 기본 수집에서 제외"},
 ]
 
 REWRITE_PRINCIPLES = [
     "원문 문장 구조를 그대로 복제하지 않는다.",
-    "댓글 원문과 사용자 식별 정보를 대량 저장하지 않는다.",
-    "이름, 회사, 지역, 학교, 계정명 등 식별 가능한 정보는 일반화한다.",
-    "사주/점성술/작두/기운 표현은 허용하되, 단정적 점술 판단은 피한다.",
-    "대본은 라이브 상담형 1인칭 여성 유튜버 말투를 기준으로 한다.",
-    "존댓말 진행, 반말 리액션, 채팅 받아치기, 현실 조언이 모두 들어가야 한다.",
+    "5ch 등 커뮤니티 댓글 원문과 사용자 식별 정보를 대량 저장하지 않는다.",
+    "계정명, 지갑 주소, 개인명 등 식별 가능한 정보는 필요한 경우 일반화한다.",
+    "매수/매도/가격 전망을 단정하지 않고 출처, 시간, 공식 발표 여부를 분리한다.",
+    "대본은 크립토 라이브 해설형 1인칭 진행자 말투를 기준으로 한다.",
+    "존댓말 진행, 반말 리액션, 커뮤니티 반응 받아치기, 리스크 체크가 모두 들어가야 한다.",
 ]
 
 
@@ -239,7 +265,7 @@ def decode_html(raw: bytes, content_type: str = "") -> str:
     candidates = []
     if charset_match:
         candidates.append(charset_match.group(1))
-    candidates.extend(["utf-8", "cp949", "euc-kr"])
+    candidates.extend(["utf-8", "shift_jis", "cp932", "cp949", "euc-kr"])
     for encoding in candidates:
         try:
             return raw.decode(encoding)
@@ -275,18 +301,22 @@ def log_score(value: int, scale: float) -> float:
 
 def story_angle(title: str) -> str:
     lower = title.lower()
-    korean = title
-    if any(word in lower for word in ["wedding", "fiancé", "fiance", "husband", "wife"]) or any(word in korean for word in ["결혼", "파혼", "신랑", "신부", "남편", "아내"]):
-        return "Wedding / Relationship Drama"
-    if any(word in lower for word in ["mother", "father", "parent", "family"]) or any(word in korean for word in ["엄마", "아빠", "부모", "가족", "시댁", "장모"]):
-        return "Family Conflict"
-    if any(word in lower for word in ["work", "boss", "coworker", "job"]) or any(word in korean for word in ["회사", "직장", "상사", "동료", "퇴사"]):
-        return "Workplace Betrayal"
-    if any(word in lower for word in ["friend", "roommate"]) or any(word in korean for word in ["친구", "룸메", "동창"]):
-        return "Friend / Roommate Drama"
-    if "update" in lower or "final update" in lower:
-        return "Update / Longform Story"
-    return "General Storytime"
+    text = title
+    if any(word in lower for word in ["bitcoin", "btc", "metaplanet"]) or any(word in text for word in ["ビットコイン", "BTC", "メタプラネット"]):
+        return "BTC / Bitcoin"
+    if any(word in lower for word in ["ethereum", "eth", "solana", "xrp", "ripple", "altcoin", "doge"]) or any(word in text for word in ["イーサリアム", "ソラナ", "リップル", "アルト", "ドージ", "柴犬"]):
+        return "Altcoin / L1-L2"
+    if any(word in lower for word in ["sec", "cftc", "regulation", "law", "tax", "etf"]) or any(word in text for word in ["規制", "金融庁", "税", "法", "ETF", "承認", "当局"]):
+        return "Regulation / ETF"
+    if any(word in lower for word in ["exchange", "binance", "coinbase", "bitget", "sbi"]) or any(word in text for word in ["取引所", "バイナンス", "コインベース", "ビットゲット", "SBI"]):
+        return "Exchange / Infrastructure"
+    if any(word in lower for word in ["hack", "scam", "phishing", "exploit", "attack"]) or any(word in text for word in ["不正", "ハッキング", "詐欺", "攻撃", "流出", "フィッシング"]):
+        return "Security / Risk"
+    if any(word in lower for word in ["fed", "inflation", "cpi", "rate", "treasury"]) or any(word in text for word in ["米国", "FRB", "CPI", "金利", "インフレ", "国債"]):
+        return "Macro / Market"
+    if any(word in lower for word in ["defi", "nft", "web3", "dao", "rwa", "stablecoin"]) or any(word in text for word in ["DeFi", "NFT", "Web3", "DAO", "RWA", "ステーブルコイン"]):
+        return "Web3 / DeFi"
+    return "Crypto General"
 
 
 def calculate_scores(item: StoryItem) -> dict[str, float]:
@@ -301,7 +331,7 @@ def calculate_scores(item: StoryItem) -> dict[str, float]:
     velocity_score = round((freshness_score * 0.55) + (rank_score * 0.45), 2)
     viral_score = min(100, reaction_score * 0.20 + debate_score * 0.15 + rank_score * 0.35 + freshness_score * 0.30)
     production_score = min(100, viral_score * 0.45 + debate_score * 0.20 + velocity_score * 0.20 + 15)
-    risk_score = 35 if item.region == "해외" else 60
+    risk_score = 45 if "커뮤니티" in item.region else 25
     return {"viral_score": round(viral_score, 2), "velocity_score": round(velocity_score, 2), "debate_score": round(debate_score, 2), "production_score": round(production_score, 2), "risk_score": round(risk_score, 2), "freshness_score": round(freshness_score, 2), "rank_score": round(rank_score, 2)}
 
 
@@ -326,22 +356,90 @@ def collect_rss(source_name: str, source_meta: dict[str, str], limit: int) -> li
     return items
 
 
-def is_domestic_story_link(parser_type: str, href: str, text: str) -> bool:
+CRYPTO_KEYWORDS = [
+    "bitcoin", "btc", "ethereum", "eth", "xrp", "ripple", "solana", "sol", "crypto", "token",
+    "stablecoin", "defi", "nft", "web3", "sec", "cftc", "etf", "binance", "coinbase",
+    "ビットコイン", "仮想通貨", "暗号資産", "イーサリアム", "リップル", "ソラナ", "トークン",
+    "ステーブルコイン", "取引所", "金融庁", "規制", "ETF", "ブロックチェーン",
+]
+
+
+def is_crypto_public_link(parser_type: str, href: str, text: str) -> bool:
     if len(text) < 8:
         return False
-    bad_words = ["로그인", "회원가입", "검색", "이전", "다음", "공지", "광고", "이벤트", "고객센터", "댓글", "추천"]
+    bad_words = ["로그인", "회원가입", "검색", "이전", "다음", "공지", "광고", "이벤트", "고객센터", "ログイン", "会員登録", "広告", "検索", "ヘルプ"]
     if any(word in text for word in bad_words):
         return False
-    if parser_type == "nate_pann":
-        return "/talk/" in href and "ranking" not in href
-    if parser_type == "bobaedream":
-        return "view" in href and ("No=" in href or "code=" in href)
+    lower_text = text.lower()
+    lower_href = href.lower()
+    if parser_type == "coinmarketcap_headlines":
+        if "coinmarketcap.com/community/" not in lower_href:
+            return False
+        return any(keyword.lower() in lower_text for keyword in CRYPTO_KEYWORDS)
+    if parser_type == "yahoo_finance_jp_news":
+        if "finance.yahoo.co.jp/news/detail/" not in lower_href:
+            return False
+        return any(keyword.lower() in lower_text for keyword in CRYPTO_KEYWORDS)
     return False
 
 
-def collect_public_list(source_name: str, source_meta: dict[str, str], limit: int) -> tuple[list[StoryItem], str]:
+def parse_5ch_subject_title(raw_title: str) -> tuple[str, int]:
+    match = re.search(r"\s*\((\d+)\)\s*$", raw_title)
+    if not match:
+        return raw_title.strip(), 0
+    title = raw_title[: match.start()].strip()
+    return title, int(match.group(1))
+
+
+def collect_5ch_subject_list(source_name: str, source_meta: dict[str, str], limit: int) -> tuple[list[StoryItem], str]:
     collected_at = datetime.now(timezone.utc)
-    request = Request(source_meta["url"], headers={"User-Agent": USER_AGENT, "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8"})
+    request = Request(source_meta["url"], headers={"User-Agent": USER_AGENT, "Accept-Language": "ja-JP,ja;q=0.9,ko;q=0.7,en;q=0.6"})
+    try:
+        with urlopen(request, timeout=10) as response:
+            raw = response.read()
+            text = decode_html(raw, response.headers.get("Content-Type", ""))
+    except Exception as error:
+        return [], f"{source_name} 수집 실패: {error}"
+    items: list[StoryItem] = []
+    for line in text.splitlines():
+        if "<>" not in line or ".dat" not in line:
+            continue
+        thread_part, raw_title = line.split("<>", 1)
+        thread_id = thread_part.replace(".dat", "").strip()
+        if not thread_id.isdigit():
+            continue
+        title, comment_count = parse_5ch_subject_title(clean_html(raw_title))
+        try:
+            posted_at = datetime.fromtimestamp(int(thread_id), tz=timezone.utc)
+        except Exception:
+            posted_at = None
+        url = f"{source_meta.get('thread_base_url', source_meta['url']).rstrip('/')}/{thread_id}/l50"
+        items.append(
+            StoryItem(
+                source=source_name,
+                region=source_meta["region"],
+                category=source_meta["category"],
+                title=title[:180],
+                url=url,
+                original_excerpt=f"5ch 仮想通貨板 subject.txt 공개 스레드 목록에서 제목과 댓글 수만 수집했습니다. 댓글 수: {comment_count}",
+                posted_at=posted_at,
+                collected_at=collected_at,
+                rank_position=len(items) + 1,
+                comment_count=comment_count,
+            )
+        )
+        if len(items) >= limit:
+            break
+    return items, f"{source_name} 수집 완료: {len(items)}개"
+
+
+def collect_public_list(source_name: str, source_meta: dict[str, str], limit: int) -> tuple[list[StoryItem], str]:
+    parser_type = source_meta.get("parser", "")
+    if parser_type == "5ch_subject":
+        return collect_5ch_subject_list(source_name, source_meta, limit)
+
+    collected_at = datetime.now(timezone.utc)
+    request = Request(source_meta["url"], headers={"User-Agent": USER_AGENT, "Accept-Language": "ja-JP,ja;q=0.9,ko;q=0.7,en;q=0.6"})
     try:
         with urlopen(request, timeout=10) as response:
             raw = response.read()
@@ -353,20 +451,28 @@ def collect_public_list(source_name: str, source_meta: dict[str, str], limit: in
     items: list[StoryItem] = []
     seen_urls: set[str] = set()
     for href, text in parser.links:
-        if not is_domestic_story_link(source_meta["parser"], href, text):
+        if not is_crypto_public_link(parser_type, href, text):
             continue
         url = urljoin(source_meta["url"], href)
         if url in seen_urls:
             continue
         seen_urls.add(url)
-        items.append(StoryItem(source=source_name, region=source_meta["region"], category=source_meta["category"], title=text[:180], url=url, original_excerpt="공개 목록에서 제목과 링크만 수집했습니다. 원문 확인은 원문 링크에서 진행합니다.", posted_at=None, collected_at=collected_at, rank_position=len(items) + 1))
+        items.append(StoryItem(source=source_name, region=source_meta["region"], category=source_meta["category"], title=text[:180], url=url, original_excerpt="공개 목록에서 제목과 링크만 수집했습니다. 본문 확인은 원문 링크에서 진행합니다.", posted_at=None, collected_at=collected_at, rank_position=len(items) + 1))
         if len(items) >= limit:
             break
     return items, f"{source_name} 수집 완료: {len(items)}개"
 
 
 def infer_analysis(row: dict) -> dict[str, str]:
-    return {"core_summary": f"이 소재는 '{row['title']}'에서 시작되는 {row['angle']} 유형의 사연입니다.", "core_conflict": "사연자가 느낀 찝찝함과 주변 반응 사이의 간극이 핵심 갈등입니다.", "relationship_map": "사연자 / 갈등 유발 인물 / 채팅이 갈릴 지점", "red_flag": "사건보다 이후 태도와 말투가 핵심 레드플래그입니다.", "comment_trigger": "시청자는 예민함인지 감지력인지로 갈릴 가능성이 높습니다.", "pattern_insight": "관계의 기운과 타이밍이 어긋나는 순간을 읽는 방향으로 해석합니다.", "risk_note": "원문 표현을 그대로 쓰지 않고, 인물·장소·관계 디테일을 일반화해서 재창작해야 합니다."}
+    return {
+        "core_summary": f"이 소재는 '{row['title']}'에서 시작되는 {row['angle']} 유형의 일본/글로벌 크립토 이슈입니다.",
+        "core_conflict": "가격 재료, 규제 변화, 거래소·프로젝트 리스크, 커뮤니티 반응 사이의 간극이 핵심입니다.",
+        "relationship_map": "발행 매체 / 관련 프로젝트·토큰 / 투자자 커뮤니티 / 규제기관 또는 거래소",
+        "red_flag": "커뮤니티발 루머와 공식 발표를 분리하고, 가격 전망을 단정하지 않는 것이 핵심 리스크 관리입니다.",
+        "comment_trigger": "시청자는 매수·관망·리스크 회피 관점으로 갈릴 가능성이 높습니다.",
+        "pattern_insight": "일본 커뮤니티 반응과 글로벌 헤드라인을 비교해 시장 심리의 방향성을 읽습니다.",
+        "risk_note": "투자 조언처럼 단정하지 않고, 출처·시간·확인 필요 포인트를 분리해 재가공해야 합니다.",
+    }
 
 
 def status_badge(score: float) -> str:
@@ -379,34 +485,76 @@ def status_badge(score: float) -> str:
 
 def make_template_script(row: dict, analysis: dict[str, str]) -> str:
     return f"""00:00
-오늘 사연은요. 제목만 보면 그냥 {row['title']} 이 정도로 보일 수 있어요.
-근데 잠깐만. 이거는 그냥 웃고 넘길 문제가 아닐 수도 있어요.
-제가 이런 사연 볼 때 제일 먼저 보는 게 뭐냐면요. 말보다 타이밍이에요.
+오늘 코인 이슈는요. 제목만 보면 그냥 {row['title']} 이 정도로 보일 수 있어요.
+근데 잠깐만. 이건 단순 뉴스가 아니라 일본 커뮤니티 반응과 글로벌 헤드라인이 같이 움직이는 재료일 수 있습니다.
+제가 이런 이슈 볼 때 제일 먼저 보는 건 가격 예측이 아니라, 출처와 타이밍이에요.
 
 00:40
-사연자님이 보내주신 내용을 보면, 처음에는 본인도 자기가 예민한 줄 알았대요.
-근데 이상하게 마음이 계속 걸린 거죠.
+먼저 확인할 건 세 가지입니다. 누가 말했는지, 어떤 토큰이나 거래소가 엮였는지, 그리고 시장이 이미 반응했는지예요.
+커뮤니티에서는 바로 매수다, 악재다 갈리겠지만 그 전에 공식 발표와 기사 원문을 나눠서 봐야 합니다.
 
 01:40
-아니 근데 여러분들, 마음이 계속 걸린다는 건 그냥 지나가는 감정이 아닐 때가 있어요.
-사주로 치면 이건 궁합이 나쁘다 이런 단정이 아니라, 기운이 딱 삐끗한 순간이 있는 거예요.
+아니 근데 여러분, 코인판에서 제일 위험한 게 뭐냐면 제목 하나 보고 바로 방향을 정하는 겁니다.
+BTC 재료인지, 알트 개별 재료인지, 규제 재료인지에 따라 파급력이 완전히 달라져요.
 
 02:30
-지금 채팅에서도 갈리죠. 손절이다, 아니다, 그냥 장난이다.
-아니 얘들아 잠깐만. 사람 관계를 그렇게 바로 시장가 매도하듯이 던지면 안 됩니다.
+지금 댓글에서도 갈릴 수 있어요. 호재다, 이미 반영됐다, 위험하다.
+잠깐만요. 이럴수록 가격 예측이 아니라 체크리스트로 봐야 합니다. 출처, 시간, 관련 토큰, 거래소 반응, 커뮤니티 과열도.
 
 06:30
-사연자님, 제가 보기엔 바로 끊을 문제는 아니에요. 근데 그냥 넘길 문제도 아닙니다.
-한 번은 확인하세요. 대답보다 태도를 보세요.
+제 관점은 이겁니다. 이 이슈는 바로 매매 판단으로 쓰기보다, 오늘 시장 심리를 읽는 재료로 두는 게 맞습니다.
+특히 일본발 커뮤니티 반응은 속도가 빠르지만 루머도 섞이기 때문에 기사 원문과 공식 발표를 반드시 나눠야 합니다.
 
 09:30
-여러분이라면 이 관계, 한 번 더 물어볼 것 같아요? 아니면 마음속으로 선을 그을 것 같아요?
+여러분이라면 이 이슈, 단기 트레이딩 재료로 보시겠어요? 아니면 리스크 체크용 뉴스로만 보시겠어요?
 """
 
 
 def fallback_package(row: dict, analysis: dict[str, str]) -> dict:
     script = make_template_script(row, analysis)
-    return {"source": "template_fallback_live_advice", "overview_ko": analysis["core_summary"], "analysis": analysis, "risk_filter": ["원문 직접 복제 금지", "인물/장소/직장명 일반화", "댓글 원문 대량 저장 금지"], "longform_script": script, "shorts": {"30s": "좋은 소식에 이상한 반응을 본 적 있나요? 아니 근데 이건 웃음보다 그 다음 공기가 문제예요.", "60s": "사연자님이 예민한 게 아니라, 관계의 기운이 삐끗한 순간을 감지한 걸 수도 있어요. 바로 손절 말고 한 번은 확인하세요.", "90s": script[:900]}, "threads": {"5_post": "1. 사연자님은 이상한 반응 하나 때문에 마음이 걸렸습니다.\n2. 문제는 사건보다 그 뒤의 태도입니다.\n3. 바로 손절은 빠릅니다.\n4. 하지만 그냥 넘기는 것도 아닙니다.\n5. 한 번은 확인하고, 대답보다 태도를 보세요."}, "card_news": {"8_cards": [{"title": "이상한 반응", "body": row["title"], "image_prompt": "live advice storytime scene", "design_note": "clean and emotional"}]}, "titles": ["사연자님, 이건 예민한 게 아닐 수도 있어요", "좋은 소식에 웃은 친구, 문제는 그 다음 공기였어요"], "thumbnail_text": ["이건 좀 이상한데?", "예민한 게 아니야"], "comment_question": "여러분이라면 한 번 더 물어보실 건가요?"}
+    return {
+        "source": "template_fallback_live_advice",
+        "overview_ko": analysis["core_summary"],
+        "analysis": analysis,
+        "risk_filter": ["원문 직접 복제 금지", "인물/장소/직장명 일반화", "댓글 원문 대량 저장 금지"],
+        "longform_script": script,
+        "shorts": {
+            "30s": "일본 크립토 커뮤니티에서 지금 갈리는 코인 이슈입니다. 제목보다 먼저 봐야 할 건 출처와 타이밍이에요.",
+            "60s": "이 뉴스는 호재냐 악재냐보다 어떤 토큰, 어떤 거래소, 어떤 규제 맥락과 연결되는지가 중요합니다. 바로 매매 판단으로 쓰기 전에 확인 포인트를 나눠야 합니다.",
+            "90s": script[:900],
+        },
+        "threads": {
+            "5_post": "1. 오늘 일본/글로벌 크립토 헤드라인에서 체크할 이슈입니다.\n2. 제목보다 중요한 건 출처, 시간, 관련 토큰입니다.\n3. 커뮤니티 반응은 빠르지만 루머가 섞일 수 있습니다.\n4. 공식 발표와 기사 해석을 분리해서 봐야 합니다.\n5. 매매 판단보다 먼저 리스크 체크리스트로 정리하세요.",
+            "10_post": "",
+        },
+        "card_news": {
+            "deck_title": "오늘의 일본 크립토 이슈 체크",
+            "format": "8장 카드뉴스",
+            "8_cards": [
+                {
+                    "title": "제목보다 먼저 볼 것",
+                    "hook": "호재/악재보다 출처와 타이밍",
+                    "body": row["title"],
+                    "image_prompt": "live advice storytime scene",
+                    "design_note": "market radar dashboard, clean dark chart mood",
+                    "cta": "이 이슈를 호재로 보시나요, 리스크로 보시나요?",
+                }
+            ],
+        },
+        "note_content": {
+            "title": "오늘의 일본 크립토 이슈 체크",
+            "subtitle": "제목보다 출처, 타이밍, 관련 토큰을 먼저 보는 법",
+            "platform": "Notion / 블로그 공용",
+            "opening_hook": "코인 뉴스는 제목보다 먼저 출처와 시장 반응의 시간차를 봐야 합니다.",
+            "body_markdown": "## 오늘 확인할 포인트\n\n이 이슈는 일본/글로벌 크립토 뉴스 흐름에서 나온 소재입니다. 먼저 관련 토큰, 거래소, 규제기관, 공식 발표 여부를 분리해서 봐야 합니다.\n\n## 바로 매매 판단하지 않기\n\n커뮤니티 반응은 빠르지만 루머와 과장이 섞일 수 있습니다. 뉴스 원문, 공식 발표, 가격 반응, 거래량 변화를 나눠서 체크하는 편이 안전합니다.",
+            "key_takeaways": ["출처와 게시 시간을 먼저 확인한다.", "관련 토큰과 거래소를 분리한다.", "커뮤니티 반응은 보조지표로만 사용한다."],
+            "cta": "이 이슈를 단기 재료로 보시나요, 리스크 체크용으로 보시나요?",
+            "tags": ["크립토뉴스", "일본코인", "비트코인", "카드뉴스", "노트콘텐츠"],
+        },
+        "titles": ["일본 크립토 커뮤니티가 주목한 오늘의 이슈", "이 코인 뉴스, 호재보다 먼저 볼 체크포인트"],
+        "thumbnail_text": ["호재야, 리스크야?", "일본 코인판 반응"],
+        "comment_question": "여러분은 이 이슈를 호재로 보시나요, 리스크로 보시나요?",
+    }
 
 
 def package_to_text(package: dict, key: str, default: str = "") -> str:
@@ -423,7 +571,80 @@ def package_key(row: dict) -> str:
 def expansions_from_package(package: dict) -> dict[str, str]:
     shorts = package.get("shorts", {}) if isinstance(package.get("shorts"), dict) else {}
     threads = package.get("threads", {}) if isinstance(package.get("threads"), dict) else {}
-    return {"30초 쇼츠": shorts.get("30s", ""), "60초 쇼츠": shorts.get("60s", ""), "90초 쇼츠": shorts.get("90s", ""), "Threads 5": threads.get("5_post", ""), "Threads 10": threads.get("10_post", ""), "카드뉴스": json.dumps(package.get("card_news", {}), ensure_ascii=False, indent=2), "썸네일": "\n".join(package.get("thumbnail_text", [])) if isinstance(package.get("thumbnail_text"), list) else str(package.get("thumbnail_text", "")), "제목": "\n".join(package.get("titles", [])) if isinstance(package.get("titles"), list) else str(package.get("titles", ""))}
+    return {
+        "30초 쇼츠": shorts.get("30s", ""),
+        "60초 쇼츠": shorts.get("60s", ""),
+        "90초 쇼츠": shorts.get("90s", ""),
+        "Threads 5": threads.get("5_post", ""),
+        "Threads 10": threads.get("10_post", ""),
+        "카드뉴스": card_news_to_markdown(package.get("card_news", {})),
+        "Note": note_to_markdown(package.get("note_content", {})),
+        "썸네일": "\n".join(package.get("thumbnail_text", [])) if isinstance(package.get("thumbnail_text"), list) else str(package.get("thumbnail_text", "")),
+        "제목": "\n".join(package.get("titles", [])) if isinstance(package.get("titles"), list) else str(package.get("titles", "")),
+    }
+
+
+def list_to_lines(value: object) -> str:
+    if isinstance(value, list):
+        return "\n".join(f"- {item}" for item in value if str(item).strip())
+    return str(value or "")
+
+
+def card_items(card_news: object) -> list[dict]:
+    if not isinstance(card_news, dict):
+        return []
+    for key in ["slides", "cards", "10_cards", "8_cards"]:
+        value = card_news.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def card_news_to_markdown(card_news: object) -> str:
+    if not isinstance(card_news, dict):
+        return str(card_news or "")
+    lines = [f"# {card_news.get('deck_title') or '카드뉴스'}"]
+    if card_news.get("format"):
+        lines.append(f"\n- 포맷: {card_news.get('format')}")
+    if card_news.get("design_system"):
+        lines.append(f"- 디자인: {card_news.get('design_system')}")
+    for index, card in enumerate(card_items(card_news), start=1):
+        lines.append(f"\n## {index}장. {card.get('title', '제목 없음')}")
+        if card.get("hook"):
+            lines.append(f"\n**훅**: {card.get('hook')}")
+        if card.get("body"):
+            lines.append(f"\n{card.get('body')}")
+        if card.get("image_prompt"):
+            lines.append(f"\n이미지 프롬프트: {card.get('image_prompt')}")
+        if card.get("design_note"):
+            lines.append(f"디자인 노트: {card.get('design_note')}")
+        if card.get("cta"):
+            lines.append(f"CTA: {card.get('cta')}")
+    return "\n".join(lines).strip()
+
+
+def note_to_markdown(note: object) -> str:
+    if not isinstance(note, dict):
+        return str(note or "")
+    title = note.get("title") or "Note 콘텐츠"
+    lines = [f"# {title}"]
+    if note.get("subtitle"):
+        lines.append(f"\n> {note.get('subtitle')}")
+    if note.get("opening_hook"):
+        lines.append(f"\n{note.get('opening_hook')}")
+    if note.get("body_markdown"):
+        lines.append(f"\n{note.get('body_markdown')}")
+    elif note.get("body"):
+        lines.append(f"\n{note.get('body')}")
+    takeaways = list_to_lines(note.get("key_takeaways"))
+    if takeaways:
+        lines.append(f"\n## 핵심 정리\n{takeaways}")
+    if note.get("cta"):
+        lines.append(f"\n## 질문\n{note.get('cta')}")
+    tags = note.get("tags")
+    if isinstance(tags, list) and tags:
+        lines.append("\n" + " ".join(f"#{tag}" for tag in tags))
+    return "\n".join(lines).strip()
 
 
 def render_quality(quality: dict) -> None:
@@ -575,9 +796,9 @@ def run_autopilot_pipeline(
 
     analysis, error = analyze_story(source_text, selected_row, model, temperature)
     if error:
-        return logs, f"1차 사연 해부 실패: {error}"
+        return logs, f"1차 이슈 분석 실패: {error}"
     st.session_state.story_analyses[selected_key] = analysis
-    logs.append("1차 사연 해부 완료")
+    logs.append("1차 이슈 분석 완료")
 
     blueprint, error = build_live_blueprint(analysis, selected_row, model, temperature)
     if error:
@@ -629,7 +850,7 @@ def run_autopilot_pipeline(
             if error:
                 return logs, f"4차 파생 콘텐츠 생성 실패: {error}"
             st.session_state.derivative_assets[selected_key] = derivatives
-            logs.append("4차 쇼츠/Threads/카드뉴스 생성 완료")
+            logs.append("4차 쇼츠/Threads/카드뉴스/Note 생성 완료")
 
     if package_when_done:
         if build_package is None:
@@ -646,8 +867,8 @@ def run_autopilot_pipeline(
     return logs, None
 
 
-st.title("Story Pattern Lab")
-st.caption("자동 본문 수집 · 라이브 사연 상담형 반존대 대본 · 사주/점성술 화자성 · Supabase 히스토리")
+st.title("Japan Crypto Pattern Lab")
+st.caption("일본 크립토 미디어 · 5ch 仮想通貨板 · CoinMarketCap 헤드라인 · 카드뉴스/Note 재가공")
 
 initial_state = {
     "stories": [],
@@ -671,10 +892,18 @@ for key, value in initial_state.items():
 
 with st.sidebar:
     st.header("수집 설정")
-    selected_sources = st.multiselect("해외 RSS 소스", options=list(OVERSEAS_SOURCES.keys()), default=["Reddit AITA", "Reddit Relationship Advice"])
-    selected_domestic_sources = st.multiselect("국내 공개목록 실험 소스", options=list(DOMESTIC_COLLECTABLE_SOURCES.keys()), default=[])
+    selected_sources = st.multiselect(
+        "크립토 RSS 미디어",
+        options=list(CRYPTO_RSS_SOURCES.keys()),
+        default=["CoinPost JP", "NADA NEWS / CoinDesk Japan", "CRYPTO TIMES JP"],
+    )
+    selected_public_sources = st.multiselect(
+        "공개목록 / 커뮤니티",
+        options=list(CRYPTO_PUBLIC_LIST_SOURCES.keys()),
+        default=["5ch 仮想通貨板", "CoinMarketCap Headlines"],
+    )
     per_source_limit = st.slider("소스당 수집 개수", 5, 50, 15, 5)
-    collect_button = st.button("실시간 후보 수집", type="primary", width="stretch")
+    collect_button = st.button("크립토 후보 수집", type="primary", width="stretch")
     st.divider()
     st.header("API 상태")
     st.caption(f"OpenAI: {'ON' if openai_is_configured() else 'OFF'}")
@@ -695,7 +924,7 @@ with st.sidebar:
     llm_model = st.text_input("모델명", value=get_secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL) or DEFAULT_OPENAI_MODEL)
     st.caption("품질 우선 권장: gpt-5.5 / 균형: gpt-5.4 / 비용 절감: gpt-5.4-mini")
     if llm_model.strip().lower() == "gpt-4o-mini":
-        st.warning("gpt-4o-mini는 빠르지만 사연 해부와 10분 라이브 구조 설계 품질이 낮게 나올 수 있습니다.")
+        st.warning("gpt-4o-mini는 빠르지만 크립토 이슈 분석과 콘텐츠 구조 설계 품질이 낮게 나올 수 있습니다.")
     temperature = st.slider("창의성", 0.1, 1.2, 0.78, 0.05)
     auto_improve_after_generation = st.checkbox("생성 직후 품질 미달이면 자동 개선", value=True)
     auto_improve_rounds = st.slider("자동 개선 최대 회차", 1, 3, 2, 1, disabled=not auto_improve_after_generation)
@@ -711,11 +940,11 @@ if collect_button:
     collected: list[StoryItem] = []
     logs: list[str] = []
     for source_name in selected_sources:
-        items = collect_rss(source_name, OVERSEAS_SOURCES[source_name], per_source_limit)
+        items = collect_rss(source_name, CRYPTO_RSS_SOURCES[source_name], per_source_limit)
         collected.extend(items)
         logs.append(f"{source_name} 수집 완료: {len(items)}개")
-    for source_name in selected_domestic_sources:
-        items, message = collect_public_list(source_name, DOMESTIC_COLLECTABLE_SOURCES[source_name], per_source_limit)
+    for source_name in selected_public_sources:
+        items, message = collect_public_list(source_name, CRYPTO_PUBLIC_LIST_SOURCES[source_name], per_source_limit)
         collected.extend(items)
         logs.append(message)
     st.session_state.stories = collected
@@ -737,18 +966,21 @@ if st.session_state.collection_logs:
         for log in st.session_state.collection_logs:
             st.write(f"- {log}")
 
-tabs = st.tabs(["📡 소스", "🏆 리더보드", "🎙️ 라이브 제작실", "🗂️ 히스토리", "🧪 원칙/DB"])
+tabs = st.tabs(["📡 소스", "🏆 레이더", "🧩 콘텐츠 제작실", "🗂️ 히스토리", "🧪 원칙/DB"])
 
 with tabs[0]:
     st.subheader("소스 목록")
-    st.dataframe([{"site": name, **meta} for name, meta in OVERSEAS_SOURCES.items()], width="stretch", hide_index=True)
-    st.dataframe(DOMESTIC_SOURCES, width="stretch", hide_index=True)
-    st.dataframe([{"site": name, **meta} for name, meta in DOMESTIC_COLLECTABLE_SOURCES.items()], width="stretch", hide_index=True)
+    st.markdown("#### RSS 미디어")
+    st.dataframe([{"site": name, **meta} for name, meta in CRYPTO_RSS_SOURCES.items()], width="stretch", hide_index=True)
+    st.markdown("#### 공개목록 / 커뮤니티")
+    st.dataframe([{"site": name, **meta} for name, meta in CRYPTO_PUBLIC_LIST_SOURCES.items()], width="stretch", hide_index=True)
+    st.markdown("#### 운영 메모")
+    st.dataframe(SOURCE_NOTES, width="stretch", hide_index=True)
 
 with tabs[1]:
-    st.subheader("스코어 리더보드")
+    st.subheader("크립토 이슈 레이더")
     if not stories:
-        st.info("왼쪽에서 소스를 고르고 실시간 후보 수집을 눌러주세요.")
+        st.info("왼쪽에서 소스를 고르고 크립토 후보 수집을 눌러주세요.")
     else:
         rows = []
         for item in stories:
@@ -768,7 +1000,7 @@ with tabs[1]:
         st.dataframe(filtered, width="stretch", hide_index=True, column_order=["badge", "region", "production_score", "viral_score", "velocity_score", "debate_score", "risk_score", "fresh_min", "rank", "source", "angle", "title", "url"])
 
 with tabs[2]:
-    st.subheader("라이브 사연 상담 제작실")
+    st.subheader("크립토 콘텐츠 제작실")
     rows = st.session_state.get("rows", [])
     if not rows:
         st.info("먼저 리더보드에서 소재를 수집/생성해주세요.")
@@ -798,7 +1030,7 @@ with tabs[2]:
         st.write(f"**URL:** {selected['url']}")
 
         st.markdown("### 🚀 무인 자동 제작")
-        st.caption("본문 확보 → 사연 해부 → 라이브 구조 → 10분 대본 → 품질검사/자동개선 → 파생 콘텐츠/패키지까지 한 번에 실행합니다.")
+        st.caption("본문 확보 → 이슈 분석 → 콘텐츠 구조 → 롱폼 대본 → 품질검사/자동개선 → 카드뉴스/Note 패키지까지 한 번에 실행합니다.")
         auto_col1, auto_col2, auto_col3 = st.columns(3)
         allow_short_material_auto = auto_col1.checkbox("본문 짧아도 RSS/제목 기반 진행", value=True, key=f"allow_short_material_auto_{key}")
         auto_derivatives = auto_col2.checkbox("통과 시 파생 콘텐츠까지 생성", value=True, key=f"auto_derivatives_{key}")
@@ -870,9 +1102,9 @@ with tabs[2]:
         if not ready_for_llm:
             st.warning("본문이 500자 미만입니다. 자동 본문 가져오기를 먼저 실행하거나 테스트 모드를 켜세요.")
 
-        st.markdown("### ③ 사연 해부")
-        if st.button("1차 LLM: 사연 해부하기", disabled=not ready_for_llm or analyze_story is None, width="stretch"):
-            with st.spinner("사연의 핵심 갈등, 채팅 포인트, 사주/점성술 렌즈를 해부 중..."):
+        st.markdown("### ③ 이슈 분석")
+        if st.button("1차 LLM: 크립토 이슈 분석하기", disabled=not ready_for_llm or analyze_story is None, width="stretch"):
+            with st.spinner("이슈의 핵심 재료, 시장 반응, 커뮤니티 포인트를 분석 중..."):
                 result, error = analyze_story(source_text, selected, llm_model, temperature)
             if error:
                 st.session_state.story_analyses.pop(key, None)
@@ -882,16 +1114,16 @@ with tabs[2]:
                 blueprint = {}
                 longform = ""
                 st.error(error)
-                st.warning("새 사연 해부 생성에 실패해서 이전 분석/구조/대본 표시를 비웠습니다.")
+                st.warning("새 이슈 분석 생성에 실패해서 이전 분석/구조/대본 표시를 비웠습니다.")
             else:
                 st.session_state.story_analyses[key] = result
                 analysis = result
-                st.success("사연 해부 완료")
+                st.success("이슈 분석 완료")
         st.json(analysis)
 
-        st.markdown("### ④ 라이브 상담 구조 설계")
-        if st.button("2차 LLM: 라이브 구조 설계하기", disabled=not bool(analysis) or build_live_blueprint is None, width="stretch"):
-            with st.spinner("반말/존댓말 혼합 라이브 상담 구조를 설계 중..."):
+        st.markdown("### ④ 콘텐츠 구조 설계")
+        if st.button("2차 LLM: 콘텐츠 구조 설계하기", disabled=not bool(analysis) or build_live_blueprint is None, width="stretch"):
+            with st.spinner("크립토 이슈 해설 구조를 설계 중..."):
                 result, error = build_live_blueprint(analysis, selected, llm_model, temperature)
             if error:
                 st.session_state.live_blueprints.pop(key, None)
@@ -899,17 +1131,17 @@ with tabs[2]:
                 blueprint = {}
                 longform = ""
                 st.error(error)
-                st.warning("새 라이브 구조 생성에 실패해서 이전 구조/대본 표시를 비웠습니다.")
+                st.warning("새 콘텐츠 구조 생성에 실패해서 이전 구조/대본 표시를 비웠습니다.")
             else:
                 st.session_state.live_blueprints[key] = result
                 blueprint = result
-                st.success("라이브 구조 설계 완료")
+                st.success("콘텐츠 구조 설계 완료")
         if blueprint:
             st.json(blueprint)
 
         st.markdown("### ⑤ 10분 롱폼 대본")
         if st.button("3차 LLM: 10분 대본 쓰기", disabled=not bool(blueprint) or write_live_longform is None, type="primary", width="stretch"):
-            with st.spinner("라이브 사연 상담형 반존대 대본을 작성 중..."):
+            with st.spinner("크립토 이슈 해설형 롱폼 대본을 작성 중..."):
                 script, error = write_live_longform(source_text, analysis, blueprint, selected, llm_model, temperature)
             if error:
                 st.error(error)
@@ -1060,7 +1292,7 @@ with tabs[2]:
 
         st.markdown("### ⑦ 파생 콘텐츠")
         output_locked = bool(longform) and (quality_missing or (bool(quality) and not quality_passed and not force_failed_output))
-        if st.button("4차 LLM: 쇼츠/Threads/카드뉴스 만들기", disabled=not bool(longform) or generate_derivatives is None or output_locked, width="stretch"):
+        if st.button("4차 LLM: 쇼츠/Threads/카드뉴스/Note 만들기", disabled=not bool(longform) or generate_derivatives is None or output_locked, width="stretch"):
             with st.spinner("롱폼 대본 기반으로 파생 콘텐츠 생성 중..."):
                 result, error = generate_derivatives(longform, analysis, selected, llm_model, temperature)
             if error:
@@ -1071,7 +1303,8 @@ with tabs[2]:
                 st.success("파생 콘텐츠 생성 완료")
         if derivatives:
             exp = expansions_from_package(derivatives)
-            der_tabs = st.tabs(["쇼츠", "Threads", "카드뉴스", "제목/썸네일", "JSON"])
+            download_key_suffix = hashlib.md5(str(key).encode("utf-8")).hexdigest()[:10]
+            der_tabs = st.tabs(["쇼츠", "Threads", "카드뉴스", "Note", "제목/썸네일", "JSON"])
             with der_tabs[0]:
                 st.text_area("30초 쇼츠", exp["30초 쇼츠"], height=140)
                 st.text_area("60초 쇼츠", exp["60초 쇼츠"], height=180)
@@ -1080,20 +1313,46 @@ with tabs[2]:
                 st.text_area("5-post Thread", exp["Threads 5"], height=220)
                 st.text_area("10-post Thread", exp["Threads 10"], height=320)
             with der_tabs[2]:
-                cards = derivatives.get("card_news", {}).get("8_cards", []) if isinstance(derivatives.get("card_news"), dict) else []
+                card_news = derivatives.get("card_news", {})
+                cards = card_items(card_news)
                 if cards:
                     for i, card in enumerate(cards, start=1):
                         with st.expander(f"{i}장 · {card.get('title', '제목 없음')}", expanded=i == 1):
+                            if card.get("hook"):
+                                st.markdown(f"**훅**: {card.get('hook')}")
                             st.write(card.get("body", ""))
                             st.caption(card.get("design_note", ""))
                             st.text_area(f"{i}장 이미지 프롬프트", card.get("image_prompt", ""), height=90)
                 else:
                     st.text_area("카드뉴스 JSON", exp["카드뉴스"], height=360)
+                st.download_button(
+                    "카드뉴스 Markdown 다운로드",
+                    exp["카드뉴스"],
+                    file_name="card_news.md",
+                    mime="text/markdown",
+                    width="stretch",
+                    key=f"download_card_news_{download_key_suffix}",
+                )
             with der_tabs[3]:
+                note = derivatives.get("note_content", {})
+                st.text_area("Note Markdown", exp["Note"], height=480)
+                if isinstance(note, dict) and isinstance(note.get("platform_adaptations"), dict):
+                    with st.expander("플랫폼별 변형", expanded=False):
+                        for platform, content in note.get("platform_adaptations", {}).items():
+                            st.text_area(str(platform), str(content), height=160)
+                st.download_button(
+                    "Note Markdown 다운로드",
+                    exp["Note"],
+                    file_name="note_content.md",
+                    mime="text/markdown",
+                    width="stretch",
+                    key=f"download_note_{download_key_suffix}",
+                )
+            with der_tabs[4]:
                 st.text_area("썸네일 문구", exp["썸네일"], height=120)
                 st.text_area("제목 후보", exp["제목"], height=200)
                 st.text_area("댓글 질문", derivatives.get("comment_question", ""), height=100)
-            with der_tabs[4]:
+            with der_tabs[5]:
                 st.json(derivatives)
 
         st.markdown("### ⑧ 저장")
@@ -1141,7 +1400,15 @@ with tabs[3]:
         selected_history_title = st.selectbox("상세 확인", [row.get("title", "제목 없음") for row in history])
         selected_history = next((row for row in history if row.get("title") == selected_history_title), history[0])
         pkg = selected_history.get("package_json", {})
-        st.text_area("저장된 10분 롱폼", package_to_text(pkg, "longform_script"), height=420)
+        history_tabs = st.tabs(["롱폼", "카드뉴스", "Note", "JSON"])
+        with history_tabs[0]:
+            st.text_area("저장된 10분 롱폼", package_to_text(pkg, "longform_script"), height=420)
+        with history_tabs[1]:
+            st.text_area("저장된 카드뉴스", card_news_to_markdown(pkg.get("card_news", {})), height=420)
+        with history_tabs[2]:
+            st.text_area("저장된 Note", note_to_markdown(pkg.get("note_content", {})), height=420)
+        with history_tabs[3]:
+            st.json(pkg)
         st.download_button("히스토리 JSON 다운로드", json.dumps(selected_history, ensure_ascii=False, indent=2), file_name="history_package.json", mime="application/json", width="stretch")
 
 with tabs[4]:
@@ -1161,8 +1428,8 @@ with tabs[4]:
   package_json jsonb,
   created_at timestamptz default now()
 );""", language="sql")
-    st.markdown("### v0.5 제작 플로우")
-    st.write("본문 자동 가져오기 → 사연 해부 → 라이브 구조 설계 → 10분 대본 → 품질검사 → 파생 콘텐츠 → 저장")
+    st.markdown("### v0.7 제작 플로우")
+    st.write("일본/글로벌 크립토 후보 수집 → 이슈 분석 → 콘텐츠 구조 설계 → 롱폼 대본 → 품질검사 → 카드뉴스/Note → 저장")
 
-st.caption("Story Pattern Lab v0.6 · 라이브 사연 상담형 반존대 대본 제작기 · autopilot-v9")
+st.caption("Japan Crypto Pattern Lab v0.7 · 일본 크립토 이슈 레이더 · card news / Note pipeline")
 
