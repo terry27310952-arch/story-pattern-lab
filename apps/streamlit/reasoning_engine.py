@@ -61,7 +61,7 @@ def split_sentences(text: str, limit: int = 6) -> list[str]:
 
 def as_percent(value: object) -> str:
     if value is None or value == "":
-        return "N/A"
+        return "데이터 미수집"
     try:
         return f"{float(value):+.2f}%"
     except Exception:
@@ -80,7 +80,7 @@ def trim_number(value: float) -> str:
 
 def as_price(value: object, unit: str = "USD") -> str:
     if value is None or value == "":
-        return "N/A"
+        return "데이터 미수집"
     try:
         number = float(value)
     except Exception:
@@ -92,7 +92,7 @@ def as_price(value: object, unit: str = "USD") -> str:
 
 def as_plain_number(value: object) -> str:
     if value is None or value == "":
-        return "N/A"
+        return "데이터 미수집"
     try:
         return trim_number(float(value))
     except Exception:
@@ -135,6 +135,11 @@ def btc_level_context(market_summary: dict) -> str:
     resistance = as_price(market_summary.get("btc_nearest_resistance"))
     support_distance = as_percent(market_summary.get("btc_support_distance_pct"))
     resistance_distance = as_percent(market_summary.get("btc_resistance_distance_pct"))
+    if market_summary.get("btc_nearest_support") is None or market_summary.get("btc_nearest_resistance") is None:
+        return (
+            f"BTC 현재가는 {price}입니다. 다만 캔들 기반 지지/저항 산출에 필요한 차트 데이터가 부족해 "
+            "시장 데이터 재갱신 또는 CoinGecko 차트 fallback 확인이 필요합니다."
+        )
     return (
         f"BTC 현재가는 {price}이며, 즉시 확인할 지지는 {support}({support_distance}), "
         f"돌파 확인 저항은 {resistance}({resistance_distance})입니다."
@@ -145,7 +150,7 @@ def btc_indicator_context(market_summary: dict) -> str:
     return (
         f"MA20 {as_price(market_summary.get('btc_ma20'))}, MA50 {as_price(market_summary.get('btc_ma50'))}, "
         f"MA200 {as_price(market_summary.get('btc_ma200'))}, RSI14 {as_plain_number(market_summary.get('btc_rsi14'))}"
-        f"({rsi_state(market_summary.get('btc_rsi14'))}), MACD {market_summary.get('btc_macd_bias') or 'N/A'}, "
+        f"({rsi_state(market_summary.get('btc_rsi14'))}), MACD {market_summary.get('btc_macd_bias') or '데이터 미수집'}, "
         f"ATR14 {as_price(market_summary.get('btc_atr14'))}({as_percent(market_summary.get('btc_atr14_pct'))})입니다."
     )
 

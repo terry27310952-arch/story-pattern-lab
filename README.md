@@ -17,6 +17,9 @@ briefings, card news, Note content, and Excel packages.
    round-number pivots.
 4. Add technical and derivatives data: RSI14, MACD, ATR14, 20D average volume,
    Binance Futures funding rate, mark price, and open interest.
+   - If Binance daily candles are unavailable, the app falls back to CoinGecko
+     `market_chart` daily data so briefing text does not degrade to empty
+     price-level or indicator fields.
 5. Multi-select resources for a briefing bundle.
 6. Fetch every selected article body where public access is possible. Community
    items are treated as sentiment signals only and do not store comment bodies.

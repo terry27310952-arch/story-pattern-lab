@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 
 USER_AGENT = "Mozilla/5.0 StoryPatternLab/1.1; crypto-market-levels"
+MARKET_SCHEMA_VERSION = "price-level-depth-v4"
 
 
 TRADING_ASSETS = {
@@ -60,6 +61,12 @@ def pct_change(first: float | None, last: float | None) -> Optional[float]:
     if first in (None, 0) or last is None:
         return None
     return round(((last - first) / first) * 100, 2)
+
+
+def distance_pct(level: float | None, current: float | None) -> Optional[float]:
+    if level is None or current in (None, 0):
+        return None
+    return round(((level - current) / current) * 100, 2)
 
 
 def round_price(value: float | None) -> float | None:
@@ -170,6 +177,36 @@ def parse_binance_klines(payload: object) -> list[dict]:
     return candles
 
 
+def parse_coingecko_market_chart(payload: object) -> list[dict]:
+    candles: list[dict] = []
+    if not isinstance(payload, dict):
+        return candles
+    prices = payload.get("prices", [])
+    volumes = payload.get("total_volumes", [])
+    volume_by_time = {int(row[0]): safe_float(row[1], 0.0) or 0.0 for row in volumes if isinstance(row, list) and len(row) >= 2}
+    previous_close: float | None = None
+    for row in prices:
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        timestamp = int(row[0])
+        close = safe_float(row[1])
+        if close is None:
+            continue
+        open_price = previous_close if previous_close is not None else close
+        candles.append(
+            {
+                "open_time": timestamp,
+                "open": open_price,
+                "high": max(open_price, close),
+                "low": min(open_price, close),
+                "close": close,
+                "volume": volume_by_time.get(timestamp, 0.0),
+            }
+        )
+        previous_close = close
+    return candles
+
+
 def level_importance(distance_pct: float | None, reason: str) -> str:
     if distance_pct is None:
         return "watch"
@@ -191,7 +228,16 @@ def dedupe_levels(levels: list[dict], current: float, tolerance_pct: float = 0.3
     return result
 
 
-def build_price_levels(asset: str, current: float, highs: list[float], lows: list[float], closes: list[float], indicators: dict, step: float) -> list[dict]:
+def build_price_levels(
+    asset: str,
+    current: float,
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    indicators: dict,
+    step: float,
+    source_label: str = "Binance spot daily OHLC",
+) -> list[dict]:
     candidates: list[tuple[str, float | None]] = [
         ("24H low", min(lows[-2:]) if len(lows) >= 2 else None),
         ("24H high", max(highs[-2:]) if len(highs) >= 2 else None),
@@ -234,7 +280,7 @@ def build_price_levels(asset: str, current: float, highs: list[float], lows: lis
                 "distance_pct": round(distance_pct, 2) if distance_pct is not None else None,
                 "reason": reason,
                 "importance": level_importance(distance_pct, reason),
-                "source": "Binance daily OHLC + derived indicator",
+                "source": f"{source_label} + derived indicator",
             }
         )
     return dedupe_levels(levels, current)
@@ -265,6 +311,17 @@ def fetch_binance_candles(pair: str, interval: str = "1d", limit: int = 220) -> 
     if error:
         return [], error
     return parse_binance_klines(payload), None
+
+
+def fetch_coingecko_market_chart(coin_id: str, days: int = 365) -> tuple[list[dict], Optional[str]]:
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days={days}&interval=daily"
+    payload, error = fetch_json(url, timeout=25)
+    if error:
+        return [], error
+    candles = parse_coingecko_market_chart(payload)
+    if not candles:
+        return [], "CoinGecko market_chart returned no candles"
+    return candles, None
 
 
 def fetch_derivatives(pair: str) -> dict:
@@ -357,8 +414,18 @@ def fetch_crypto_assets() -> tuple[list[dict], dict, list[dict], list[dict], lis
         pair = meta["pair"]
         ticker = fetch_binance_ticker(pair)
         candles, candle_error = fetch_binance_candles(pair)
+        candle_source = "Binance spot daily OHLC"
         if candle_error:
             errors.append(f"{pair} candles: {candle_error}")
+        if len(candles) < 60:
+            fallback_candles, fallback_error = fetch_coingecko_market_chart(meta["coingecko_id"])
+            if fallback_candles:
+                candles = fallback_candles
+                candle_source = "CoinGecko market_chart daily close fallback"
+                if candle_error:
+                    errors.append(f"{pair} candles fallback: CoinGecko market_chart used")
+            elif fallback_error:
+                errors.append(f"{pair} CoinGecko chart fallback: {fallback_error}")
         closes = [row["close"] for row in candles]
         highs = [row["high"] for row in candles]
         lows = [row["low"] for row in candles]
@@ -367,7 +434,7 @@ def fetch_crypto_assets() -> tuple[list[dict], dict, list[dict], list[dict], lis
         if not current:
             cg_row = cg.get(meta["coingecko_id"], {})
             current = safe_float(cg_row.get("usd"))
-        levels = build_price_levels(name, float(current), highs, lows, closes, indicators, meta["step"]) if current and candles else []
+        levels = build_price_levels(name, float(current), highs, lows, closes, indicators, meta["step"], candle_source) if current and candles else []
         level_summary = nearest_levels(levels)
         all_levels.extend(levels[:10])
         cg_row = cg.get(meta["coingecko_id"], {})
@@ -391,7 +458,7 @@ def fetch_crypto_assets() -> tuple[list[dict], dict, list[dict], list[dict], lis
             "nearest_resistance": level_summary.get("nearest_resistance", {}).get("level"),
             "rsi14": indicators.get("rsi14"),
             "macd_bias": indicators.get("macd", {}).get("bias"),
-            "source": "Binance spot OHLC + CoinGecko public API",
+            "source": f"{candle_source} + CoinGecko public API",
         }
         rows.append(row)
         technicals[name] = {
@@ -400,6 +467,7 @@ def fetch_crypto_assets() -> tuple[list[dict], dict, list[dict], list[dict], lis
             "levels": level_summary,
             "all_levels": levels,
             "candles": candles[-120:],
+            "candle_source": candle_source,
         }
         if meta["symbol"] in {"BTC", "ETH", "SOL", "XRP"}:
             derivatives.append(fetch_derivatives(pair))
@@ -495,6 +563,7 @@ def collect_market_snapshot() -> dict:
         errors.append(f"Fear & Greed: {fear_error}")
 
     return {
+        "schema_version": MARKET_SCHEMA_VERSION,
         "as_of": datetime.now(timezone.utc).isoformat(),
         "crypto": crypto_rows,
         "macro": macro_rows,
@@ -556,26 +625,35 @@ def summarize_market(snapshot: dict) -> dict:
 
     nearest_support = btc_levels.get("nearest_support", {})
     nearest_resistance = btc_levels.get("nearest_resistance", {})
+    btc_support_level = nearest_support.get("level") or btc.get("nearest_support")
+    btc_resistance_level = nearest_resistance.get("level") or btc.get("nearest_resistance")
+    btc_price = btc.get("price")
+    support_distance = nearest_support.get("distance_pct")
+    resistance_distance = nearest_resistance.get("distance_pct")
+    if support_distance is None:
+        support_distance = distance_pct(safe_float(btc_support_level), safe_float(btc_price))
+    if resistance_distance is None:
+        resistance_distance = distance_pct(safe_float(btc_resistance_level), safe_float(btc_price))
     return {
         "bias": bias,
         "label": label,
         "risk_points": risk_points,
-        "btc_price": btc.get("price"),
+        "btc_price": btc_price,
         "btc_24h": btc.get("change_24h"),
         "btc_7d": btc.get("change_7d"),
         "btc_30d": btc.get("change_30d"),
         "btc_technical_bias": btc.get("technical_bias"),
-        "btc_rsi14": btc_indicators.get("rsi14"),
-        "btc_macd_bias": btc_indicators.get("macd", {}).get("bias"),
+        "btc_rsi14": btc_indicators.get("rsi14") or btc.get("rsi14"),
+        "btc_macd_bias": btc_indicators.get("macd", {}).get("bias") or btc.get("macd_bias"),
         "btc_ma20": btc_indicators.get("ma20"),
         "btc_ma50": btc_indicators.get("ma50"),
         "btc_ma200": btc_indicators.get("ma200"),
         "btc_atr14": btc_indicators.get("atr14"),
         "btc_atr14_pct": btc_indicators.get("atr14_pct"),
-        "btc_nearest_support": nearest_support.get("level"),
-        "btc_support_distance_pct": nearest_support.get("distance_pct"),
-        "btc_nearest_resistance": nearest_resistance.get("level"),
-        "btc_resistance_distance_pct": nearest_resistance.get("distance_pct"),
+        "btc_nearest_support": btc_support_level,
+        "btc_support_distance_pct": support_distance,
+        "btc_nearest_resistance": btc_resistance_level,
+        "btc_resistance_distance_pct": resistance_distance,
         "btc_mark_price": btc_derivative.get("mark_price"),
         "btc_funding_rate": btc_derivative.get("last_funding_rate"),
         "btc_open_interest_contracts": btc_derivative.get("open_interest_contracts"),

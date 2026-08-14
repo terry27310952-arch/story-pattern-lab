@@ -9,6 +9,7 @@ import streamlit as st
 
 from excel_exporter import build_excel_bytes
 from market_data import (
+    MARKET_SCHEMA_VERSION,
     collect_market_snapshot,
     flatten_derivatives_rows,
     flatten_indicator_rows,
@@ -31,7 +32,7 @@ except Exception:
     fetch_article_body = None
 
 
-APP_VERSION = "2026-08-14 price-level-research-v3"
+APP_VERSION = "2026-08-14 price-depth-refresh-v4"
 
 
 MARKET_STRUCTURE_LABELS = {
@@ -113,6 +114,46 @@ def selected_resources() -> list[dict]:
     return [row for row in st.session_state.get("resources", []) if row.get("id") in selected]
 
 
+def has_value(value: object) -> bool:
+    return value is not None and value != ""
+
+
+def market_snapshot_has_depth(snapshot: dict) -> bool:
+    if not snapshot:
+        return False
+    if snapshot.get("schema_version") != MARKET_SCHEMA_VERSION:
+        return False
+    summary = summarize_market(snapshot)
+    required = [
+        "btc_price",
+        "btc_nearest_support",
+        "btc_nearest_resistance",
+        "btc_ma20",
+        "btc_ma50",
+        "btc_rsi14",
+        "btc_macd_bias",
+        "btc_atr14",
+        "btc_atr14_pct",
+    ]
+    return all(has_value(summary.get(key)) for key in required)
+
+
+def refresh_market_if_incomplete(reason: str) -> bool:
+    if market_snapshot_has_depth(st.session_state.get("market_snapshot", {})):
+        return True
+    with st.spinner(f"{reason} 가격 레벨과 보조지표를 다시 계산하는 중입니다."):
+        st.session_state.market_snapshot = collect_market_snapshot()
+    ok = market_snapshot_has_depth(st.session_state.get("market_snapshot", {}))
+    if not ok:
+        st.warning("시장 데이터가 일부만 수집되었습니다. 브리핑은 생성할 수 있지만 가격 레벨/보조지표 일부가 제한될 수 있습니다.")
+        errors = st.session_state.market_snapshot.get("errors", [])
+        if errors:
+            with st.expander("시장 데이터 수집 오류", expanded=False):
+                for error in errors:
+                    st.write(f"- {error}")
+    return ok
+
+
 def shorten(value: object, length: int = 120) -> str:
     text = " ".join(str(value or "").split())
     return text[: length - 1] + "…" if len(text) > length else text
@@ -124,7 +165,7 @@ def market_label(key: str) -> str:
 
 def fmt_price(value: object) -> str:
     if value is None or value == "":
-        return "N/A"
+        return "데이터 없음"
     try:
         number = float(value)
     except Exception:
@@ -138,7 +179,7 @@ def fmt_price(value: object) -> str:
 
 def fmt_pct(value: object) -> str:
     if value is None or value == "":
-        return "N/A"
+        return "데이터 없음"
     try:
         return f"{float(value):+.2f}%"
     except Exception:
@@ -329,6 +370,8 @@ def render_market(snapshot: dict) -> None:
         if fear:
             st.write(f"Fear & Greed: **{fear.get('value')} / {fear.get('classification')}**")
         st.caption("가격/캔들: Binance spot, 파생: Binance Futures, 시총/JYP: CoinGecko, 매크로: Yahoo Finance, 심리: Alternative.me")
+    if not market_snapshot_has_depth(snapshot):
+        st.warning("현재 시장 snapshot에 가격 레벨/보조지표가 부족합니다. 브리핑 생성 시 자동으로 다시 갱신됩니다.")
     if snapshot.get("errors"):
         with st.expander("시장 데이터 오류", expanded=False):
             for error in snapshot["errors"]:
@@ -658,9 +701,7 @@ with tabs[2]:
         briefing_type = "weekly" if briefing_type_label == "주간 방향" else "daily"
         run_brief = st.button("선택 리소스로 브리핑 생성", type="primary", use_container_width=True)
         if run_brief:
-            if not st.session_state.market_snapshot:
-                with st.spinner("시장 데이터가 없어 먼저 갱신합니다."):
-                    st.session_state.market_snapshot = collect_market_snapshot()
+            refresh_market_if_incomplete("브리핑 생성 전")
             with st.spinner("선택 리소스의 원문 전체를 취합하는 중입니다. 선택 수가 많으면 시간이 걸릴 수 있습니다."):
                 enriched, enrich_logs = enrich_material(selected, auto_fetch_body)
                 st.session_state.enriched_resources = enriched
