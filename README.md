@@ -1,28 +1,48 @@
-# Japan Crypto Pattern Lab
+# Crypto Trader Briefing Lab
 
-Japan Crypto Pattern Lab is a Streamlit radar for Japanese crypto community
-signals, Japanese crypto media, CoinMarketCap-style global headlines, and
-publishable card news / Note content.
+Streamlit app for collecting Japanese crypto media, Japanese community signals,
+CoinMarketCap-style headlines, and free market context, then turning selected
+resources into trader-facing briefings, card news, Note content, and Excel
+packages.
 
-The first version starts with Streamlit so the full product flow can be tested quickly:
+## Core Flow
 
-1. Collect crypto candidates from Japanese and global RSS sources.
-2. Pull public-list signals from 5ch's crypto board and CoinMarketCap headlines.
-3. Sort them with freshness, community reaction, and production scores.
-4. Classify each item as BTC, altcoin, regulation, exchange, security, macro, or Web3.
-5. Repurpose selected issues into shorts, Threads, card news, and Note content.
+1. Collect resources from Japanese crypto RSS, public news lists, 5ch crypto
+   board subjects, CoinMarketCap headlines, and Yahoo Finance Japan lists.
+2. Refresh market context for Bitcoin, major alts, Nikkei 225, gold, Nasdaq,
+   DXY, US 10Y yield, and crypto sentiment.
+3. Multi-select resources for a briefing bundle.
+4. Generate either:
+   - weekly direction briefing around BTC, Nikkei, gold, alts, asset rotation,
+     and market regime
+   - daily time-zone briefing around Bitcoin-related catalysts and reactions
+5. Split the briefing into card news sets: 5 slides, 6 slides, 7 slides, and a
+   custom AI suggestion.
+6. Export Markdown, JSON, and `.xlsx` files with separate sheets for briefing,
+   card news, Note, sources, and market data.
 
-The OpenAI-backed production flow defaults to `gpt-5.5` for richer issue
-analysis, longform script generation, and derivative content packages for card
-news and Note publishing. You can override it with the `OPENAI_MODEL`
-environment/Streamlit secret.
+## Free Reasoning Options
+
+The app works without a paid API key by using its built-in local reasoning
+engine. That default engine is deterministic and always available.
+
+Optional external reasoning backends:
+
+- Ollama local model
+  - `OLLAMA_BASE_URL=http://localhost:11434`
+  - `OLLAMA_MODEL=qwen3:4b`
+- OpenAI-compatible free-tier endpoint
+  - `FREE_AI_API_BASE=https://example.com/v1`
+  - `FREE_AI_MODEL=free-reasoning-model`
+  - `FREE_AI_API_KEY=...`
+
+If an external backend fails, the app falls back to the local reasoning engine.
 
 ## Local Streamlit Test
 
 ```cmd
-cd apps\streamlit
 pip install -r requirements.txt
-streamlit run app.py
+streamlit run streamlit_app.py
 ```
 
 Open:
@@ -31,8 +51,10 @@ Open:
 http://localhost:8501
 ```
 
-## Current Development Policy
+## Deployment Entry Point
 
-- This repository is separated from `ai-pd-studio` to avoid confusion.
-- Start with Streamlit only.
-- Add exchange APIs, market data, DB storage, FastAPI, and Next.js later.
+Use this file in Streamlit Community Cloud:
+
+```text
+streamlit_app.py
+```
