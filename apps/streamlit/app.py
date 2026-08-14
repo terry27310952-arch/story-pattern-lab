@@ -32,7 +32,7 @@ except Exception:
     fetch_article_body = None
 
 
-APP_VERSION = "2026-08-14 daily-perspective-v7"
+APP_VERSION = "2026-08-14 derivatives-fallback-v8"
 
 
 MARKET_STRUCTURE_LABELS = {
@@ -143,8 +143,14 @@ def market_snapshot_has_depth(snapshot: dict) -> bool:
         "btc_macd_bias",
         "btc_atr14",
         "btc_atr14_pct",
+        "btc_mark_price",
+        "btc_funding_rate",
     ]
-    return all(has_value(summary.get(key)) for key in required)
+    oi_available = any(
+        has_value(summary.get(key))
+        for key in ["btc_open_interest_contracts", "btc_open_interest_value_usd", "btc_open_interest_base"]
+    )
+    return all(has_value(summary.get(key)) for key in required) and oi_available
 
 
 def refresh_market_if_incomplete(reason: str) -> bool:

@@ -233,7 +233,21 @@ def add_derivatives_sheet(wb: Workbook, market_snapshot: dict) -> None:
     ws = wb.create_sheet("Derivatives")
     append_table(
         ws,
-        ["pair", "mark_price", "index_price", "last_funding_rate", "next_funding_time", "open_interest_contracts", "source", "error"],
+        [
+            "pair",
+            "mark_price",
+            "index_price",
+            "last_funding_rate",
+            "next_funding_time",
+            "open_interest_contracts",
+            "open_interest_value_usd",
+            "open_interest_base",
+            "source",
+            "providers_tried",
+            "field_sources",
+            "fallback_notes",
+            "error",
+        ],
         flatten_derivatives_rows(market_snapshot),
     )
 

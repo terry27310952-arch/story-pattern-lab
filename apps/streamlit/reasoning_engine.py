@@ -164,11 +164,25 @@ def btc_indicator_context(market_summary: dict) -> str:
     )
 
 
+def open_interest_context(market_summary: dict) -> str:
+    contracts = market_summary.get("btc_open_interest_contracts")
+    value_usd = market_summary.get("btc_open_interest_value_usd")
+    base = market_summary.get("btc_open_interest_base")
+    if contracts is not None:
+        return f"{as_plain_number(contracts)} contracts"
+    if value_usd is not None:
+        return f"{as_price(value_usd)} 명목가치"
+    if base is not None:
+        return f"{as_plain_number(base)} BTC"
+    return "데이터 미수집"
+
+
 def btc_derivatives_context(market_summary: dict) -> str:
+    source = market_summary.get("btc_derivatives_source") or "파생 공개 API"
     return (
         f"BTC 선물 마크가격 {as_price(market_summary.get('btc_mark_price'))}, "
         f"펀딩비 {as_percent(market_summary.get('btc_funding_rate'))}({funding_state(market_summary.get('btc_funding_rate'))}), "
-        f"미결제약정 {as_plain_number(market_summary.get('btc_open_interest_contracts'))} contracts입니다."
+        f"미결제약정 {open_interest_context(market_summary)}입니다. 출처는 {source}입니다."
     )
 
 

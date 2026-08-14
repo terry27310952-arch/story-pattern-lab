@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 
 USER_AGENT = "Mozilla/5.0 StoryPatternLab/1.1; crypto-market-levels"
-MARKET_SCHEMA_VERSION = "price-level-depth-v4"
+MARKET_SCHEMA_VERSION = "price-level-depth-v5-derivatives"
 
 
 TRADING_ASSETS = {
@@ -324,24 +324,136 @@ def fetch_coingecko_market_chart(coin_id: str, days: int = 365) -> tuple[list[di
     return candles, None
 
 
-def fetch_derivatives(pair: str) -> dict:
+def okx_inst_id(pair: str) -> str:
+    if not pair.endswith("USDT"):
+        return pair
+    return f"{pair[:-4]}-USDT-SWAP"
+
+
+def fill_derivative_field(row: dict, field: str, value: object, provider: str) -> None:
+    if value is None or value == "":
+        return
+    if row.get(field) is None:
+        row[field] = value
+        row.setdefault("field_sources", {})[field] = provider
+
+
+def derivative_complete(row: dict) -> bool:
+    oi_available = any(row.get(field) is not None for field in ["open_interest_contracts", "open_interest_value_usd", "open_interest_base"])
+    return row.get("mark_price") is not None and row.get("last_funding_rate") is not None and oi_available
+
+
+def funding_percent(value: object) -> float | None:
+    decimal_rate = safe_float(value)
+    if decimal_rate is None:
+        return None
+    return round(decimal_rate * 100, 4)
+
+
+def fetch_binance_derivatives(pair: str) -> tuple[dict, list[str]]:
     premium, premium_error = fetch_json(f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={pair}", timeout=12)
     oi, oi_error = fetch_json(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={pair}", timeout=12)
-    row = {"pair": pair, "source": "Binance Futures public API"}
+    row: dict = {"provider": "Binance Futures"}
     if isinstance(premium, dict):
         row.update(
             {
                 "mark_price": round_price(safe_float(premium.get("markPrice"))),
                 "index_price": round_price(safe_float(premium.get("indexPrice"))),
-                "last_funding_rate": round((safe_float(premium.get("lastFundingRate"), 0) or 0) * 100, 4),
+                "last_funding_rate": funding_percent(premium.get("lastFundingRate")),
                 "next_funding_time": premium.get("nextFundingTime"),
             }
         )
     if isinstance(oi, dict):
         row["open_interest_contracts"] = round_price(safe_float(oi.get("openInterest")))
-    errors = [error for error in [premium_error, oi_error] if error]
-    if errors:
+    return row, [error for error in [premium_error, oi_error] if error]
+
+
+def fetch_bybit_derivatives(pair: str) -> tuple[dict, list[str]]:
+    payload, error = fetch_json(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={pair}", timeout=12)
+    if error or not isinstance(payload, dict):
+        return {"provider": "Bybit"}, [error or "Bybit ticker response is empty"]
+    if payload.get("retCode") != 0:
+        return {"provider": "Bybit"}, [f"Bybit retCode {payload.get('retCode')}: {payload.get('retMsg')}"]
+    items = payload.get("result", {}).get("list", [])
+    item = items[0] if items else {}
+    if not item:
+        return {"provider": "Bybit"}, ["Bybit ticker list is empty"]
+    return (
+        {
+            "provider": "Bybit",
+            "mark_price": round_price(safe_float(item.get("markPrice"))),
+            "index_price": round_price(safe_float(item.get("indexPrice"))),
+            "last_funding_rate": funding_percent(item.get("fundingRate")),
+            "next_funding_time": item.get("nextFundingTime"),
+            "open_interest_contracts": round_price(safe_float(item.get("openInterest"))),
+            "open_interest_value_usd": round_price(safe_float(item.get("openInterestValue"))),
+        },
+        [],
+    )
+
+
+def fetch_okx_derivatives(pair: str) -> tuple[dict, list[str]]:
+    inst_id = okx_inst_id(pair)
+    mark, mark_error = fetch_json(f"https://www.okx.com/api/v5/public/mark-price?instType=SWAP&instId={inst_id}", timeout=12)
+    funding, funding_error = fetch_json(f"https://www.okx.com/api/v5/public/funding-rate?instId={inst_id}", timeout=12)
+    oi, oi_error = fetch_json(f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={inst_id}", timeout=12)
+    row: dict = {"provider": "OKX"}
+    if isinstance(mark, dict) and mark.get("code") == "0":
+        item = (mark.get("data") or [{}])[0]
+        row["mark_price"] = round_price(safe_float(item.get("markPx")))
+    if isinstance(funding, dict) and funding.get("code") == "0":
+        item = (funding.get("data") or [{}])[0]
+        row["last_funding_rate"] = funding_percent(item.get("fundingRate"))
+        row["next_funding_time"] = item.get("fundingTime") or item.get("nextFundingTime")
+    if isinstance(oi, dict) and oi.get("code") == "0":
+        item = (oi.get("data") or [{}])[0]
+        row["open_interest_contracts"] = round_price(safe_float(item.get("oi")))
+        row["open_interest_base"] = round_price(safe_float(item.get("oiCcy")))
+        row["open_interest_value_usd"] = round_price(safe_float(item.get("oiUsd")))
+    errors = [error for error in [mark_error, funding_error, oi_error] if error]
+    for label, payload in [("mark", mark), ("funding", funding), ("oi", oi)]:
+        if isinstance(payload, dict) and payload.get("code") not in {None, "0"}:
+            errors.append(f"OKX {label} code {payload.get('code')}: {payload.get('msg')}")
+    return row, errors
+
+
+def fetch_derivatives(pair: str) -> dict:
+    row: dict = {
+        "pair": pair,
+        "mark_price": None,
+        "index_price": None,
+        "last_funding_rate": None,
+        "next_funding_time": None,
+        "open_interest_contracts": None,
+        "open_interest_value_usd": None,
+        "open_interest_base": None,
+        "providers_tried": [],
+        "field_sources": {},
+    }
+    errors: list[str] = []
+    for provider_fetcher in [fetch_binance_derivatives, fetch_bybit_derivatives, fetch_okx_derivatives]:
+        provider_row, provider_errors = provider_fetcher(pair)
+        provider = provider_row.get("provider", provider_fetcher.__name__)
+        row["providers_tried"].append(provider)
+        errors.extend(f"{provider}: {error}" for error in provider_errors if error)
+        for field in [
+            "mark_price",
+            "index_price",
+            "last_funding_rate",
+            "next_funding_time",
+            "open_interest_contracts",
+            "open_interest_value_usd",
+            "open_interest_base",
+        ]:
+            fill_derivative_field(row, field, provider_row.get(field), provider)
+        if derivative_complete(row):
+            break
+    used_sources = sorted(set(row.get("field_sources", {}).values()))
+    row["source"] = " + ".join(used_sources) if used_sources else "Derivatives public API unavailable"
+    if errors and not derivative_complete(row):
         row["error"] = " / ".join(errors)
+    elif errors:
+        row["fallback_notes"] = " / ".join(errors)
     return row
 
 
@@ -657,6 +769,9 @@ def summarize_market(snapshot: dict) -> dict:
         "btc_mark_price": btc_derivative.get("mark_price"),
         "btc_funding_rate": btc_derivative.get("last_funding_rate"),
         "btc_open_interest_contracts": btc_derivative.get("open_interest_contracts"),
+        "btc_open_interest_value_usd": btc_derivative.get("open_interest_value_usd"),
+        "btc_open_interest_base": btc_derivative.get("open_interest_base"),
+        "btc_derivatives_source": btc_derivative.get("source"),
         "eth_price": eth.get("price"),
         "eth_7d": eth.get("change_7d"),
         "sol_price": sol.get("price"),

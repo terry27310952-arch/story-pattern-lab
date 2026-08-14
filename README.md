@@ -20,6 +20,8 @@ briefings, card news, Note content, and Excel packages.
    - If Binance daily candles are unavailable, the app falls back to CoinGecko
      `market_chart` daily data so briefing text does not degrade to empty
      price-level or indicator fields.
+   - Derivatives data uses Binance Futures first, then fills missing mark
+     price, funding, and open-interest fields from Bybit and OKX public APIs.
 5. Multi-select resources for a briefing bundle.
 6. Fetch every selected article body where public access is possible. Community
    items are treated as sentiment signals only and do not store comment bodies.
