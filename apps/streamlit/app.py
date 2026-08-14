@@ -32,7 +32,7 @@ except Exception:
     fetch_article_body = None
 
 
-APP_VERSION = "2026-08-14 perspective-briefing-v6"
+APP_VERSION = "2026-08-14 daily-perspective-v7"
 
 
 MARKET_STRUCTURE_LABELS = {
@@ -281,9 +281,17 @@ def markdown_brief(brief: dict) -> str:
         lines.append("## 일간 시간대 브리핑")
         for block in brief.get("daily_brief", []):
             lines.append(f"### {block.get('time_zone', '')}")
-            for item in block.get("watch", []):
-                lines.append(f"- {item}")
+            if block.get("decision"):
+                lines.append(f"- 내 결정: {block.get('decision')}")
             lines.append(block.get("trader_read", ""))
+            if block.get("expected_move"):
+                lines.append(f"- 예상 움직임: {block.get('expected_move')}")
+            if block.get("action_plan"):
+                lines.append(f"- 행동 계획: {block.get('action_plan')}")
+            if block.get("no_trade"):
+                lines.append(f"- 하지 않을 매매: {block.get('no_trade')}")
+            for item in block.get("watch", []):
+                lines.append(f"- 관련 원문: {item}")
             lines.append("")
     lines.append("## 리스크")
     for note in brief.get("risk_notes", []):
@@ -499,11 +507,19 @@ def render_brief(brief: dict) -> None:
     with brief_tabs[4]:
         for block in brief.get("daily_brief", []):
             st.markdown(f"#### {block.get('time_zone', '')}")
-            for item in block.get("watch", []):
-                st.write(f"- {item}")
             if block.get("decision"):
                 st.write(f"**내 결정:** {block.get('decision')}")
-            st.caption(block.get("trader_read", ""))
+            st.write(block.get("trader_read", ""))
+            if block.get("expected_move"):
+                st.write(f"**예상 움직임:** {block.get('expected_move')}")
+            if block.get("action_plan"):
+                st.write(f"**행동 계획:** {block.get('action_plan')}")
+            if block.get("no_trade"):
+                st.write(f"**하지 않을 매매:** {block.get('no_trade')}")
+            if block.get("watch"):
+                st.markdown("**관련 원문 체크:**")
+                for item in block.get("watch", []):
+                    st.write(f"- {item}")
     with brief_tabs[5]:
         st.dataframe(brief.get("source_digest", []), hide_index=True, use_container_width=True)
     with brief_tabs[6]:

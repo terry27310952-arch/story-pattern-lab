@@ -111,11 +111,14 @@ def add_daily_sheet(wb: Workbook, brief: dict) -> None:
             {
                 "time_zone": block.get("time_zone", ""),
                 "decision": block.get("decision", ""),
+                "expected_move": block.get("expected_move", ""),
+                "action_plan": block.get("action_plan", ""),
+                "no_trade": block.get("no_trade", ""),
                 "watch": "\n".join(block.get("watch", [])),
                 "trader_read": block.get("trader_read", ""),
             }
         )
-    append_table(ws, ["time_zone", "decision", "watch", "trader_read"], rows)
+    append_table(ws, ["time_zone", "decision", "trader_read", "expected_move", "action_plan", "no_trade", "watch"], rows)
 
 
 def add_trader_stance_sheet(wb: Workbook, brief: dict) -> None:

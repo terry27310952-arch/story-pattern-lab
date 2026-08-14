@@ -675,28 +675,69 @@ def build_time_blocks(resources: list[dict], findings: list[dict], market: dict)
     for index, (label, guide) in enumerate(labels):
         chunk = sorted_rows[index:: len(labels)] or sorted_rows[:3]
         related = [clean_text(row.get("title"), 150) for row in chunk[:4]]
+        related_text = " / ".join(related[:2]) if related else "선택 원문 없음"
         if index == 0:
+            expected_move = (
+                "아시아 장에서 내가 먼저 보는 그림은 방향 확정이 아니라 박스 중간의 소모가 계속되는지, "
+                "아니면 지지/저항 중 한쪽에서 거래량이 붙는지입니다. "
+                f"{market.get('critical_levels', '')} 이 가격대에서 일본발 원문이 가격을 밀어 올리지 못하면, 나는 장 초반 강세를 신뢰하지 않습니다."
+            )
+            action_plan = (
+                "내 행동은 단순합니다. 지지 부근에서 꼬리 회복과 거래량이 같이 나오면 작게 관찰하고, "
+                "박스 중간에서 뉴스만 강한 구간은 포지션을 늘리지 않습니다."
+            )
+            no_trade = "일본발 기사 제목만 보고 BTC 박스 중간에서 추격하는 매매는 하지 않습니다."
             personal_read = (
-                f"아시아 장에서는 내가 먼저 매매 금지 구간을 의식합니다. {market.get('trader_no_trade_zone', '')} "
-                f"{guide} 일본발 원문이 좋아도 {market.get('critical_levels', '')} 이 가격대에서 어느 쪽을 선택하는지 보기 전에는 포지션을 키우지 않습니다."
+                f"아시아 장은 내 기준에서 하루의 방향을 확정하는 시간이 아니라, 시장이 밤사이 나온 원문을 얼마나 진짜 가격으로 인정하는지 보는 시간입니다. {guide} "
+                f"관련 원문은 {related_text}입니다.\n\n"
+                f"{expected_move}\n\n"
+                f"{action_plan} {no_trade}"
             )
             decision = "지지 반응 확인 전 추격 금지"
         elif index == 1:
+            expected_move = (
+                f"유럽 장으로 넘어가면 나는 미국 장 전에 쌓이는 선반영을 봅니다. 내 예상 경로는 {market.get('trader_expected_path', '')} "
+                "그래서 박스 중간의 빠른 위아래 흔들림은 방향 신호보다 포지션 정리 과정일 가능성을 먼저 둡니다."
+            )
+            action_plan = (
+                "내 행동 기준은 상단/하단 반응만 보는 것입니다. 상단에서는 돌파 후 재지지, 하단에서는 이탈 후 빠른 회복이 없으면 관망합니다."
+            )
+            no_trade = "유럽 장 얇은 유동성에서 긴 양봉 하나만 보고 확신도를 올리지 않습니다."
             personal_read = (
-                f"유럽 장에서는 미국 장 전에 포지션이 과하게 한쪽으로 쏠리는지 봅니다. "
-                f"내 예상 경로는 {market.get('trader_expected_path', '')}이므로, 중간 가격에서 흔들리는 움직임은 매매 신호보다 소음으로 봅니다."
+                f"유럽 장 진입 구간은 내게 '미국 장 전 예열'입니다. 관련 원문은 {related_text}이고, 이 시간대에는 원문보다 포지션 쏠림과 가격대 반응을 더 크게 봅니다.\n\n"
+                f"{expected_move}\n\n"
+                f"{action_plan} {no_trade}"
             )
             decision = "박스 중간은 관망, 상단/하단 반응만 체크"
         elif index == 2:
+            expected_move = (
+                "미국 장에서는 ETF, 금리, 달러, 나스닥 쪽 재료가 BTC 가격에 가장 직접적으로 반영될 수 있습니다. "
+                f"나는 {market.get('trader_entry_plan', '')} 이 조건이 충족되지 않으면 좋은 원문도 매매 근거로 승격하지 않습니다."
+            )
+            action_plan = (
+                f"내 행동 계획은 종가와 거래량 확인 후에만 움직이는 것입니다. 동시에 {market.get('trader_risk_plan', '')} "
+                "이 기준을 벗어나면 포지션을 방어적으로 바꿉니다."
+            )
+            no_trade = "미국 장 첫 변동성 캔들 하나로 하루 결론을 내리지 않습니다."
             personal_read = (
-                f"미국 장에서는 방향이 가장 잘 드러납니다. 나는 {market.get('trader_entry_plan', '')} "
-                f"동시에 {market.get('trader_risk_plan', '')} 이 기준을 벗어나면 원문 호재보다 가격 반응을 우선합니다."
+                f"미국 장은 내가 하루 중 가장 진지하게 방향을 판단하는 구간입니다. 관련 원문은 {related_text}이고, 이때는 뉴스 제목보다 실제 종가와 거래량이 더 중요합니다.\n\n"
+                f"{expected_move}\n\n"
+                f"{action_plan} {no_trade}"
             )
             decision = "종가와 거래량 확인 후만 포지션 판단"
         else:
+            expected_move = (
+                "익일 체크에서는 오늘 나온 움직임이 단발성 변동성이었는지, 아니면 다음 날에도 남을 구조 변화였는지 구분합니다. "
+                "가격이 지지/저항을 확정하지 못했다면 원문은 다시 읽더라도 포지션 근거로는 낮춥니다."
+            )
+            action_plan = (
+                "내 행동은 복기입니다. 맞힌 부분보다 틀린 가정을 먼저 지우고, 다음 세션에서 다시 볼 가격대와 원문만 남깁니다."
+            )
+            no_trade = "전일 뉴스가 가격에 남지 않았는데 같은 논리로 다음 날 포지션을 연장하지 않습니다."
             personal_read = (
-                f"익일 체크에서는 내 판단이 맞았는지보다 틀렸을 때 빨리 고칠 수 있는지를 봅니다. "
-                f"{market.get('trader_subjective_note', '')} 관련 원문은 다시 읽되, 가격이 남기지 못한 뉴스는 비중을 낮춥니다."
+                f"익일 체크는 내 매매법에서 꽤 중요합니다. 관련 원문은 {related_text}이고, 이 시간대에는 새 예측보다 전날 관점의 오류를 줄이는 데 집중합니다.\n\n"
+                f"{expected_move}\n\n"
+                f"{action_plan} {no_trade} {market.get('trader_subjective_note', '')}"
             )
             decision = "뉴스 잔존 효과와 가격 확정 여부 재평가"
         blocks.append(
@@ -704,7 +745,10 @@ def build_time_blocks(resources: list[dict], findings: list[dict], market: dict)
                 "time_zone": label,
                 "watch": related,
                 "decision": decision,
-                "trader_read": f"{personal_read} 관련 태그는 {', '.join(top_topics(chunk, 3))}입니다.",
+                "expected_move": expected_move,
+                "action_plan": action_plan,
+                "no_trade": no_trade,
+                "trader_read": f"{personal_read}\n\n관련 태그는 {', '.join(top_topics(chunk, 3))}입니다.",
             }
         )
     return blocks
@@ -960,7 +1004,17 @@ def brief_prompt(resources: list[dict], market_snapshot: dict, briefing_type: st
                 "invalidation_points": ["string"],
                 "action_plan": ["string"],
                 "weekly_brief": [{"heading": "string", "body": "2-4 paragraph first-person trader note"}],
-                "daily_brief": [{"time_zone": "string", "watch": ["string"], "decision": "string", "trader_read": "first-person time-zone trader note"}],
+                "daily_brief": [
+                    {
+                        "time_zone": "string",
+                        "watch": ["string"],
+                        "decision": "string",
+                        "trader_read": "multi-paragraph first-person time-zone trader note",
+                        "expected_move": "how this trader expects this time block to move",
+                        "action_plan": "what this trader would do in this time block",
+                        "no_trade": "what this trader refuses to do in this time block",
+                    }
+                ],
                 "source_digest": [{"source": "string", "title": "string", "url": "string", "excerpt": "string"}],
                 "risk_notes": ["string"],
             },
@@ -1141,9 +1195,15 @@ def build_note_markdown(brief: dict, resources: list[dict]) -> str:
         lines.append(f"### {block.get('time_zone')}")
         if block.get("decision"):
             lines.append(f"- 내 결정: {block.get('decision')}")
+        lines.append(block.get("trader_read", ""))
+        if block.get("expected_move"):
+            lines.append(f"- 예상 움직임: {block.get('expected_move')}")
+        if block.get("action_plan"):
+            lines.append(f"- 행동 계획: {block.get('action_plan')}")
+        if block.get("no_trade"):
+            lines.append(f"- 하지 않을 매매: {block.get('no_trade')}")
         for item in block.get("watch", []):
-            lines.append(f"- 체크: {item}")
-        lines.append(f"- 내 해석: {block.get('trader_read', '')}")
+            lines.append(f"- 관련 원문 체크: {item}")
     lines.append("")
     lines.append("## 8. 무효화 조건")
     for item in brief.get("invalidation_points", []):

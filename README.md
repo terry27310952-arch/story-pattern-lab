@@ -38,6 +38,8 @@ briefings, card news, Note content, and Excel packages.
    The same first-person trader perspective is embedded directly into
    scenarios, weekly notes, and daily time-zone notes so the output reads like
    a personal market view rather than a list of collected facts.
+   Daily notes are written as time-zone interpretation essays with expected
+   move, action plan, and no-trade criteria.
 10. Split the briefing into card news sets: 5 slides, 6 slides, 7 slides, and a
    custom AI suggestion.
 11. Export Markdown, JSON, and `.xlsx` files with separate sheets for briefing,
