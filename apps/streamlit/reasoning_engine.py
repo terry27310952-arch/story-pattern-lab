@@ -1075,20 +1075,82 @@ def generate_trader_brief(resources: list[dict], market_snapshot: dict, briefing
     return normalize_external_brief(parsed, local, provider), None
 
 
-def card_blueprint(count: int) -> list[str]:
+def source_hint(row: dict) -> str:
+    source = row.get("source", "")
+    title = row.get("title", "")
+    url = row.get("url", "")
+    pieces = [piece for piece in [source, title, url] if piece]
+    return " / ".join(pieces)
+
+
+def bullet_join(items: list[object], limit: int = 4, text_limit: int = 240) -> str:
+    cleaned = [clean_text(item, text_limit) for item in items if clean_text(item, text_limit)]
+    return "\n".join(f"- {item}" for item in cleaned[:limit])
+
+
+def format_count(value: object) -> str:
+    try:
+        return f"{int(float(value or 0)):,}"
+    except Exception:
+        return "0"
+
+
+def scenario_lines(scenarios: list[dict], limit: int = 3) -> str:
+    lines = []
+    for scenario in scenarios[:limit]:
+        lines.append(
+            clean_text(
+                f"{scenario.get('case', 'Scenario')}: {scenario.get('trigger', '')} -> "
+                f"{scenario.get('expected_path', '')} / {scenario.get('positioning', '')}",
+                380,
+            )
+        )
+    return bullet_join(lines, limit=limit, text_limit=380)
+
+
+def finding_lines(findings: list[dict], limit: int = 3) -> str:
+    lines = []
+    for item in findings[:limit]:
+        evidence = " / ".join(item.get("evidence", [])[:2])
+        lines.append(
+            clean_text(
+                f"[{item.get('source', '')}] {item.get('title', '')}: {item.get('role', '')}. "
+                f"근거는 {evidence}. 내 해석은 {item.get('trader_read', '')}",
+                420,
+            )
+        )
+    return bullet_join(lines, limit=limit, text_limit=420)
+
+
+def daily_lines(blocks: list[dict], limit: int = 4) -> str:
+    lines = []
+    for block in blocks[:limit]:
+        lines.append(
+            clean_text(
+                f"{block.get('time_zone', '')}: {block.get('decision', '')}. "
+                f"{block.get('expected_move', '')} {block.get('action_plan', '')}",
+                320,
+            )
+        )
+    return bullet_join(lines, limit=limit, text_limit=320)
+
+
+def card_blueprint(count: int) -> list[dict]:
     base = [
-        "내 관점",
-        "매매 계획",
-        "BTC 가격 레벨",
-        "보조지표",
-        "원문 근거 1",
-        "원문 근거 2",
-        "니케이/골드/달러",
-        "알트 로테이션 조건",
-        "Bull/Base/Bear",
-        "무효화 조건",
-        "오늘의 체크리스트",
+        {"role": "cover", "headline": "이번 장세, 내 결론"},
+        {"role": "levels", "headline": "BTC 기준 가격"},
+        {"role": "derivatives", "headline": "파생·보조지표 판독"},
+        {"role": "sources", "headline": "원문은 이렇게 읽었다"},
+        {"role": "action", "headline": "오늘의 매매 계획"},
     ]
+    if count >= 6:
+        base.insert(4, {"role": "scenario", "headline": "Bull/Base/Bear 분기"})
+    if count >= 7:
+        base.insert(5, {"role": "alts_macro", "headline": "알트·자산 이동 조건"})
+    if count >= 8:
+        base.insert(-1, {"role": "daily", "headline": "시간대별 체크포인트"})
+    if count >= 9:
+        base.insert(-1, {"role": "risk", "headline": "틀렸다고 인정할 자리"})
     return base[:count]
 
 
@@ -1096,135 +1158,279 @@ def make_card_set(brief: dict, resources: list[dict], count: int, label: str) ->
     findings = brief.get("source_findings") or []
     scenarios = brief.get("scenarios") or []
     market = brief.get("market_structure") or {}
-    headings = card_blueprint(count)
-    cards: list[dict] = []
     stance = brief.get("trader_stance") or {}
-    for index, heading in enumerate(headings, start=1):
-        finding = findings[(index - 1) % len(findings)] if findings else {}
-        scenario = scenarios[(index - 1) % len(scenarios)] if scenarios else {}
-        if heading == "내 관점":
+    daily = brief.get("daily_brief") or []
+    invalidations = brief.get("invalidation_points") or []
+    risk_notes = brief.get("risk_notes") or []
+    cards: list[dict] = []
+
+    top_finding = findings[0] if findings else {}
+    top_resource = resources[0] if resources else {}
+    quality_source_hint = source_hint(top_resource) or source_hint(top_finding)
+    common_visual = (
+        "상단은 한 줄 결론, 중앙은 BTC 캔들/가격 레벨, 하단은 데이터 근거와 원문 출처를 작게 배치. "
+        "숫자는 현재가-지지-저항-펀딩-OI 순서로 고정한다."
+    )
+
+    for index, item in enumerate(card_blueprint(count), start=1):
+        role = item["role"]
+        headline = item["headline"]
+        hook = clean_text(brief.get("one_line", ""), 110)
+        body = clean_text(stance.get("market_read") or brief.get("one_line", ""), 260)
+        data_points = bullet_join(brief.get("key_points", [])[:3], limit=3, text_limit=260)
+        trader_angle = clean_text(stance.get("expected_path") or stance.get("subjective_note") or "", 320)
+        source_evidence = finding_lines(findings, limit=2)
+        caption = clean_text((brief.get("key_points") or [""])[0], 180)
+        risk_line = clean_text((invalidations or risk_notes or ["무효화 조건 확인 전에는 포지션을 키우지 않습니다."])[0], 220)
+        cta = "다음 캔들이 지지/저항 중 어느 쪽을 종가로 확정하는지 먼저 확인합니다."
+        chart_focus = "BTC 1D/4H, MA20/50/200, RSI14, MACD, ATR, 펀딩비, 미결제약정"
+        source = resources[(index - 1) % len(resources)] if resources else top_finding
+
+        if role == "cover":
+            hook = f"확신도 {stance.get('conviction_score', 'N/A')}점: 지금은 방향보다 자리의 질을 먼저 본다."
             body = clean_text(
-                f"{stance.get('directional_bias', '')} / {stance.get('preferred_posture', '')}. {stance.get('market_read', brief.get('one_line', ''))}",
-                220,
+                f"{stance.get('directional_bias', '')} / {stance.get('preferred_posture', '')}. "
+                f"{stance.get('market_read', brief.get('one_line', ''))}",
+                330,
             )
-            caption = clean_text(f"예상 경로: {stance.get('expected_path', '')}", 180)
-        elif heading == "매매 계획":
-            body = clean_text(f"{stance.get('entry_plan', '')} {stance.get('risk_plan', '')}", 220)
-            caption = clean_text(stance.get("no_trade_zone", ""), 180)
-        elif "원문 근거" in heading and finding:
-            body = f"{finding.get('source')}의 원문은 {finding.get('role')}로 읽힙니다. 핵심은 {clean_text(finding.get('trader_read'), 140)}"
-            caption = clean_text(" / ".join(finding.get("evidence", [])[:2]), 180)
-        elif heading == "BTC 가격 레벨":
-            body = clean_text(market.get("critical_levels") or market.get("btc_axis") or brief.get("one_line"), 190)
-            caption = "현재가가 가까운 지지와 저항 중 어느 쪽을 종가로 확정하는지가 시나리오 경계입니다."
-        elif heading == "보조지표":
-            body = clean_text(f"{market.get('technical_indicators', '')} {market.get('derivatives', '')}", 210)
-            caption = "MA, RSI, MACD, ATR, 펀딩비를 함께 봐야 가격 레벨의 신뢰도를 구분할 수 있습니다."
-        elif heading == "BTC 기준축":
-            body = clean_text(market.get("btc_axis") or brief.get("one_line"), 190)
-            caption = "BTC가 구조를 지키는지 먼저 확인한 뒤 알트 해석을 붙입니다."
-        elif heading == "니케이/골드/달러":
-            body = clean_text(f"{market.get('japan_risk', '')} {market.get('defensive_assets', '')}", 190)
-            caption = "크립토 단독이 아니라 위험자산과 방어자산의 자금 이동을 함께 봅니다."
-        elif heading == "알트 로테이션 조건":
-            body = clean_text(market.get("alts") or "", 190)
-            caption = "알트 시즌은 선언이 아니라 BTC 안정, ETH 상대강도, 거래량 확산으로 검증합니다."
-        elif heading == "Bull/Base/Bear" and scenario:
-            body = clean_text(f"{scenario.get('case', 'Scenario')}: {scenario.get('trader_view') or scenario.get('expected_path', brief.get('one_line', ''))}", 210)
-            caption = clean_text(f"{scenario.get('positioning', '')} / 조건: {scenario.get('trigger', '')}", 180)
-        else:
-            body = clean_text(brief.get("one_line", ""), 190)
-            caption = clean_text((brief.get("key_points") or [""])[0], 160)
-        source = resources[(index - 1) % len(resources)] if resources else {}
+            data_points = bullet_join(
+                [market.get("critical_levels", ""), market.get("derivatives", ""), market.get("trader_bias", "")],
+                limit=3,
+                text_limit=300,
+            )
+            trader_angle = clean_text(stance.get("subjective_note", ""), 320)
+            caption = "뉴스보다 가격이 그 뉴스를 어느 레벨에서 소화하는지가 우선입니다."
+        elif role == "levels":
+            hook = "오늘 브리핑의 첫 기준은 예측이 아니라 가격 경계입니다."
+            body = clean_text(market.get("critical_levels") or market.get("btc_axis") or brief.get("one_line"), 340)
+            data_points = bullet_join(
+                [market.get("technical_indicators", ""), market.get("btc_axis", ""), market.get("trader_expected_path", "")],
+                limit=3,
+                text_limit=330,
+            )
+            trader_angle = clean_text(stance.get("entry_plan", ""), 320)
+            caption = "지지는 방어 확인, 저항은 돌파 확인입니다. 그 사이에서는 매매를 강제하지 않습니다."
+        elif role == "derivatives":
+            hook = "현물 가격만 보면 늦고, 파생 포지션을 같이 봐야 합니다."
+            body = clean_text(f"{market.get('technical_indicators', '')} {market.get('derivatives', '')}", 380)
+            data_points = bullet_join(
+                [market.get("derivatives", ""), market.get("technical_indicators", ""), market.get("sentiment", "")],
+                limit=3,
+                text_limit=340,
+            )
+            trader_angle = "펀딩이 과열되는데 가격이 저항을 못 넘으면 추격하지 않고, OI가 늘면서 지지를 지키면 되돌림 진입만 봅니다."
+            caption = "펀딩비는 방향 예측이 아니라 포지션 쏠림의 온도계입니다."
+        elif role == "sources":
+            hook = "선택 원문은 호재/악재가 아니라 시장이 반응한 재료로 분류합니다."
+            body = clean_text(finding_lines(findings, limit=3) or "원문 확보 자료가 부족하면 제목/요약은 보조 신호로만 둡니다.", 520)
+            data_points = bullet_join(
+                [
+                    f"선택 리소스 {len(resources)}건",
+                    f"원문 해석 {len(findings)}건",
+                    f"상위 근거: {clean_text(' / '.join(top_finding.get('evidence', [])[:2]), 240)}",
+                ],
+                limit=3,
+                text_limit=300,
+            )
+            trader_angle = clean_text(top_finding.get("trader_read", ""), 360)
+            source_evidence = finding_lines(findings, limit=4)
+            caption = "원문은 가격 레벨과 결합될 때만 매매 근거가 됩니다."
+        elif role == "scenario":
+            hook = "내가 보는 장세는 하나의 정답보다 세 개의 경로로 관리해야 합니다."
+            body = clean_text(scenario_lines(scenarios, limit=3), 580)
+            data_points = scenario_lines(scenarios, limit=3)
+            trader_angle = clean_text(stance.get("expected_path", ""), 360)
+            caption = "Bull은 돌파 안착, Base는 박스권, Bear는 지지 이탈 회복 실패입니다."
+        elif role == "alts_macro":
+            hook = "알트는 BTC보다 먼저 사는 게 아니라 BTC 안정 뒤에 확인합니다."
+            body = clean_text(f"{market.get('alts', '')} {market.get('japan_risk', '')} {market.get('defensive_assets', '')}", 430)
+            data_points = bullet_join(
+                [market.get("alts", ""), market.get("japan_risk", ""), market.get("defensive_assets", "")],
+                limit=3,
+                text_limit=330,
+            )
+            trader_angle = clean_text(stance.get("alt_strategy", ""), 340)
+            caption = "BTC 안정, ETH 상대강도, 섹터 거래량 확산이 같이 나와야 알트 비중을 엽니다."
+        elif role == "daily":
+            hook = "일간 브리핑은 시간대별로 확인할 행동만 남겨야 합니다."
+            body = clean_text(daily_lines(daily, limit=4), 520)
+            data_points = daily_lines(daily, limit=4)
+            trader_angle = "아시아장은 위치 확인, 유럽장은 변동성 확인, 미국장은 종가와 파생 쏠림 확인으로 나눕니다."
+            caption = "시간대별 판단이 없으면 같은 뉴스를 계속 다르게 해석하게 됩니다."
+        elif role == "risk":
+            hook = "좋은 관점보다 중요한 것은 틀렸을 때 바로 줄이는 기준입니다."
+            body = clean_text(bullet_join(invalidations + risk_notes, limit=5, text_limit=300), 520)
+            data_points = bullet_join(invalidations, limit=4, text_limit=280)
+            trader_angle = clean_text(stance.get("risk_plan", ""), 360)
+            caption = "무효화 조건은 사후 핑계가 아니라 진입 전에 적어두는 가격입니다."
+        elif role == "action":
+            hook = "오늘 할 일은 예측을 늘리는 것이 아니라 행동 조건을 줄이는 것입니다."
+            body = clean_text(
+                f"{stance.get('entry_plan', '')} {stance.get('profit_plan', '')} {stance.get('risk_plan', '')}",
+                430,
+            )
+            data_points = bullet_join(
+                [stance.get("entry_plan", ""), stance.get("profit_plan", ""), stance.get("risk_plan", ""), stance.get("no_trade_zone", "")],
+                limit=4,
+                text_limit=300,
+            )
+            trader_angle = clean_text(stance.get("no_trade_zone", ""), 340)
+            caption = "매수/매도보다 먼저 할 일은 진입하지 않을 구간을 정하는 것입니다."
+
         cards.append(
             {
                 "set": label,
                 "slide": index,
-                "headline": heading,
+                "section_role": role,
+                "headline": headline,
+                "hook": hook,
                 "body": body,
-                "visual_direction": "BTC 캔들 중심에 니케이/골드/DXY 보조축을 얹고, 원문 출처는 하단 작은 라벨로 배치",
-                "source_hint": f"{source.get('source', '')} / {source.get('title', '')}"[:180],
+                "data_points": data_points,
+                "trader_angle": trader_angle,
+                "source_evidence": source_evidence,
+                "risk_line": risk_line,
+                "chart_focus": chart_focus,
+                "visual_direction": common_visual,
+                "source_hint": clean_text(source_hint(source) or quality_source_hint, 240),
                 "caption": caption,
+                "cta": cta,
             }
         )
     return cards
 
 
 def build_note_markdown(brief: dict, resources: list[dict]) -> str:
-    lines = [f"# {brief.get('title', 'Crypto Trader Briefing')}", "", brief.get("one_line", ""), ""]
     stance = brief.get("trader_stance") or {}
-    lines.append("## 1. 내 매매 관점")
-    for key, label in [
-        ("persona", "관점"),
-        ("directional_bias", "방향 편향"),
-        ("preferred_posture", "선호 포지션"),
-        ("conviction_score", "확신도"),
-        ("market_read", "시장 해석"),
-        ("expected_path", "예상 경로"),
-        ("entry_plan", "진입 계획"),
-        ("profit_plan", "익절 계획"),
-        ("risk_plan", "무효화/리스크"),
-        ("no_trade_zone", "매매 금지 구간"),
-        ("alt_strategy", "알트 대응"),
-        ("subjective_note", "매매 철학"),
-    ]:
-        if stance.get(key) != "":
-            lines.append(f"- {label}: {stance.get(key)}")
-    lines.append("")
-    lines.append("## 2. 결론")
-    for point in brief.get("key_points", []):
-        lines.append(f"- {point}")
-    lines.append("")
-    lines.append("## 3. 현재 가격·핵심 레벨")
     market = brief.get("market_structure") or {}
-    for key in ["critical_levels", "technical_indicators", "derivatives", "btc_axis", "alts"]:
+    findings = brief.get("source_findings") or []
+    scenarios = brief.get("scenarios") or []
+    daily = brief.get("daily_brief") or []
+    weekly = brief.get("weekly_brief") or []
+    invalidations = brief.get("invalidation_points") or []
+    risk_notes = brief.get("risk_notes") or []
+    coverage = {
+        "selected": len(resources),
+        "findings": len(findings),
+        "full_text": sum(1 for row in resources if len(str(row.get("material") or "")) >= 800),
+    }
+
+    lines = [
+        f"# {brief.get('title', 'Crypto Trader Briefing')}",
+        "",
+        f"> {brief.get('one_line', '')}",
+        "",
+        "## 콘텐츠 메타",
+        f"- 선택 리소스: {coverage['selected']}건",
+        f"- 원문 해석: {coverage['findings']}건",
+        f"- 본문 800자 이상 확보: {coverage['full_text']}건",
+        f"- 추천 태그: BTC, 시장구조, 파생데이터, 주간브리핑, 트레이더노트",
+        "",
+        "## 1. 오늘의 결론",
+        (
+            f"내 현재 관점은 **{stance.get('directional_bias', '')}**입니다. "
+            f"포지션은 **{stance.get('preferred_posture', '')}**를 우선하고, "
+            f"확신도는 {stance.get('conviction_score', 'N/A')}점으로 둡니다."
+        ),
+        "",
+        clean_text(stance.get("market_read") or brief.get("one_line", ""), 900),
+        "",
+        "핵심은 방향을 먼저 맞히는 것이 아니라, BTC가 가까운 지지와 저항 중 어느 쪽을 종가로 확정하는지 보는 것입니다. "
+        "뉴스는 촉매이고 가격은 판정표입니다. 그래서 원문이 좋아 보여도 지지를 지키지 못하면 비중을 키우지 않습니다.",
+        "",
+        "## 2. 숫자로 보는 BTC 맵",
+    ]
+    for key, label in [
+        ("critical_levels", "가격 경계"),
+        ("technical_indicators", "보조지표"),
+        ("derivatives", "파생 포지션"),
+        ("sentiment", "심리"),
+        ("btc_axis", "BTC 기준축"),
+    ]:
         if market.get(key):
-            lines.append(f"- {key}: {market.get(key)}")
-    lines.append("")
-    lines.append("## 4. 원문별 해석")
-    for item in brief.get("source_findings", []):
-        lines.append(f"### {item.get('source')} - {item.get('title')}")
-        lines.append(f"- 역할: {item.get('role')}")
-        for evidence in item.get("evidence", []):
-            lines.append(f"- 근거: {evidence}")
-        lines.append(f"- 트레이더 해석: {item.get('trader_read')}")
-        lines.append("")
-    lines.append("## 5. 시장 구조")
-    for key, value in (brief.get("market_structure") or {}).items():
-        lines.append(f"- {key}: {value}")
-    lines.append("")
-    lines.append("## 6. 시나리오")
-    for scenario in brief.get("scenarios", []):
+            lines.append(f"- **{label}**: {market.get(key)}")
+    lines.extend(
+        [
+            "",
+            "## 3. 내가 상정하는 경로",
+            clean_text(stance.get("expected_path", ""), 900),
+            "",
+            f"- 진입: {stance.get('entry_plan', '')}",
+            f"- 익절: {stance.get('profit_plan', '')}",
+            f"- 리스크: {stance.get('risk_plan', '')}",
+            f"- 매매 금지: {stance.get('no_trade_zone', '')}",
+            f"- 알트 대응: {stance.get('alt_strategy', '')}",
+            "",
+            "## 4. 원문별 시장 해석",
+        ]
+    )
+    if findings:
+        for index, item in enumerate(findings, start=1):
+            lines.append(f"### {index}. {item.get('source')} - {item.get('title')}")
+            lines.append(f"- 역할: {item.get('role')}")
+            lines.append(f"- 원문 분량: {format_count(item.get('material_chars', 0))}자")
+            for evidence in item.get("evidence", [])[:4]:
+                lines.append(f"- 확인 근거: {evidence}")
+            lines.append(f"- 내 해석: {item.get('trader_read')}")
+            if item.get("url"):
+                lines.append(f"- 링크: {item.get('url')}")
+            lines.append("")
+    else:
+        lines.extend(["원문 본문 확보가 부족합니다. 이 경우 제목/요약은 방향 판단이 아니라 소재 후보로만 둡니다.", ""])
+
+    lines.append("## 5. Bull/Base/Bear 시나리오")
+    for scenario in scenarios:
         lines.append(f"### {scenario.get('case')}")
         lines.append(f"- 조건: {scenario.get('trigger')}")
-        lines.append(f"- 경로: {scenario.get('expected_path')}")
+        lines.append(f"- 예상 경로: {scenario.get('expected_path')}")
         if scenario.get("trader_view"):
             lines.append(f"- 내 해석: {scenario.get('trader_view')}")
         if scenario.get("positioning"):
             lines.append(f"- 포지션: {scenario.get('positioning')}")
         lines.append(f"- 체크: {scenario.get('watch')}")
-    lines.append("")
-    lines.append("## 7. 일간 시간대별 내 판단")
-    for block in brief.get("daily_brief", []):
-        lines.append(f"### {block.get('time_zone')}")
-        if block.get("decision"):
-            lines.append(f"- 내 결정: {block.get('decision')}")
-        lines.append(block.get("trader_read", ""))
-        if block.get("expected_move"):
-            lines.append(f"- 예상 움직임: {block.get('expected_move')}")
-        if block.get("action_plan"):
-            lines.append(f"- 행동 계획: {block.get('action_plan')}")
-        if block.get("no_trade"):
-            lines.append(f"- 하지 않을 매매: {block.get('no_trade')}")
-        for item in block.get("watch", []):
-            lines.append(f"- 관련 원문 체크: {item}")
-    lines.append("")
-    lines.append("## 8. 무효화 조건")
-    for item in brief.get("invalidation_points", []):
+        lines.append("")
+
+    lines.append("## 6. 주간/일간 운용 메모")
+    if weekly:
+        lines.append("### 주간")
+        for section in weekly:
+            lines.append(f"#### {section.get('heading', '')}")
+            lines.append(section.get("body", ""))
+            lines.append("")
+    if daily:
+        lines.append("### 일간 시간대")
+        for block in daily:
+            lines.append(f"#### {block.get('time_zone', '')}")
+            lines.append(f"- 내 결정: {block.get('decision', '')}")
+            lines.append(block.get("trader_read", ""))
+            lines.append(f"- 예상 움직임: {block.get('expected_move', '')}")
+            lines.append(f"- 행동 계획: {block.get('action_plan', '')}")
+            lines.append(f"- 하지 않을 매매: {block.get('no_trade', '')}")
+            for item in block.get("watch", []):
+                lines.append(f"- 관련 원문 체크: {item}")
+            lines.append("")
+
+    lines.extend(
+        [
+            "## 7. 카드뉴스 변환 가이드",
+            "- 5장 구성: 결론 -> BTC 가격 경계 -> 파생/보조지표 -> 원문 해석 -> 행동 계획",
+            "- 6장 구성: 5장 구성에 Bull/Base/Bear 시나리오를 추가",
+            "- 7장 구성: 6장 구성에 알트/니케이/골드/DXY 자산 이동 조건을 추가",
+            "- 자율제안: 시간대별 체크포인트와 무효화 조건을 추가해 저장용 콘텐츠로 확장",
+            "",
+            "## 8. 게시용 카피",
+            f"- 썸네일 문구: {brief.get('one_line', '')}",
+            f"- 댓글 질문: 이번 장세는 BTC 기준축이 알트를 살리는 구조인가, 아니면 뉴스만 순환하는 박스권인가?",
+            "- CTA: 다음 캔들이 지지/저항 중 어느 쪽을 종가로 확정하는지 먼저 확인하세요.",
+            "",
+            "## 9. 무효화 조건과 리스크",
+        ]
+    )
+    for item in invalidations:
         lines.append(f"- {item}")
-    lines.append("")
-    lines.append("## 참고 리소스")
-    for row in resources[:20]:
+    for item in risk_notes:
+        lines.append(f"- {item}")
+    lines.extend(["", "## 참고 리소스"])
+    for row in resources[:30]:
         lines.append(f"- [{row.get('source')}] {row.get('title')} - {row.get('url')}")
     lines.append("")
     lines.append(f"> {DISCLAIMER}")
@@ -1239,9 +1445,34 @@ def generate_content_package(brief: dict, resources: list[dict], custom_count: i
         "7장": make_card_set(brief, resources, 7, "7장"),
         "자율제안": make_card_set(brief, resources, suggested, "자율제안"),
     }
+    findings = brief.get("source_findings") or []
     return {
         "cards": cards,
         "note_markdown": build_note_markdown(brief, resources),
+        "content_quality": {
+            "selected_resources": len(resources),
+            "source_findings": len(findings),
+            "full_text_resources": sum(1 for row in resources if len(str(row.get("material") or "")) >= 800),
+            "card_columns": [
+                "hook",
+                "body",
+                "data_points",
+                "trader_angle",
+                "source_evidence",
+                "risk_line",
+                "cta",
+                "chart_focus",
+            ],
+            "note_sections": [
+                "오늘의 결론",
+                "숫자로 보는 BTC 맵",
+                "내가 상정하는 경로",
+                "원문별 시장 해석",
+                "Bull/Base/Bear 시나리오",
+                "주간/일간 운용 메모",
+                "카드뉴스 변환 가이드",
+            ],
+        },
         "short_copy": {
             "x_thread": brief.get("trader_sentences", [])[:6],
             "thumbnail": brief.get("one_line", ""),

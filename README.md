@@ -42,11 +42,18 @@ briefings, card news, Note content, and Excel packages.
    a personal market view rather than a list of collected facts.
    Daily notes are written as time-zone interpretation essays with expected
    move, action plan, and no-trade criteria.
-10. Split the briefing into card news sets: 5 slides, 6 slides, 7 slides, and a
-   custom AI suggestion.
+10. Convert the briefing into production-ready card news sets: 5 slides, 6
+    slides, 7 slides, and a custom AI suggestion. Each card now carries a hook,
+    body copy, data evidence, source evidence, trader interpretation,
+    invalidation/risk line, CTA, chart focus, visual direction, and source hint.
 11. Export Markdown, JSON, and `.xlsx` files with separate sheets for briefing,
     source findings, scenarios, card news, Note, sources, market data, price
-    levels, indicators, derivatives, and trader stance.
+    levels, indicators, derivatives, and trader stance. Card sheets expose the
+    richer production columns instead of only headline/body/caption.
+12. Build Note content as a publishable trader note with content metadata, BTC
+    data map, derivatives/indicator read, source-by-source interpretation,
+    Bull/Base/Bear scenarios, weekly/daily operating notes, card-news conversion
+    guide, posting copy, and risk conditions.
 
 ## Free Reasoning Options
 

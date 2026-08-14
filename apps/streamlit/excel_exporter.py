@@ -145,7 +145,23 @@ def add_card_sheet(wb: Workbook, name: str, cards: list[dict]) -> None:
     ws = wb.create_sheet(name[:31])
     append_table(
         ws,
-        ["set", "slide", "headline", "body", "caption", "visual_direction", "source_hint"],
+        [
+            "set",
+            "slide",
+            "section_role",
+            "headline",
+            "hook",
+            "body",
+            "data_points",
+            "trader_angle",
+            "source_evidence",
+            "risk_line",
+            "caption",
+            "cta",
+            "chart_focus",
+            "visual_direction",
+            "source_hint",
+        ],
         cards,
     )
 

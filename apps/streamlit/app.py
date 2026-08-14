@@ -32,7 +32,7 @@ except Exception:
     fetch_article_body = None
 
 
-APP_VERSION = "2026-08-14 derivatives-fallback-v8"
+APP_VERSION = "2026-08-14 content-depth-v9"
 
 
 MARKET_STRUCTURE_LABELS = {
@@ -309,9 +309,27 @@ def cards_to_markdown(cards: list[dict]) -> str:
     lines: list[str] = []
     for card in cards:
         lines.append(f"## {card.get('slide')}. {card.get('headline')}")
+        if card.get("hook"):
+            lines.append(f"**후킹:** {card.get('hook')}")
+            lines.append("")
         lines.append(card.get("body", ""))
         lines.append("")
+        if card.get("data_points"):
+            lines.append("### 데이터 근거")
+            lines.append(card.get("data_points", ""))
+            lines.append("")
+        if card.get("trader_angle"):
+            lines.append(f"### 트레이더 해석\n{card.get('trader_angle')}")
+            lines.append("")
+        if card.get("source_evidence"):
+            lines.append("### 원문 근거")
+            lines.append(card.get("source_evidence", ""))
+            lines.append("")
+        if card.get("risk_line"):
+            lines.append(f"- 리스크: {card.get('risk_line', '')}")
         lines.append(f"- 캡션: {card.get('caption', '')}")
+        lines.append(f"- CTA: {card.get('cta', '')}")
+        lines.append(f"- 차트 포커스: {card.get('chart_focus', '')}")
         lines.append(f"- 비주얼: {card.get('visual_direction', '')}")
         lines.append(f"- 출처 힌트: {card.get('source_hint', '')}")
         lines.append("")
@@ -544,8 +562,21 @@ def render_cards(content_package: dict) -> None:
             for card in card_set:
                 card_key = hashlib.sha1(json.dumps(card, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:10]
                 with st.expander(f"{card.get('slide')}. {card.get('headline')}", expanded=card.get("slide") == 1):
+                    if card.get("hook"):
+                        st.markdown(f"**후킹:** {card.get('hook')}")
                     st.write(card.get("body", ""))
+                    if card.get("data_points"):
+                        st.markdown("**데이터 근거**")
+                        st.markdown(card.get("data_points", ""))
+                    if card.get("trader_angle"):
+                        st.text_area("트레이더 해석", card.get("trader_angle", ""), height=110, key=f"{label}_{card.get('slide')}_{card_key}_angle")
+                    if card.get("source_evidence"):
+                        st.text_area("원문 근거", card.get("source_evidence", ""), height=130, key=f"{label}_{card.get('slide')}_{card_key}_evidence")
+                    if card.get("risk_line"):
+                        st.warning(card.get("risk_line", ""))
                     st.caption(card.get("caption", ""))
+                    st.text_area("CTA", card.get("cta", ""), height=70, key=f"{label}_{card.get('slide')}_{card_key}_cta")
+                    st.text_area("차트 포커스", card.get("chart_focus", ""), height=70, key=f"{label}_{card.get('slide')}_{card_key}_chart")
                     st.text_area("비주얼 디렉션", card.get("visual_direction", ""), height=80, key=f"{label}_{card.get('slide')}_{card_key}_visual")
                     st.text_area("출처 힌트", card.get("source_hint", ""), height=70, key=f"{label}_{card.get('slide')}_{card_key}_source")
             st.download_button(
