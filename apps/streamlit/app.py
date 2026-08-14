@@ -8,7 +8,14 @@ from datetime import datetime
 import streamlit as st
 
 from excel_exporter import build_excel_bytes
-from market_data import collect_market_snapshot, flatten_market_rows, summarize_market
+from market_data import (
+    collect_market_snapshot,
+    flatten_derivatives_rows,
+    flatten_indicator_rows,
+    flatten_level_rows,
+    flatten_market_rows,
+    summarize_market,
+)
 from reasoning_engine import (
     PROVIDER_LOCAL,
     PROVIDER_OLLAMA,
@@ -24,7 +31,21 @@ except Exception:
     fetch_article_body = None
 
 
-APP_VERSION = "2026-08-14 professional-source-reading-v2"
+APP_VERSION = "2026-08-14 price-level-research-v3"
+
+
+MARKET_STRUCTURE_LABELS = {
+    "regime": "시장 체제",
+    "critical_levels": "현재 가격·핵심 레벨",
+    "technical_indicators": "보조지표",
+    "derivatives": "파생 포지션",
+    "btc_axis": "BTC 기준축",
+    "alts": "알트 로테이션",
+    "japan_risk": "니케이·일본 위험자산",
+    "defensive_assets": "골드·달러 방어축",
+    "sentiment": "심리 지표",
+    "reference_lens": "참고 관점",
+}
 
 
 st.set_page_config(page_title="Crypto Trader Briefing Lab", page_icon="₿", layout="wide")
@@ -97,6 +118,33 @@ def shorten(value: object, length: int = 120) -> str:
     return text[: length - 1] + "…" if len(text) > length else text
 
 
+def market_label(key: str) -> str:
+    return MARKET_STRUCTURE_LABELS.get(key, key)
+
+
+def fmt_price(value: object) -> str:
+    if value is None or value == "":
+        return "N/A"
+    try:
+        number = float(value)
+    except Exception:
+        return str(value)
+    if abs(number) >= 1000:
+        return f"${number:,.0f}"
+    if abs(number) >= 1:
+        return f"${number:,.4f}".rstrip("0").rstrip(".")
+    return f"${number:,.6f}".rstrip("0").rstrip(".")
+
+
+def fmt_pct(value: object) -> str:
+    if value is None or value == "":
+        return "N/A"
+    try:
+        return f"{float(value):+.2f}%"
+    except Exception:
+        return str(value)
+
+
 def markdown_brief(brief: dict) -> str:
     if not brief:
         return ""
@@ -116,7 +164,7 @@ def markdown_brief(brief: dict) -> str:
     if brief.get("market_structure"):
         lines.append("## 시장 구조")
         for key, value in brief.get("market_structure", {}).items():
-            lines.append(f"- {key}: {value}")
+            lines.append(f"- {market_label(key)}: {value}")
         lines.append("")
     if brief.get("source_findings"):
         lines.append("## 원문별 해석")
@@ -227,18 +275,60 @@ def render_market(snapshot: dict) -> None:
     if not rows:
         st.info("시장 데이터가 아직 없습니다.")
         return
-    st.dataframe(
-        rows,
-        hide_index=True,
-        use_container_width=True,
-        column_order=["name", "asset_class", "price", "unit", "change_24h", "change_7d", "source"],
-    )
     summary = summarize_market(snapshot)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("시장 판정", summary.get("label", "N/A"))
-    c2.metric("BTC 7D", f"{summary.get('btc_7d', 'N/A')}%")
-    c3.metric("Nikkei 7D", f"{summary.get('nikkei_7d', 'N/A')}%")
-    c4.metric("Gold 7D", f"{summary.get('gold_7d', 'N/A')}%")
+    c1.metric("BTC 현재가", fmt_price(summary.get("btc_price")), fmt_pct(summary.get("btc_24h")))
+    c2.metric("가까운 지지", fmt_price(summary.get("btc_nearest_support")), fmt_pct(summary.get("btc_support_distance_pct")))
+    c3.metric("가까운 저항", fmt_price(summary.get("btc_nearest_resistance")), fmt_pct(summary.get("btc_resistance_distance_pct")))
+    c4.metric("RSI / MACD", f"{summary.get('btc_rsi14', 'N/A')} / {summary.get('btc_macd_bias', 'N/A')}", f"ATR {fmt_pct(summary.get('btc_atr14_pct'))}")
+
+    market_tabs = st.tabs(["가격", "핵심 레벨", "보조지표", "파생/심리"])
+    with market_tabs[0]:
+        st.dataframe(
+            rows,
+            hide_index=True,
+            use_container_width=True,
+            column_order=[
+                "name",
+                "asset_class",
+                "price",
+                "unit",
+                "change_24h",
+                "change_7d",
+                "change_30d",
+                "technical_bias",
+                "nearest_support",
+                "nearest_resistance",
+                "rsi14",
+                "macd_bias",
+                "source",
+            ],
+        )
+    with market_tabs[1]:
+        level_rows = flatten_level_rows(snapshot)
+        if level_rows:
+            st.dataframe(
+                level_rows,
+                hide_index=True,
+                use_container_width=True,
+                column_order=["asset", "direction", "level", "distance_pct", "reason", "importance", "source"],
+            )
+        else:
+            st.info("가격 레벨 데이터가 없습니다.")
+    with market_tabs[2]:
+        indicator_rows = flatten_indicator_rows(snapshot)
+        if indicator_rows:
+            st.dataframe(indicator_rows, hide_index=True, use_container_width=True)
+        else:
+            st.info("보조지표 데이터가 없습니다.")
+    with market_tabs[3]:
+        derivative_rows = flatten_derivatives_rows(snapshot)
+        if derivative_rows:
+            st.dataframe(derivative_rows, hide_index=True, use_container_width=True)
+        fear = snapshot.get("fear_greed", {})
+        if fear:
+            st.write(f"Fear & Greed: **{fear.get('value')} / {fear.get('classification')}**")
+        st.caption("가격/캔들: Binance spot, 파생: Binance Futures, 시총/JYP: CoinGecko, 매크로: Yahoo Finance, 심리: Alternative.me")
     if snapshot.get("errors"):
         with st.expander("시장 데이터 오류", expanded=False):
             for error in snapshot["errors"]:
@@ -274,7 +364,7 @@ def render_brief(brief: dict) -> None:
         market = brief.get("market_structure", {})
         if market:
             for key, value in market.items():
-                st.markdown(f"#### {key}")
+                st.markdown(f"#### {market_label(key)}")
                 st.write(value)
         else:
             st.info("시장 구조 분석이 없습니다.")
@@ -367,14 +457,30 @@ with st.sidebar:
     selected_rss = st.multiselect(
         "일본/글로벌 크립토 RSS",
         options=list(RSS_SOURCES.keys()),
-        default=["NADA NEWS / CoinDesk Japan", "Cryptonews JP", "Coinspeaker JP"],
+        default=[
+            "NADA NEWS / CoinDesk Japan",
+            "Cryptonews JP",
+            "Coinspeaker JP",
+            "CoinDesk Global",
+            "Cointelegraph Global",
+            "Decrypt",
+            "NewsBTC",
+            "U.Today",
+        ],
     )
     selected_public = st.multiselect(
         "커뮤니티/공개 목록",
         options=list(PUBLIC_LIST_SOURCES.keys()),
-        default=["5ch Crypto Board", "CoinMarketCap Headlines", "Yahoo Finance JP CoinPost"],
+        default=[
+            "5ch Crypto Board",
+            "CoinMarketCap Headlines",
+            "Yahoo Finance JP Crypto",
+            "Yahoo Finance JP Bitcoin",
+            "Yahoo Finance JP CoinPost",
+            "Yahoo Finance JP CoinDesk Japan",
+        ],
     )
-    per_source_limit = st.slider("소스별 수집 수", 5, 40, 12, 1)
+    per_source_limit = st.slider("소스별 수집 수", 5, 80, 20, 1)
     refresh_market_with_collection = st.checkbox("시장 데이터 함께 갱신", value=True)
     collect_button = st.button("리소스 수집", type="primary", use_container_width=True)
 
@@ -402,7 +508,7 @@ with st.sidebar:
     briefing_type_label = st.radio("브리핑 타입", ["주간 방향", "일간 시간대"], horizontal=True)
     tone = st.selectbox("문장 톤", ["트레이더 브리핑", "카드뉴스용 압축", "Note용 분석"], index=0)
     auto_fetch_body = st.checkbox("선택 리소스 원문 전체 자동 취합", value=True)
-    st.caption("커뮤니티 자료는 제목/반응량만 사용하고, 기사/미디어 자료는 선택된 항목 전부의 본문 취합을 시도합니다.")
+    st.caption("커뮤니티 자료는 제목/반응량만 사용하고, 기사/미디어 자료는 선택된 항목 전부의 본문 취합을 시도합니다. 선택 수를 늘릴수록 전문성은 올라가지만 생성 시간도 늘어납니다.")
     custom_card_count = st.slider("자율제안 장수", 5, 9, 8, 1)
 
     st.divider()
@@ -414,7 +520,7 @@ if collect_button:
         resources, logs = collect_resources(selected_rss, selected_public, per_source_limit)
     st.session_state.resources = resources
     st.session_state.collection_logs = logs
-    st.session_state.selected_ids = [row["id"] for row in resources[: min(8, len(resources))]]
+    st.session_state.selected_ids = [row["id"] for row in resources[: min(20, len(resources))]]
     st.session_state.brief = {}
     st.session_state.content_package = {}
     if refresh_market_with_collection:
@@ -423,7 +529,7 @@ if collect_button:
 
 
 st.title("Crypto Trader Briefing Lab")
-st.caption("Japan crypto resources, public community signals, CoinMarketCap headlines, BTC/Nikkei/Gold context.")
+st.caption("Expanded Japan/global crypto source reader with live BTC levels, technical indicators, derivatives, Nikkei/Gold/DXY context, card news, Note, and Excel packaging.")
 
 resources = st.session_state.resources
 market_snapshot = st.session_state.market_snapshot
@@ -518,8 +624,8 @@ with tabs[1]:
         selected = selected_resources()
 
         b1, b2, b3 = st.columns([1, 1, 2])
-        if b1.button("상위 8개 선택", use_container_width=True):
-            st.session_state.selected_ids = [row["id"] for row in filtered[:8]]
+        if b1.button("상위 20개 선택", use_container_width=True):
+            st.session_state.selected_ids = [row["id"] for row in filtered[:20]]
             st.rerun()
         if b2.button("선택 초기화", use_container_width=True):
             st.session_state.selected_ids = []
@@ -625,10 +731,11 @@ Sources
   -> multi-select resource bundle
   -> fetch every selected article body
   -> per-source evidence and trader interpretation
-  -> market snapshot: BTC, alt, Nikkei, gold, DXY, sentiment
+  -> market snapshot: BTC, alts, Nikkei, gold, Nasdaq, DXY, rates, sentiment
+  -> derived levels: support/resistance, MA, RSI, MACD, Bollinger, ATR, funding, OI
   -> Bitcoin-first professional reasoning lens
   -> weekly/daily research briefing
-  -> scenarios, invalidation, action checklist
+  -> price-level scenarios, invalidation, action checklist
   -> card news 5/6/7/custom + Note
   -> Markdown, JSON, Excel package
 ```

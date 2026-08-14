@@ -68,6 +68,111 @@ def as_percent(value: object) -> str:
         return str(value)
 
 
+def trim_number(value: float) -> str:
+    if abs(value) >= 1000:
+        return f"{value:,.0f}"
+    if abs(value) >= 100:
+        return f"{value:,.2f}"
+    if abs(value) >= 1:
+        return f"{value:,.4f}".rstrip("0").rstrip(".")
+    return f"{value:,.6f}".rstrip("0").rstrip(".")
+
+
+def as_price(value: object, unit: str = "USD") -> str:
+    if value is None or value == "":
+        return "N/A"
+    try:
+        number = float(value)
+    except Exception:
+        return str(value)
+    prefix = "$" if unit == "USD" else ""
+    suffix = "" if unit == "USD" else f" {unit}"
+    return f"{prefix}{trim_number(number)}{suffix}"
+
+
+def as_plain_number(value: object) -> str:
+    if value is None or value == "":
+        return "N/A"
+    try:
+        return trim_number(float(value))
+    except Exception:
+        return str(value)
+
+
+def rsi_state(value: object) -> str:
+    try:
+        number = float(value)
+    except Exception:
+        return "RSI 데이터 없음"
+    if number >= 75:
+        return "과열권"
+    if number >= 60:
+        return "상승 모멘텀 우위"
+    if number >= 45:
+        return "중립권"
+    if number >= 35:
+        return "약세 압력"
+    return "과매도권"
+
+
+def funding_state(value: object) -> str:
+    try:
+        number = float(value)
+    except Exception:
+        return "펀딩 데이터 없음"
+    if number >= 0.05:
+        return "롱 과열 경계"
+    if number > 0:
+        return "롱 우위이나 과열 전"
+    if number <= -0.03:
+        return "숏 쏠림 가능성"
+    return "중립"
+
+
+def btc_level_context(market_summary: dict) -> str:
+    price = as_price(market_summary.get("btc_price"))
+    support = as_price(market_summary.get("btc_nearest_support"))
+    resistance = as_price(market_summary.get("btc_nearest_resistance"))
+    support_distance = as_percent(market_summary.get("btc_support_distance_pct"))
+    resistance_distance = as_percent(market_summary.get("btc_resistance_distance_pct"))
+    return (
+        f"BTC 현재가는 {price}이며, 즉시 확인할 지지는 {support}({support_distance}), "
+        f"돌파 확인 저항은 {resistance}({resistance_distance})입니다."
+    )
+
+
+def btc_indicator_context(market_summary: dict) -> str:
+    return (
+        f"MA20 {as_price(market_summary.get('btc_ma20'))}, MA50 {as_price(market_summary.get('btc_ma50'))}, "
+        f"MA200 {as_price(market_summary.get('btc_ma200'))}, RSI14 {as_plain_number(market_summary.get('btc_rsi14'))}"
+        f"({rsi_state(market_summary.get('btc_rsi14'))}), MACD {market_summary.get('btc_macd_bias') or 'N/A'}, "
+        f"ATR14 {as_price(market_summary.get('btc_atr14'))}({as_percent(market_summary.get('btc_atr14_pct'))})입니다."
+    )
+
+
+def btc_derivatives_context(market_summary: dict) -> str:
+    return (
+        f"BTC 선물 마크가격 {as_price(market_summary.get('btc_mark_price'))}, "
+        f"펀딩비 {as_percent(market_summary.get('btc_funding_rate'))}({funding_state(market_summary.get('btc_funding_rate'))}), "
+        f"미결제약정 {as_plain_number(market_summary.get('btc_open_interest_contracts'))} contracts입니다."
+    )
+
+
+def eth_relative_context(market_summary: dict) -> str:
+    btc_change = market_summary.get("btc_7d")
+    eth_change = market_summary.get("eth_7d")
+    if btc_change is None or eth_change is None:
+        return "ETH 상대강도는 데이터 부족으로 보류합니다."
+    relative = float(eth_change) - float(btc_change)
+    return f"ETH 7D {as_percent(eth_change)} vs BTC 7D {as_percent(btc_change)}로, ETH의 7일 상대 변화율은 {as_percent(relative)}입니다."
+
+
+def level_trigger(market_summary: dict, side: str) -> str:
+    if side == "resistance":
+        return as_price(market_summary.get("btc_nearest_resistance"))
+    return as_price(market_summary.get("btc_nearest_support"))
+
+
 def source_line(row: dict, index: int) -> str:
     tags = row.get("tags") or "CRYPTO"
     material_len = len(str(row.get("material") or ""))
@@ -157,8 +262,10 @@ def infer_source_role(row: dict) -> str:
     return "시장 맥락 보조자료"
 
 
-def build_source_findings(resources: list[dict]) -> list[dict]:
+def build_source_findings(resources: list[dict], market_summary: dict) -> list[dict]:
     findings: list[dict] = []
+    level_context = btc_level_context(market_summary)
+    indicator_context = btc_indicator_context(market_summary)
     for index, row in enumerate(resources, start=1):
         material = row.get("material") or row.get("excerpt") or ""
         sentences = split_sentences(str(material), 4)
@@ -169,15 +276,30 @@ def build_source_findings(resources: list[dict]) -> list[dict]:
         if not evidence:
             evidence = [clean_text(row.get("excerpt"), 260)]
         if "community" == row.get("source_type"):
-            trader_read = "커뮤니티 반응은 사실 확정보다 과열/공포의 위치를 읽는 보조 신호입니다. 제목과 댓글 수만 반영하고, 루머는 시나리오 근거로 격하합니다."
+            trader_read = (
+                "커뮤니티 반응은 사실 확정보다 과열/공포의 위치를 읽는 보조 신호입니다. "
+                f"{level_context} 이 구간에서 커뮤니티 반응이 강해도 가격이 저항을 넘기 전에는 추격 근거로 격하합니다."
+            )
         elif any(tag in tags for tag in ["REG", "ETF"]):
-            trader_read = "규제/ETF 재료는 발표 일정과 공식 문서 확인 전까지 가격 추격의 근거가 아니라 변동성 촉매로 둡니다."
+            trader_read = (
+                "규제/ETF 재료는 발표 일정과 공식 문서 확인 전까지 가격 추격의 근거가 아니라 변동성 촉매로 둡니다. "
+                f"{level_context} 발표 전후에는 이 지지/저항 중 어느 쪽을 종가로 확정하는지가 핵심입니다."
+            )
         elif "BTC" in tags:
-            trader_read = "BTC 관련 재료는 알트보다 먼저 방향성을 검증해야 하는 기준축입니다. 뉴스 강도보다 가격이 지지/저항을 어떻게 소화하는지가 중요합니다."
+            trader_read = (
+                "BTC 관련 재료는 알트보다 먼저 방향성을 검증해야 하는 기준축입니다. "
+                f"{level_context} {indicator_context} 뉴스 강도보다 가격이 이 레벨과 보조지표를 어떻게 소화하는지가 중요합니다."
+            )
         elif any(tag in tags for tag in ["ETH", "SOL", "XRP", "ALT"]):
-            trader_read = "알트 재료는 독립 호재로 소비하기보다 BTC 안정 이후 섹터 거래량 확산 여부로 검증해야 합니다."
+            trader_read = (
+                "알트 재료는 독립 호재로 소비하기보다 BTC 안정 이후 섹터 거래량 확산 여부로 검증해야 합니다. "
+                f"{eth_relative_context(market_summary)} BTC가 {level_trigger(market_summary, 'support')}을 지키지 못하면 알트 호재는 단기 반등 소재로 낮춰 봅니다."
+            )
         else:
-            trader_read = "이 자료는 단독 방향성보다 다른 소스와 결합해 장세 배경을 보강하는 역할입니다."
+            trader_read = (
+                "이 자료는 단독 방향성보다 다른 소스와 결합해 장세 배경을 보강하는 역할입니다. "
+                f"{level_context} 현재 구조 안에서 보조자료의 의미는 가격 레벨 확인 뒤에만 커집니다."
+            )
         findings.append(
             {
                 "index": index,
@@ -199,13 +321,14 @@ def directional_thesis(market_summary: dict, topics: list[str], findings: list[d
     has_alt = any(topic in topics for topic in ["ETH", "SOL", "XRP", "ALT", "WEB3"])
     full_sources = sum(1 for item in findings if item.get("material_chars", 0) >= 800)
     base = f"선택 원문 {len(findings)}건 중 {full_sources}건은 본문을 길게 확보했고, 핵심 축은 {', '.join(topics)}입니다."
+    level_context = btc_level_context(market_summary)
     if bias == "risk_on" and has_alt:
-        return f"{base} 현재 해석은 BTC가 리스크 온 구조를 먼저 열어둔 뒤 알트가 후행 확산을 시도하는 국면입니다. 다만 알트는 뉴스 강도가 아니라 BTC 지지 유지와 ETH 상대강도 회복이 같이 확인될 때만 공격적으로 해석합니다."
+        return f"{base} {level_context} 현재 해석은 BTC가 리스크 온 구조를 먼저 열어둔 뒤 알트가 후행 확산을 시도하는 국면입니다. 다만 알트는 뉴스 강도가 아니라 BTC 지지 유지와 ETH 상대강도 회복이 같이 확인될 때만 공격적으로 해석합니다."
     if bias == "risk_off":
-        return f"{base} 현재는 반등 기대보다 방어적 자금 이동을 먼저 봐야 합니다. BTC가 기준선을 회복하기 전까지 알트 뉴스는 단기 반등 소재일 뿐 추세 전환 근거로 보기 어렵습니다."
+        return f"{base} {level_context} 현재는 반등 기대보다 방어적 자금 이동을 먼저 봐야 합니다. BTC가 가까운 저항을 회복하기 전까지 알트 뉴스는 단기 반등 소재일 뿐 추세 전환 근거로 보기 어렵습니다."
     if has_reg:
-        return f"{base} 이번 묶음은 가격 차트보다 규제, ETF, 제도권 플로우가 방향을 흔드는 조합입니다. 발표 확인 전 포지션 확대보다 이벤트 전후 변동성 구간을 분리하는 판단이 우선입니다."
-    return f"{base} 현재는 BTC 기준축, 니케이의 아시아 위험자산 심리, 골드의 방어 수요가 서로 엇갈리는 혼조 장세입니다. 방향 단정보다 시나리오별 조건을 두고 대응하는 문서가 필요합니다."
+        return f"{base} {level_context} 이번 묶음은 가격 차트보다 규제, ETF, 제도권 플로우가 방향을 흔드는 조합입니다. 발표 확인 전 포지션 확대보다 이벤트 전후 변동성 구간을 분리하는 판단이 우선입니다."
+    return f"{base} {level_context} 현재는 BTC 기준축, 니케이의 아시아 위험자산 심리, 골드의 방어 수요가 서로 엇갈리는 혼조 장세입니다. 방향 단정보다 시나리오별 조건을 두고 대응하는 문서가 필요합니다."
 
 
 def build_key_points(resources: list[dict], market_summary: dict, findings: list[dict]) -> list[str]:
@@ -214,7 +337,10 @@ def build_key_points(resources: list[dict], market_summary: dict, findings: list
     points = [
         f"원문 취합: 선택 {coverage['selected_sources']}건, 본문 확보 {coverage['full_text_sources']}건, 총 {coverage['total_material_chars']:,}자 기준으로 분석했습니다.",
         f"시장 체제: {market_summary.get('label')} / 내부 위험선호 점수 {market_summary.get('risk_points')}입니다.",
-        f"BTC 7D {as_percent(market_summary.get('btc_7d'))}, ETH 7D {as_percent(market_summary.get('eth_7d'))}, 니케이 7D {as_percent(market_summary.get('nikkei_7d'))}, 골드 7D {as_percent(market_summary.get('gold_7d'))}.",
+        btc_level_context(market_summary),
+        f"보조지표: {btc_indicator_context(market_summary)}",
+        f"파생 포지션: {btc_derivatives_context(market_summary)}",
+        f"상대 변화율: {eth_relative_context(market_summary)} 니케이 7D {as_percent(market_summary.get('nikkei_7d'))}, 골드 7D {as_percent(market_summary.get('gold_7d'))}, DXY 7D {as_percent(market_summary.get('dxy_7d'))}.",
         f"핵심 태그는 {', '.join(topics)}이며, BTC 기준축과 알트 후행 로테이션을 분리해서 봐야 합니다.",
         "뉴스는 방향을 '예측'하는 자료가 아니라 가격이 어떤 재료를 소화 중인지 판별하는 촉매로 둡니다.",
     ]
@@ -231,6 +357,11 @@ def market_structure(market_summary: dict, topics: list[str]) -> dict:
     nikkei = as_percent(market_summary.get("nikkei_7d"))
     gold = as_percent(market_summary.get("gold_7d"))
     dxy = as_percent(market_summary.get("dxy_7d"))
+    price = as_price(market_summary.get("btc_price"))
+    support = as_price(market_summary.get("btc_nearest_support"))
+    resistance = as_price(market_summary.get("btc_nearest_resistance"))
+    support_distance = as_percent(market_summary.get("btc_support_distance_pct"))
+    resistance_distance = as_percent(market_summary.get("btc_resistance_distance_pct"))
     bias = market_summary.get("bias")
     if bias == "risk_on":
         regime = "BTC 우선 리스크 온 검증 구간"
@@ -240,8 +371,11 @@ def market_structure(market_summary: dict, topics: list[str]) -> dict:
         regime = "방향성 확인 전 혼조 구간"
     return {
         "regime": regime,
-        "btc_axis": f"BTC 7일 변화율 {btc}. 모든 알트 판단은 BTC가 단기 기준선을 지키는지 확인한 뒤에만 강화합니다.",
-        "alts": f"ETH 7일 변화율 {eth}. 알트는 독립 상승보다 BTC 안정, ETH 상대강도, 섹터 거래량 확산이 같이 나올 때 로테이션으로 인정합니다.",
+        "critical_levels": f"BTC 현재가 {price}. 가까운 지지 {support}({support_distance}), 가까운 저항 {resistance}({resistance_distance})입니다. 이 두 가격이 이번 브리핑의 1차 시나리오 경계입니다.",
+        "technical_indicators": btc_indicator_context(market_summary),
+        "derivatives": btc_derivatives_context(market_summary),
+        "btc_axis": f"BTC 7일 변화율 {btc}. {btc_level_context(market_summary)} 모든 알트 판단은 BTC가 지지를 지키거나 저항을 회복하는지 확인한 뒤에만 강화합니다.",
+        "alts": f"ETH 7일 변화율 {eth}. {eth_relative_context(market_summary)} 알트는 독립 상승보다 BTC 안정, ETH 상대강도, 섹터 거래량 확산이 같이 나올 때 로테이션으로 인정합니다.",
         "japan_risk": f"니케이 7일 변화율 {nikkei}. 일본발 크립토 기사와 함께 보면 아시아 위험자산 심리의 보조축입니다.",
         "defensive_assets": f"골드 7일 변화율 {gold}, DXY 7일 변화율 {dxy}. 금/달러가 강하면 크립토 호재도 짧은 반등으로 끝날 수 있습니다.",
         "sentiment": f"Fear & Greed {market_summary.get('fear_greed')}({market_summary.get('fear_greed_label')}). 감정 지표는 후킹 소재이지만 포지션 근거로는 격하합니다.",
@@ -252,41 +386,46 @@ def market_structure(market_summary: dict, topics: list[str]) -> dict:
 def build_scenarios(market_summary: dict, topics: list[str], findings: list[dict]) -> list[dict]:
     has_alt = any(topic in topics for topic in ["ETH", "SOL", "XRP", "ALT", "WEB3"])
     has_reg = "REG" in topics or "ETF" in topics
+    support = level_trigger(market_summary, "support")
+    resistance = level_trigger(market_summary, "resistance")
+    price = as_price(market_summary.get("btc_price"))
+    indicator_context = btc_indicator_context(market_summary)
+    derivative_context = btc_derivatives_context(market_summary)
     return [
         {
             "case": "Bull",
             "probability_view": "조건부 우세",
-            "trigger": "BTC가 단기 기준선을 지키며 ETH 상대강도와 거래량이 같이 살아나는 경우",
-            "expected_path": "BTC가 먼저 반등 신뢰를 만들고, 이후 ETH/SOL/XRP 등 선택 소스에 반복 등장한 섹터로 관심이 이동합니다.",
-            "watch": "BTC 종가, ETH/BTC, 알트 거래대금, 일본 거래소/기관 관련 후속 공지",
+            "trigger": f"BTC가 현재 {price} 부근에서 {support}을 지키고, 4H/일봉 종가가 {resistance} 위로 회복하는 경우",
+            "expected_path": "가까운 저항 회복은 단기 매물대 흡수 신호입니다. 이후 MA20/MA50 위 체류와 RSI 50선 이상 유지가 붙으면 ETH/SOL/XRP 등 선택 소스에 반복 등장한 섹터로 관심이 이동합니다.",
+            "watch": f"{resistance} 위 종가, 거래량 증가, {indicator_context}, 일본 거래소/기관 관련 후속 공지",
         },
         {
             "case": "Base",
             "probability_view": "기본 경로",
-            "trigger": "BTC는 박스권, 니케이와 골드는 엇갈리고 뉴스만 순환하는 경우",
+            "trigger": f"BTC가 {support}~{resistance} 사이에서 체류하고 니케이와 골드 신호가 엇갈리는 경우",
             "expected_path": "뉴스가 가격을 밀어 올리기보다 단기 콘텐츠 소재로 소비됩니다. 이 구간은 강한 결론보다 관찰 리스트와 무효화 조건이 중요합니다.",
-            "watch": "뉴스 발표 시각, 공식 출처, 거래소 공지, BTC 박스 상단/하단 반응",
+            "watch": f"뉴스 발표 시각, 공식 출처, 거래소 공지, BTC {support}/{resistance} 반응",
         },
         {
             "case": "Bear",
             "probability_view": "경계 경로",
-            "trigger": "골드/DXY가 강하고 BTC가 기준선을 이탈하거나 규제성 헤드라인이 확인되는 경우",
-            "expected_path": "알트 호재는 개별 반등에 그치고, 시장은 현금화와 변동성 축소를 우선합니다.",
-            "watch": "BTC 지지 이탈, ETF/규제 악재 확인, 커뮤니티 과열 후 급랭",
+            "trigger": f"골드/DXY가 강하고 BTC가 {support} 아래로 종가 이탈하거나 규제성 헤드라인이 공식 확인되는 경우",
+            "expected_path": "알트 호재는 개별 반등에 그치고, 시장은 현금화와 변동성 축소를 우선합니다. 지지 이탈 뒤에는 MA50/MA200과 30D 저점이 다음 방어선으로 재평가됩니다.",
+            "watch": f"{support} 이탈, ETF/규제 악재 확인, 커뮤니티 과열 후 급랭, {derivative_context}",
         },
         {
             "case": "Alt Season Validation",
             "probability_view": "아직 검증 필요" if has_alt else "대기",
-            "trigger": "BTC 횡보 안정 + ETH 상대강도 회복 + 선택 소스의 알트 재료가 거래량으로 확인되는 경우",
+            "trigger": f"BTC가 {support}을 지키며 {resistance} 아래에서 과열 없이 횡보하고, {eth_relative_context(market_summary)}가 개선되는 경우",
             "expected_path": "알트 시즌은 선언이 아니라 검증입니다. 단일 호재보다 여러 섹터가 동시에 거래대금 확산을 보일 때 인정합니다.",
-            "watch": "ETH/BTC, SOL/XRP/SUI 등 반복 언급 종목의 거래량, BTC 도미넌스 변화",
+            "watch": "ETH 7D-BTC 7D 상대 변화율, SOL/XRP/SUI 등 반복 언급 종목의 거래량, BTC 도미넌스 변화",
         },
         {
             "case": "Event Volatility",
             "probability_view": "높음" if has_reg else "보통",
             "trigger": "규제, ETF, 기관, 거래소 공지의 발표 전후",
             "expected_path": "발표 전 기대감과 발표 후 차익실현이 분리됩니다. 기사 제목만 보고 방향을 정하지 않습니다.",
-            "watch": "공식 문서 원문, 발표 시간, 시장 반응 1차/2차 파동",
+            "watch": f"공식 문서 원문, 발표 시간, 시장 반응 1차/2차 파동, {support}/{resistance} 종가 확정",
         },
     ]
 
@@ -306,6 +445,10 @@ def build_weekly_sections(thesis: str, market: dict, scenarios: list[dict], find
             "body": f"{market['btc_axis']} BTC가 기준선을 지키면 알트 뉴스는 후행 확산 재료가 되고, 반대로 BTC가 무너지면 같은 뉴스도 단기 반등 소재로 격하됩니다. 이 관점이 브리핑 전체의 1번 필터입니다.",
         },
         {
+            "heading": "중요 가격대와 보조지표",
+            "body": f"{market['critical_levels']}\n\n{market['technical_indicators']}\n\n{market['derivatives']} 이 숫자들은 예측값이 아니라 시나리오 경계입니다. 저항 회복 전에는 강세 확정이 아니고, 지지 이탈 뒤에는 원문 호재도 방어적으로 재분류합니다.",
+        },
+        {
             "heading": "니케이, 골드, 달러로 보는 자산 이동",
             "body": f"{market['japan_risk']} {market['defensive_assets']} 일본 크립토 기사와 니케이를 같이 보는 이유는 일본발 자금/상장/제도권 채택 뉴스가 아시아 위험자산 심리와 붙어 움직일 때가 많기 때문입니다.",
         },
@@ -315,12 +458,12 @@ def build_weekly_sections(thesis: str, market: dict, scenarios: list[dict], find
         },
         {
             "heading": "시나리오와 무효화",
-            "body": " / ".join(f"{case['case']}: {case['trigger']}" for case in scenarios[:3]) + "\n\n강세 시나리오의 무효화는 BTC 기준선 이탈, 방어자산 강세, 공식 출처와 다른 루머 확인입니다.",
+            "body": " / ".join(f"{case['case']}: {case['trigger']}" for case in scenarios[:3]) + "\n\n강세 시나리오의 무효화는 BTC 지지 이탈, 방어자산 강세, 공식 출처와 다른 루머 확인입니다.",
         },
     ]
 
 
-def build_time_blocks(resources: list[dict], findings: list[dict]) -> list[dict]:
+def build_time_blocks(resources: list[dict], findings: list[dict], market: dict) -> list[dict]:
     sorted_rows = sorted(resources, key=lambda row: row.get("posted_at") or "", reverse=True)
     labels = [
         ("아시아 장 전후", "니케이, 일본 거래소/기관 기사, 엔화권 리스크 심리를 먼저 확인합니다."),
@@ -336,15 +479,18 @@ def build_time_blocks(resources: list[dict], findings: list[dict]) -> list[dict]
             {
                 "time_zone": label,
                 "watch": related,
-                "trader_read": f"{guide} 관련 태그는 {', '.join(top_topics(chunk, 3))}입니다. 여기서 확인할 것은 뉴스 수가 아니라 BTC가 그 뉴스를 가격으로 인정하는지입니다.",
+                "trader_read": f"{guide} 관련 태그는 {', '.join(top_topics(chunk, 3))}입니다. {market.get('critical_levels', '')} 여기서 확인할 것은 뉴스 수가 아니라 BTC가 그 뉴스를 가격으로 인정하는지입니다.",
             }
         )
     return blocks
 
 
-def build_invalidation_points(market: dict, findings: list[dict]) -> list[str]:
+def build_invalidation_points(market_summary: dict, findings: list[dict]) -> list[str]:
+    support = level_trigger(market_summary, "support")
+    resistance = level_trigger(market_summary, "resistance")
     return [
-        "BTC가 단기 기준선을 이탈하면 알트 강세 해석은 보류합니다.",
+        f"BTC가 {support} 아래로 종가 이탈하면 알트 강세 해석은 보류합니다.",
+        f"BTC가 {resistance} 위에서 종가를 확정하지 못하면 강세 시나리오는 추격이 아니라 관찰로 낮춥니다.",
         "공식 발표가 기사 제목보다 약하거나 일정이 지연되면 이벤트 프리미엄을 낮춥니다.",
         "골드와 달러가 동시에 강해지면 크립토 호재도 단기 반등으로 제한될 수 있습니다.",
         "커뮤니티 화제성이 급등했는데 거래량이 따라오지 않으면 과열 신호로 처리합니다.",
@@ -355,7 +501,7 @@ def build_invalidation_points(market: dict, findings: list[dict]) -> list[str]:
 def local_generate_brief(resources: list[dict], market_snapshot: dict, briefing_type: str, tone: str) -> dict:
     market_summary = summarize_market(market_snapshot)
     topics = top_topics(resources)
-    findings = build_source_findings(resources)
+    findings = build_source_findings(resources, market_summary)
     thesis = directional_thesis(market_summary, topics, findings)
     market = market_structure(market_summary, topics)
     scenarios = build_scenarios(market_summary, topics, findings)
@@ -379,21 +525,23 @@ def local_generate_brief(resources: list[dict], market_snapshot: dict, briefing_
         "key_points": key_points,
         "trader_sentences": [
             thesis,
+            market["critical_levels"],
+            market["technical_indicators"],
             market["btc_axis"],
             market["alts"],
             market["defensive_assets"],
             "핵심은 예측이 아니라 조건입니다. BTC가 구조를 지키면 알트 뉴스는 로테이션으로 승격되고, BTC가 무너지면 같은 뉴스도 단기 노이즈로 내려갑니다.",
         ],
         "scenarios": scenarios,
-        "invalidation_points": build_invalidation_points(market, findings),
+        "invalidation_points": build_invalidation_points(market_summary, findings),
         "action_plan": [
-            "1차 필터: BTC 종가와 거래량으로 리스크 온/오프를 먼저 판별합니다.",
-            "2차 필터: ETH/BTC와 주요 알트 거래대금으로 알트 로테이션 여부를 확인합니다.",
+            f"1차 필터: BTC가 {level_trigger(market_summary, 'support')}을 지키는지, {level_trigger(market_summary, 'resistance')}을 회복하는지 먼저 판별합니다.",
+            "2차 필터: ETH 7D-BTC 7D 상대 변화율과 주요 알트 거래대금으로 알트 로테이션 여부를 확인합니다.",
             "3차 필터: 일본/글로벌 기사에서 공식 발표, 거래소 공지, ETF/규제 일정을 분리합니다.",
             "콘텐츠화: 카드뉴스는 강세 단정이 아니라 '조건이 충족되면 무엇이 바뀌는가'를 중심으로 구성합니다.",
         ],
         "weekly_brief": build_weekly_sections(thesis, market, scenarios, findings),
-        "daily_brief": build_time_blocks(resources, findings),
+        "daily_brief": build_time_blocks(resources, findings, market),
         "source_digest": resource_digest(resources),
         "source_lines": source_lines,
         "risk_notes": [
@@ -504,7 +652,8 @@ def brief_prompt(resources: list[dict], market_snapshot: dict, briefing_type: st
             "mission": (
                 "선택된 모든 리소스의 원문 full_material을 읽고 전문 트레이더 리서치 문서를 작성한다. "
                 "가벼운 요약, 단순 수치 나열, '중요합니다' 식 문장을 금지한다. "
-                "각 원문별 핵심 주장과 트레이더 해석을 분리하고, BTC 기준축과 알트 로테이션 조건을 명확히 쓴다."
+                "각 원문별 핵심 주장과 트레이더 해석을 분리하고, BTC 기준축과 알트 로테이션 조건을 명확히 쓴다. "
+                "market_snapshot.price_levels, technicals, derivatives의 숫자를 사용해 현재가, 지지, 저항, MA, RSI, MACD, ATR, 펀딩비를 반드시 포함한다."
             ),
             "briefing_type": briefing_type,
             "tone": tone,
@@ -518,6 +667,9 @@ def brief_prompt(resources: list[dict], market_snapshot: dict, briefing_type: st
                 "market_summary": "object",
                 "market_structure": {
                     "regime": "string",
+                    "critical_levels": "current BTC price, nearest support/resistance and distances",
+                    "technical_indicators": "MA20/50/200, RSI14, MACD, ATR14",
+                    "derivatives": "funding, mark price, open interest",
                     "btc_axis": "paragraph",
                     "alts": "paragraph",
                     "japan_risk": "paragraph",
@@ -539,7 +691,7 @@ def brief_prompt(resources: list[dict], market_snapshot: dict, briefing_type: st
                 "scenarios": [
                     {
                         "case": "Bull/Base/Bear/Alt Season/Event Volatility",
-                        "trigger": "string",
+                        "trigger": "price-level based trigger with exact BTC support/resistance when available",
                         "expected_path": "string",
                         "watch": "string",
                     }
@@ -560,6 +712,7 @@ def normalize_external_brief(parsed: dict, local: dict, provider: str) -> dict:
     parsed.setdefault("provider", provider)
     parsed.setdefault("reference_perspective", BITCOIN_ILLUMINATI_VIEWPOINT)
     parsed.setdefault("material_coverage", local["material_coverage"])
+    parsed.setdefault("market_summary", local["market_summary"])
     parsed.setdefault("market_structure", local["market_structure"])
     parsed.setdefault("source_findings", local["source_findings"])
     parsed.setdefault("source_digest", local["source_digest"])
@@ -595,7 +748,8 @@ def generate_trader_brief(resources: list[dict], market_snapshot: dict, briefing
 def card_blueprint(count: int) -> list[str]:
     base = [
         "시장 논지",
-        "BTC 기준축",
+        "BTC 가격 레벨",
+        "보조지표",
         "원문 근거 1",
         "원문 근거 2",
         "니케이/골드/달러",
@@ -619,6 +773,12 @@ def make_card_set(brief: dict, resources: list[dict], count: int, label: str) ->
         if "원문 근거" in heading and finding:
             body = f"{finding.get('source')}의 원문은 {finding.get('role')}로 읽힙니다. 핵심은 {clean_text(finding.get('trader_read'), 140)}"
             caption = clean_text(" / ".join(finding.get("evidence", [])[:2]), 180)
+        elif heading == "BTC 가격 레벨":
+            body = clean_text(market.get("critical_levels") or market.get("btc_axis") or brief.get("one_line"), 190)
+            caption = "현재가가 가까운 지지와 저항 중 어느 쪽을 종가로 확정하는지가 시나리오 경계입니다."
+        elif heading == "보조지표":
+            body = clean_text(f"{market.get('technical_indicators', '')} {market.get('derivatives', '')}", 210)
+            caption = "MA, RSI, MACD, ATR, 펀딩비를 함께 봐야 가격 레벨의 신뢰도를 구분할 수 있습니다."
         elif heading == "BTC 기준축":
             body = clean_text(market.get("btc_axis") or brief.get("one_line"), 190)
             caption = "BTC가 구조를 지키는지 먼저 확인한 뒤 알트 해석을 붙입니다."
@@ -655,7 +815,13 @@ def build_note_markdown(brief: dict, resources: list[dict]) -> str:
     for point in brief.get("key_points", []):
         lines.append(f"- {point}")
     lines.append("")
-    lines.append("## 2. 원문별 해석")
+    lines.append("## 2. 현재 가격·핵심 레벨")
+    market = brief.get("market_structure") or {}
+    for key in ["critical_levels", "technical_indicators", "derivatives", "btc_axis", "alts"]:
+        if market.get(key):
+            lines.append(f"- {key}: {market.get(key)}")
+    lines.append("")
+    lines.append("## 3. 원문별 해석")
     for item in brief.get("source_findings", []):
         lines.append(f"### {item.get('source')} - {item.get('title')}")
         lines.append(f"- 역할: {item.get('role')}")
@@ -663,18 +829,18 @@ def build_note_markdown(brief: dict, resources: list[dict]) -> str:
             lines.append(f"- 근거: {evidence}")
         lines.append(f"- 트레이더 해석: {item.get('trader_read')}")
         lines.append("")
-    lines.append("## 3. 시장 구조")
+    lines.append("## 4. 시장 구조")
     for key, value in (brief.get("market_structure") or {}).items():
         lines.append(f"- {key}: {value}")
     lines.append("")
-    lines.append("## 4. 시나리오")
+    lines.append("## 5. 시나리오")
     for scenario in brief.get("scenarios", []):
         lines.append(f"### {scenario.get('case')}")
         lines.append(f"- 조건: {scenario.get('trigger')}")
         lines.append(f"- 경로: {scenario.get('expected_path')}")
         lines.append(f"- 체크: {scenario.get('watch')}")
     lines.append("")
-    lines.append("## 5. 무효화 조건")
+    lines.append("## 6. 무효화 조건")
     for item in brief.get("invalidation_points", []):
         lines.append(f"- {item}")
     lines.append("")

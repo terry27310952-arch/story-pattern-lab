@@ -1,31 +1,38 @@
 # Crypto Trader Briefing Lab
 
-Streamlit app for collecting Japanese crypto media, Japanese community signals,
-CoinMarketCap-style headlines, and free market context, then turning selected
-resources into trader-facing briefings, card news, Note content, and Excel
-packages.
+Streamlit app for collecting Japanese and global crypto media, Japanese
+community signals, CoinMarketCap/Yahoo Finance public headline lists, and live
+market context, then turning selected full-text resources into trader-facing
+briefings, card news, Note content, and Excel packages.
 
 ## Core Flow
 
-1. Collect resources from Japanese crypto RSS, public news lists, 5ch crypto
-   board subjects, CoinMarketCap headlines, and Yahoo Finance Japan lists.
+1. Collect resources from Japanese crypto RSS, global crypto RSS, public news
+   lists, 5ch crypto board subjects, CoinMarketCap headlines, and Yahoo Finance
+   Japan lists.
 2. Refresh market context for Bitcoin, major alts, Nikkei 225, gold, Nasdaq,
    DXY, US 10Y yield, and crypto sentiment.
-3. Multi-select resources for a briefing bundle.
-4. Fetch every selected article body where public access is possible. Community
+3. Derive BTC/major-alt price levels from daily OHLC: 24H/7D/30D/90D
+   highs/lows, MA20/50/100/200, Bollinger bands, 90D Fibonacci levels, and
+   round-number pivots.
+4. Add technical and derivatives data: RSI14, MACD, ATR14, 20D average volume,
+   Binance Futures funding rate, mark price, and open interest.
+5. Multi-select resources for a briefing bundle.
+6. Fetch every selected article body where public access is possible. Community
    items are treated as sentiment signals only and do not store comment bodies.
-5. Generate either:
+7. Generate either:
    - weekly direction briefing around BTC, Nikkei, gold, alts, asset rotation,
      and market regime
    - daily time-zone briefing around Bitcoin-related catalysts and reactions
-6. Apply a professional BTC-first analysis lens inspired by
+8. Apply a professional BTC-first analysis lens inspired by
    `https://www.youtube.com/@bitcoinilluminati`: BTC structure first, alts as
    downstream rotation, chart invalidation before conviction, and sentiment as
    a secondary signal.
-7. Split the briefing into card news sets: 5 slides, 6 slides, 7 slides, and a
+9. Split the briefing into card news sets: 5 slides, 6 slides, 7 slides, and a
    custom AI suggestion.
-8. Export Markdown, JSON, and `.xlsx` files with separate sheets for briefing,
-   source findings, scenarios, card news, Note, sources, and market data.
+10. Export Markdown, JSON, and `.xlsx` files with separate sheets for briefing,
+    source findings, scenarios, card news, Note, sources, market data, price
+    levels, indicators, and derivatives.
 
 ## Free Reasoning Options
 

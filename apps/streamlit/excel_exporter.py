@@ -6,7 +6,7 @@ from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
-from market_data import flatten_market_rows
+from market_data import flatten_derivatives_rows, flatten_indicator_rows, flatten_level_rows, flatten_market_rows
 
 
 HEADER_FILL = PatternFill("solid", fgColor="E8EEF7")
@@ -126,8 +126,71 @@ def add_market_sheet(wb: Workbook, market_snapshot: dict) -> None:
     ws = wb.create_sheet("Market")
     append_table(
         ws,
-        ["name", "symbol", "asset_class", "price", "unit", "change_24h", "change_7d", "market_cap", "source"],
+        [
+            "name",
+            "symbol",
+            "asset_class",
+            "price",
+            "unit",
+            "change_24h",
+            "change_7d",
+            "change_30d",
+            "technical_bias",
+            "nearest_support",
+            "nearest_resistance",
+            "rsi14",
+            "macd_bias",
+            "market_cap",
+            "source",
+        ],
         flatten_market_rows(market_snapshot),
+    )
+
+
+def add_price_levels_sheet(wb: Workbook, market_snapshot: dict) -> None:
+    ws = wb.create_sheet("Price_Levels")
+    append_table(
+        ws,
+        ["asset", "direction", "level", "distance_pct", "reason", "importance", "source"],
+        flatten_level_rows(market_snapshot),
+    )
+
+
+def add_indicators_sheet(wb: Workbook, market_snapshot: dict) -> None:
+    ws = wb.create_sheet("Indicators")
+    append_table(
+        ws,
+        [
+            "asset",
+            "current",
+            "ma20",
+            "ma50",
+            "ma100",
+            "ma200",
+            "ema20",
+            "rsi14",
+            "macd",
+            "macd_signal",
+            "macd_histogram",
+            "macd_bias",
+            "bollinger_upper",
+            "bollinger_middle",
+            "bollinger_lower",
+            "bollinger_bandwidth_pct",
+            "atr14",
+            "atr14_pct",
+            "volume_20d_avg",
+        ],
+        flatten_indicator_rows(market_snapshot),
+    )
+
+
+def add_derivatives_sheet(wb: Workbook, market_snapshot: dict) -> None:
+    ws = wb.create_sheet("Derivatives")
+    append_table(
+        ws,
+        ["pair", "mark_price", "index_price", "last_funding_rate", "next_funding_time", "open_interest_contracts", "source", "error"],
+        flatten_derivatives_rows(market_snapshot),
     )
 
 
@@ -141,6 +204,9 @@ def build_excel_bytes(brief: dict, content_package: dict, resources: list[dict],
     add_note_sheet(wb, content_package.get("note_markdown", ""))
     add_sources_sheet(wb, resources)
     add_market_sheet(wb, market_snapshot)
+    add_price_levels_sheet(wb, market_snapshot)
+    add_indicators_sheet(wb, market_snapshot)
+    add_derivatives_sheet(wb, market_snapshot)
 
     output = BytesIO()
     wb.save(output)

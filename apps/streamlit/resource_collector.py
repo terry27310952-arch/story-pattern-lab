@@ -15,43 +15,73 @@ import feedparser
 from dateutil import parser as date_parser
 
 
-USER_AGENT = "Mozilla/5.0 StoryPatternLab/1.0; crypto-trader-briefing"
+USER_AGENT = "Mozilla/5.0 StoryPatternLab/1.1; expanded-crypto-research"
 
 
 RSS_SOURCES = {
     "NADA NEWS / CoinDesk Japan": {
         "url": "https://www.coindeskjapan.com/feed/",
-        "category": "일본 크립토 미디어",
+        "category": "Japan crypto media",
         "region": "Japan",
         "source_type": "rss",
     },
     "CRYPTO TIMES JP": {
         "url": "https://crypto-times.jp/feed/",
-        "category": "일본 Web3/블록체인",
+        "category": "Japan Web3 and blockchain",
         "region": "Japan",
         "source_type": "rss",
     },
     "Cryptonews JP": {
         "url": "https://cryptonews.com/jp/feed/",
-        "category": "일본어 글로벌 크립토 뉴스",
+        "category": "Japanese global crypto news",
         "region": "Japan/Global",
         "source_type": "rss",
     },
     "Coinspeaker JP": {
         "url": "https://www.coinspeaker.com/jp/feed/",
-        "category": "일본어 크립토/금융 뉴스",
+        "category": "Japanese crypto and finance news",
         "region": "Japan/Global",
         "source_type": "rss",
     },
     "CoinDesk Global": {
         "url": "https://www.coindesk.com/arc/outboundfeeds/rss/",
-        "category": "글로벌 크립토 뉴스",
+        "category": "Global crypto news",
         "region": "Global",
         "source_type": "rss",
     },
     "Cointelegraph Global": {
         "url": "https://cointelegraph.com/rss",
-        "category": "글로벌 크립토 뉴스",
+        "category": "Global crypto news",
+        "region": "Global",
+        "source_type": "rss",
+    },
+    "Decrypt": {
+        "url": "https://decrypt.co/feed",
+        "category": "Global crypto news",
+        "region": "Global",
+        "source_type": "rss",
+    },
+    "NewsBTC": {
+        "url": "https://www.newsbtc.com/feed/",
+        "category": "Bitcoin and market analysis",
+        "region": "Global",
+        "source_type": "rss",
+    },
+    "U.Today": {
+        "url": "https://u.today/rss",
+        "category": "Crypto market headlines",
+        "region": "Global",
+        "source_type": "rss",
+    },
+    "BeInCrypto": {
+        "url": "https://beincrypto.com/feed/",
+        "category": "Crypto market and regulation",
+        "region": "Global",
+        "source_type": "rss",
+    },
+    "Blockworks": {
+        "url": "https://blockworks.co/feed",
+        "category": "Institutional crypto and macro",
         "region": "Global",
         "source_type": "rss",
     },
@@ -62,28 +92,42 @@ PUBLIC_LIST_SOURCES = {
     "5ch Crypto Board": {
         "url": "https://fate.5ch.io/cryptocoin/subject.txt",
         "thread_base_url": "https://fate.5ch.io/test/read.cgi/cryptocoin/",
-        "category": "일본 커뮤니티",
+        "category": "Japan community",
         "region": "Japan Community",
         "source_type": "community",
         "parser": "5ch_subject",
     },
     "CoinMarketCap Headlines": {
         "url": "https://coinmarketcap.com/headlines/news/",
-        "category": "글로벌 코인 헤드라인",
+        "category": "Global coin headline list",
         "region": "Global",
         "source_type": "public_list",
-        "parser": "link_list",
+        "parser": "coinmarketcap",
     },
     "Yahoo Finance JP Crypto": {
         "url": "https://finance.yahoo.co.jp/news/search?q=%E4%BB%AE%E6%83%B3%E9%80%9A%E8%B2%A8",
-        "category": "일본 금융/암호자산 뉴스",
+        "category": "Japan finance portal crypto search",
+        "region": "Japan",
+        "source_type": "public_list",
+        "parser": "yahoo_finance",
+    },
+    "Yahoo Finance JP Bitcoin": {
+        "url": "https://finance.yahoo.co.jp/news/search?q=%E3%83%93%E3%83%83%E3%83%88%E3%82%B3%E3%82%A4%E3%83%B3",
+        "category": "Japan finance portal Bitcoin search",
         "region": "Japan",
         "source_type": "public_list",
         "parser": "yahoo_finance",
     },
     "Yahoo Finance JP CoinPost": {
         "url": "https://finance.yahoo.co.jp/news/media/coinpost",
-        "category": "CoinPost 기사 목록",
+        "category": "CoinPost public article list",
+        "region": "Japan",
+        "source_type": "public_list",
+        "parser": "yahoo_finance",
+    },
+    "Yahoo Finance JP CoinDesk Japan": {
+        "url": "https://finance.yahoo.co.jp/news/media/coindesk",
+        "category": "CoinDesk Japan public article list",
         "region": "Japan",
         "source_type": "public_list",
         "parser": "yahoo_finance",
@@ -96,27 +140,28 @@ ASSET_KEYWORDS = {
     "ETH": ["ethereum", "eth", "イーサリアム", "이더리움"],
     "SOL": ["solana", "sol", "ソラナ", "솔라나"],
     "XRP": ["xrp", "ripple", "リップル", "리플"],
-    "ALT": ["altcoin", "アルト", "알트", "token", "토큰"],
+    "ALT": ["altcoin", "アルト", "알트", "token", "トークン", "토큰"],
     "STABLE": ["stablecoin", "ステーブルコイン", "스테이블"],
-    "ETF": ["etf", "上場投資信託", "현물 etf"],
-    "REG": ["sec", "cftc", "規制", "税制", "규제", "세제"],
-    "EXCHANGE": ["binance", "coinbase", "取引所", "거래소", "sbi"],
+    "ETF": ["etf", "上場投資信託", "現物etf", "현물 etf"],
+    "REG": ["sec", "cftc", "regulation", "規制", "税制", "규제", "세제"],
+    "EXCHANGE": ["binance", "coinbase", "取引所", "거래소", "sbi", "bitget", "bybit"],
     "SECURITY": ["hack", "scam", "exploit", "ハッキング", "해킹", "피싱"],
-    "MACRO": ["cpi", "fed", "frb", "金利", "금리", "inflation", "国債"],
-    "WEB3": ["web3", "defi", "nft", "dao", "rwa", "블록체인"],
+    "MACRO": ["cpi", "fed", "frb", "金利", "금리", "inflation", "国債", "国債利回り"],
+    "WEB3": ["web3", "defi", "nft", "dao", "rwa", "ブロックチェーン", "블록체인"],
 }
 
 
 NOISE_WORDS = [
-    "로그인",
-    "회원가입",
+    "ログイン",
+    "会員登録",
     "広告",
-    "プライバシー",
-    "利用規約",
+    "検索",
     "次へ",
     "前へ",
-    "ランキング",
     "お問い合わせ",
+    "利用規約",
+    "プライバシー",
+    "ランキング",
 ]
 
 
@@ -181,7 +226,7 @@ class LinkTextParser(HTMLParser):
             self.links.append((href, text))
 
 
-def clean_html(value: str | None, limit: int = 1400) -> str:
+def clean_html(value: str | None, limit: int = 1800) -> str:
     if not value:
         return ""
     text = unescape(str(value))
@@ -245,12 +290,12 @@ def log_score(value: int, scale: float) -> float:
 def score_item(item: ResourceItem) -> ResourceItem:
     fresh = minutes_since(item.posted_at)
     freshness_score = 52.0 if fresh is None else max(0.0, min(100.0, 100.0 - fresh / 20.0))
-    rank_score = max(0.0, min(100.0, 100.0 - (item.rank - 1) * 3.5))
+    rank_score = max(0.0, min(100.0, 100.0 - (item.rank - 1) * 2.6))
     comment_score = log_score(item.comment_count, 24.0)
-    source_bonus = 10.0 if item.source_type == "rss" else 6.0
+    source_bonus = 12.0 if item.source_type == "rss" else 8.0
     community_bonus = min(24.0, comment_score * 0.35) if item.source_type == "community" else 0.0
-    tag_bonus = 8.0 if any(tag in item.tags for tag in ("BTC", "ETH", "ETF", "REG", "MACRO")) else 3.0
-    trader_score = min(100.0, freshness_score * 0.36 + rank_score * 0.34 + comment_score * 0.18 + source_bonus + tag_bonus + community_bonus)
+    tag_bonus = 10.0 if any(tag in item.tags for tag in ("BTC", "ETH", "ETF", "REG", "MACRO")) else 4.0
+    trader_score = min(100.0, freshness_score * 0.34 + rank_score * 0.34 + comment_score * 0.16 + source_bonus + tag_bonus + community_bonus)
     risk_score = 58.0 if item.source_type == "community" else 28.0 if item.source_type == "public_list" else 18.0
     item.freshness_min = fresh
     item.trader_score = round(trader_score, 2)
@@ -269,8 +314,8 @@ def make_resource(
     rank: int,
     comment_count: int = 0,
 ) -> ResourceItem:
-    title = clean_html(title, limit=240)
-    excerpt = clean_html(excerpt, limit=1400)
+    title = clean_html(title, limit=260)
+    excerpt = clean_html(excerpt, limit=1800)
     item = ResourceItem(
         id=stable_id(source, url, title),
         source=source,
@@ -293,7 +338,7 @@ def collect_rss(source_name: str, meta: dict, limit: int) -> tuple[list[Resource
     feed = feedparser.parse(meta["url"])
     items: list[ResourceItem] = []
     if getattr(feed, "bozo", False) and not getattr(feed, "entries", []):
-        return [], f"{source_name}: RSS 응답 파싱 실패"
+        return [], f"{source_name}: RSS parse failed"
     for index, entry in enumerate(getattr(feed, "entries", [])[:limit], start=1):
         title = getattr(entry, "title", "")
         url = getattr(entry, "link", "")
@@ -317,7 +362,7 @@ def collect_rss(source_name: str, meta: dict, limit: int) -> tuple[list[Resource
                 rank=index,
             )
         )
-    return items, f"{source_name}: {len(items)}건 수집"
+    return items, f"{source_name}: collected {len(items)}"
 
 
 def parse_5ch_subject_title(raw_title: str) -> tuple[str, int]:
@@ -333,7 +378,7 @@ def collect_5ch_subject(source_name: str, meta: dict, limit: int) -> tuple[list[
         with urlopen(request, timeout=12) as response:
             text = decode_html(response.read(), response.headers.get("Content-Type", ""))
     except Exception as error:
-        return [], f"{source_name}: 수집 실패 - {error}"
+        return [], f"{source_name}: failed - {error}"
 
     items: list[ResourceItem] = []
     for line in text.splitlines():
@@ -349,7 +394,7 @@ def collect_5ch_subject(source_name: str, meta: dict, limit: int) -> tuple[list[
         except Exception:
             posted_at = None
         url = f"{meta.get('thread_base_url', meta['url']).rstrip('/')}/{thread_id}/l50"
-        excerpt = f"5ch 공개 subject 목록에서 감지된 스레드입니다. 댓글 수: {comment_count}. 원문 댓글 전문은 저장하지 않고 제목과 반응량만 사용합니다."
+        excerpt = f"5ch public subject list signal. Only title and response count are used. Comment bodies are not stored. Replies: {comment_count}"
         items.append(
             make_resource(
                 source=source_name,
@@ -364,7 +409,7 @@ def collect_5ch_subject(source_name: str, meta: dict, limit: int) -> tuple[list[
         )
         if len(items) >= limit:
             break
-    return items, f"{source_name}: {len(items)}건 수집"
+    return items, f"{source_name}: collected {len(items)}"
 
 
 def link_is_relevant(parser_type: str, href: str, text: str) -> bool:
@@ -374,12 +419,10 @@ def link_is_relevant(parser_type: str, href: str, text: str) -> bool:
         return False
     lower_href = href.lower()
     lower_text = text.lower()
-    if parser_type == "yahoo_finance":
-        if "finance.yahoo.co.jp/news" not in lower_href:
-            return False
-    if parser_type == "link_list":
-        if "coinmarketcap.com" not in lower_href:
-            return False
+    if parser_type == "yahoo_finance" and "finance.yahoo.co.jp/news" not in lower_href:
+        return False
+    if parser_type == "coinmarketcap" and "coinmarketcap.com" not in lower_href:
+        return False
     return any(keyword.lower() in lower_text for keywords in ASSET_KEYWORDS.values() for keyword in keywords)
 
 
@@ -393,10 +436,10 @@ def collect_public_links(source_name: str, meta: dict, limit: int) -> tuple[list
         },
     )
     try:
-        with urlopen(request, timeout=14) as response:
+        with urlopen(request, timeout=15) as response:
             html = decode_html(response.read(), response.headers.get("Content-Type", ""))
     except Exception as error:
-        return [], f"{source_name}: 수집 실패 - {error}"
+        return [], f"{source_name}: failed - {error}"
 
     parser = LinkTextParser()
     parser.feed(html)
@@ -413,14 +456,14 @@ def collect_public_links(source_name: str, meta: dict, limit: int) -> tuple[list
                 meta=meta,
                 title=text,
                 url=url,
-                excerpt="공개 목록에서 제목과 링크를 수집했습니다. 본문 취합 옵션을 켜면 가능한 범위에서 원문 텍스트를 보강합니다.",
+                excerpt="Collected from a public article list. Full article body will be fetched later when possible.",
                 posted_at=None,
                 rank=len(items) + 1,
             )
         )
         if len(items) >= limit:
             break
-    return items, f"{source_name}: {len(items)}건 수집"
+    return items, f"{source_name}: collected {len(items)}"
 
 
 def collect_source(source_name: str, meta: dict, limit: int) -> tuple[list[ResourceItem], str]:
