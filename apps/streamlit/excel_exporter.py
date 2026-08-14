@@ -63,7 +63,38 @@ def add_brief_sheet(wb: Workbook, brief: dict) -> None:
         ws.append([key, stringify(value)])
     ws.append(["핵심 포인트", "\n".join(brief.get("key_points", []))])
     ws.append(["트레이더 문장", "\n".join(brief.get("trader_sentences", []))])
+    ws.append(["시장 구조", stringify(brief.get("market_structure", {}))])
+    ws.append(["무효화 조건", "\n".join(brief.get("invalidation_points", []))])
+    ws.append(["실행 체크리스트", "\n".join(brief.get("action_plan", []))])
     style_sheet(ws)
+
+
+def add_source_findings_sheet(wb: Workbook, brief: dict) -> None:
+    ws = wb.create_sheet("Source_Findings")
+    findings = brief.get("source_findings", []) or []
+    rows = []
+    for item in findings:
+        rows.append(
+            {
+                "source": item.get("source", ""),
+                "title": item.get("title", ""),
+                "role": item.get("role", ""),
+                "material_chars": item.get("material_chars", ""),
+                "evidence": "\n".join(item.get("evidence", [])),
+                "trader_read": item.get("trader_read", ""),
+                "url": item.get("url", ""),
+            }
+        )
+    append_table(ws, ["source", "title", "role", "material_chars", "evidence", "trader_read", "url"], rows)
+
+
+def add_scenarios_sheet(wb: Workbook, brief: dict) -> None:
+    ws = wb.create_sheet("Scenarios")
+    append_table(
+        ws,
+        ["case", "probability_view", "trigger", "expected_path", "watch"],
+        brief.get("scenarios", []) or [],
+    )
 
 
 def add_card_sheet(wb: Workbook, name: str, cards: list[dict]) -> None:
@@ -103,6 +134,8 @@ def add_market_sheet(wb: Workbook, market_snapshot: dict) -> None:
 def build_excel_bytes(brief: dict, content_package: dict, resources: list[dict], market_snapshot: dict) -> bytes:
     wb = Workbook()
     add_brief_sheet(wb, brief)
+    add_source_findings_sheet(wb, brief)
+    add_scenarios_sheet(wb, brief)
     for name, cards in (content_package.get("cards") or {}).items():
         add_card_sheet(wb, f"Cards_{name}", cards)
     add_note_sheet(wb, content_package.get("note_markdown", ""))

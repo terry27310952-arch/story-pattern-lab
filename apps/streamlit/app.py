@@ -24,7 +24,7 @@ except Exception:
     fetch_article_body = None
 
 
-APP_VERSION = "2026-08-14 trader-briefing-refactor-v1"
+APP_VERSION = "2026-08-14 professional-source-reading-v2"
 
 
 st.set_page_config(page_title="Crypto Trader Briefing Lab", page_icon="₿", layout="wide")
@@ -101,10 +101,50 @@ def markdown_brief(brief: dict) -> str:
     if not brief:
         return ""
     lines = [f"# {brief.get('title', 'Crypto Trader Briefing')}", "", brief.get("one_line", ""), ""]
+    if brief.get("material_coverage"):
+        coverage = brief["material_coverage"]
+        lines.append("## 원문 취합 범위")
+        lines.append(
+            f"- 선택 {coverage.get('selected_sources')}건 / 본문 확보 {coverage.get('full_text_sources')}건 / "
+            f"총 {coverage.get('total_material_chars', 0):,}자"
+        )
+        lines.append("")
     lines.append("## 핵심 포인트")
     for point in brief.get("key_points", []):
         lines.append(f"- {point}")
     lines.append("")
+    if brief.get("market_structure"):
+        lines.append("## 시장 구조")
+        for key, value in brief.get("market_structure", {}).items():
+            lines.append(f"- {key}: {value}")
+        lines.append("")
+    if brief.get("source_findings"):
+        lines.append("## 원문별 해석")
+        for item in brief.get("source_findings", []):
+            lines.append(f"### {item.get('source')} - {item.get('title')}")
+            lines.append(f"- 역할: {item.get('role')}")
+            for evidence in item.get("evidence", []):
+                lines.append(f"- 근거: {evidence}")
+            lines.append(f"- 트레이더 해석: {item.get('trader_read')}")
+            lines.append("")
+    if brief.get("scenarios"):
+        lines.append("## 시나리오")
+        for scenario in brief.get("scenarios", []):
+            lines.append(f"### {scenario.get('case')}")
+            lines.append(f"- 조건: {scenario.get('trigger')}")
+            lines.append(f"- 예상 경로: {scenario.get('expected_path')}")
+            lines.append(f"- 체크: {scenario.get('watch')}")
+        lines.append("")
+    if brief.get("invalidation_points"):
+        lines.append("## 무효화 조건")
+        for point in brief.get("invalidation_points", []):
+            lines.append(f"- {point}")
+        lines.append("")
+    if brief.get("action_plan"):
+        lines.append("## 실행 체크리스트")
+        for item in brief.get("action_plan", []):
+            lines.append(f"- {item}")
+        lines.append("")
     lines.append("## 트레이더 문장")
     for sentence in brief.get("trader_sentences", []):
         lines.append(f"- {sentence}")
@@ -142,23 +182,23 @@ def cards_to_markdown(cards: list[dict]) -> str:
     return "\n".join(lines).strip()
 
 
-def enrich_material(rows: list[dict], enabled: bool, max_fetch: int) -> tuple[list[dict], list[str]]:
+def enrich_material(rows: list[dict], enabled: bool) -> tuple[list[dict], list[str]]:
     enriched: list[dict] = []
     logs: list[str] = []
     for index, row in enumerate(rows, start=1):
         next_row = dict(row)
         next_row["material"] = row.get("excerpt", "")
-        if enabled and fetch_article_body is not None and index <= max_fetch and row.get("source_type") != "community":
+        if enabled and fetch_article_body is not None and row.get("source_type") != "community":
             result = fetch_article_body(row.get("url", ""), row.get("source", ""), row.get("excerpt", ""))
             if getattr(result, "ok", False) and getattr(result, "body", ""):
-                next_row["material"] = result.body[:7000]
+                next_row["material"] = result.body
                 next_row["fetch_method"] = result.method
                 logs.append(f"{row.get('source')}: 본문 {result.length}자 취합")
             else:
                 next_row["fetch_method"] = "excerpt_fallback"
                 logs.append(f"{row.get('source')}: 요약문 사용")
         else:
-            next_row["fetch_method"] = "excerpt_only"
+            next_row["fetch_method"] = "community_subject_only" if row.get("source_type") == "community" else "excerpt_only"
         enriched.append(next_row)
     return enriched, logs
 
@@ -211,6 +251,12 @@ def render_brief(brief: dict) -> None:
         return
     if brief.get("_provider_warning"):
         st.warning(brief["_provider_warning"])
+    if brief.get("material_coverage"):
+        coverage = brief["material_coverage"]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("선택 원문", coverage.get("selected_sources", 0))
+        c2.metric("본문 확보", coverage.get("full_text_sources", 0))
+        c3.metric("분석 글자수", f"{coverage.get('total_material_chars', 0):,}")
     st.markdown(f"### {brief.get('title', 'Briefing')}")
     st.markdown(f"<div class='brief-box'><strong>{brief.get('one_line', '')}</strong></div>", unsafe_allow_html=True)
     col_a, col_b = st.columns([1, 1])
@@ -223,20 +269,57 @@ def render_brief(brief: dict) -> None:
         for sentence in brief.get("trader_sentences", []):
             st.write(f"- {sentence}")
 
-    brief_tabs = st.tabs(["주간", "일간", "소스", "JSON"])
+    brief_tabs = st.tabs(["시장 구조", "원문별 해석", "시나리오", "주간", "일간", "소스", "JSON"])
     with brief_tabs[0]:
+        market = brief.get("market_structure", {})
+        if market:
+            for key, value in market.items():
+                st.markdown(f"#### {key}")
+                st.write(value)
+        else:
+            st.info("시장 구조 분석이 없습니다.")
+    with brief_tabs[1]:
+        findings = brief.get("source_findings", [])
+        if not findings:
+            st.info("원문별 해석이 없습니다.")
+        for item in findings:
+            with st.expander(f"{item.get('source')} · {item.get('title')}", expanded=False):
+                st.write(f"**역할:** {item.get('role')}")
+                st.write(f"**원문 글자수:** {item.get('material_chars', 0):,}")
+                st.write("**근거:**")
+                for evidence in item.get("evidence", []):
+                    st.write(f"- {evidence}")
+                st.write(f"**트레이더 해석:** {item.get('trader_read')}")
+                if item.get("url"):
+                    st.link_button("원문 열기", item.get("url"))
+    with brief_tabs[2]:
+        scenarios = brief.get("scenarios", [])
+        for scenario in scenarios:
+            st.markdown(f"#### {scenario.get('case')}")
+            st.write(f"**조건:** {scenario.get('trigger')}")
+            st.write(f"**예상 경로:** {scenario.get('expected_path')}")
+            st.caption(f"체크: {scenario.get('watch')}")
+        if brief.get("invalidation_points"):
+            st.markdown("#### 무효화 조건")
+            for point in brief.get("invalidation_points", []):
+                st.write(f"- {point}")
+        if brief.get("action_plan"):
+            st.markdown("#### 실행 체크리스트")
+            for item in brief.get("action_plan", []):
+                st.write(f"- {item}")
+    with brief_tabs[3]:
         for section in brief.get("weekly_brief", []):
             st.markdown(f"#### {section.get('heading', '')}")
             st.write(section.get("body", ""))
-    with brief_tabs[1]:
+    with brief_tabs[4]:
         for block in brief.get("daily_brief", []):
             st.markdown(f"#### {block.get('time_zone', '')}")
             for item in block.get("watch", []):
                 st.write(f"- {item}")
             st.caption(block.get("trader_read", ""))
-    with brief_tabs[2]:
+    with brief_tabs[5]:
         st.dataframe(brief.get("source_digest", []), hide_index=True, use_container_width=True)
-    with brief_tabs[3]:
+    with brief_tabs[6]:
         st.json(brief)
 
 
@@ -300,7 +383,7 @@ with st.sidebar:
     provider_label = st.selectbox(
         "AI 엔진",
         [
-            "무료 로컬 추론 엔진",
+            "무료 로컬 전문 분석 엔진",
             "Ollama 무료 로컬 모델",
             "OpenAI-compatible 무료 API",
         ],
@@ -318,8 +401,8 @@ with st.sidebar:
     st.header("브리핑")
     briefing_type_label = st.radio("브리핑 타입", ["주간 방향", "일간 시간대"], horizontal=True)
     tone = st.selectbox("문장 톤", ["트레이더 브리핑", "카드뉴스용 압축", "Note용 분석"], index=0)
-    auto_fetch_body = st.checkbox("선택 리소스 본문 자동 취합", value=True)
-    max_fetch = st.slider("본문 취합 최대 수", 3, 15, 8, 1, disabled=not auto_fetch_body)
+    auto_fetch_body = st.checkbox("선택 리소스 원문 전체 자동 취합", value=True)
+    st.caption("커뮤니티 자료는 제목/반응량만 사용하고, 기사/미디어 자료는 선택된 항목 전부의 본문 취합을 시도합니다.")
     custom_card_count = st.slider("자율제안 장수", 5, 9, 8, 1)
 
     st.divider()
@@ -472,15 +555,15 @@ with tabs[2]:
             if not st.session_state.market_snapshot:
                 with st.spinner("시장 데이터가 없어 먼저 갱신합니다."):
                     st.session_state.market_snapshot = collect_market_snapshot()
-            with st.spinner("선택 리소스를 취합하는 중입니다."):
-                enriched, enrich_logs = enrich_material(selected, auto_fetch_body, max_fetch)
+            with st.spinner("선택 리소스의 원문 전체를 취합하는 중입니다. 선택 수가 많으면 시간이 걸릴 수 있습니다."):
+                enriched, enrich_logs = enrich_material(selected, auto_fetch_body)
                 st.session_state.enriched_resources = enriched
             if enrich_logs:
                 with st.expander("본문 취합 로그", expanded=False):
                     for log in enrich_logs:
                         st.write(f"- {log}")
             config = provider_config(provider_label, temperature)
-            with st.spinner("추론 엔진이 시장 관점 문장을 생성하는 중입니다."):
+            with st.spinner("추론 엔진이 원문별 근거, BTC 기준축, 시나리오, 무효화 조건을 생성하는 중입니다."):
                 brief, error = generate_trader_brief(enriched, st.session_state.market_snapshot, briefing_type, tone, config)
             if error:
                 st.error(error)
@@ -540,9 +623,12 @@ Sources
   -> RSS / public list / community subject
   -> normalized ResourceItem
   -> multi-select resource bundle
+  -> fetch every selected article body
+  -> per-source evidence and trader interpretation
   -> market snapshot: BTC, alt, Nikkei, gold, DXY, sentiment
-  -> reasoning engine: local free, Ollama, or OpenAI-compatible
-  -> weekly/daily trader briefing
+  -> Bitcoin-first professional reasoning lens
+  -> weekly/daily research briefing
+  -> scenarios, invalidation, action checklist
   -> card news 5/6/7/custom + Note
   -> Markdown, JSON, Excel package
 ```
@@ -560,6 +646,9 @@ FREE_AI_API_KEY=...
     )
     st.markdown("#### 원칙")
     for item in [
+        "선택된 기사/미디어 자료는 원문 전체 취합을 먼저 시도",
+        "BTC를 기준축으로 놓고 알트는 후행 로테이션으로 판별",
+        "시나리오마다 트리거와 무효화 조건을 포함",
         "매수/매도 단정 대신 조건부 시나리오로 작성",
         "커뮤니티 글은 과열/공포 감지용으로만 사용",
         "공식 발표와 거래소 공지 확인 전 루머로 분리",

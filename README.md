@@ -12,19 +12,27 @@ packages.
 2. Refresh market context for Bitcoin, major alts, Nikkei 225, gold, Nasdaq,
    DXY, US 10Y yield, and crypto sentiment.
 3. Multi-select resources for a briefing bundle.
-4. Generate either:
+4. Fetch every selected article body where public access is possible. Community
+   items are treated as sentiment signals only and do not store comment bodies.
+5. Generate either:
    - weekly direction briefing around BTC, Nikkei, gold, alts, asset rotation,
      and market regime
    - daily time-zone briefing around Bitcoin-related catalysts and reactions
-5. Split the briefing into card news sets: 5 slides, 6 slides, 7 slides, and a
+6. Apply a professional BTC-first analysis lens inspired by
+   `https://www.youtube.com/@bitcoinilluminati`: BTC structure first, alts as
+   downstream rotation, chart invalidation before conviction, and sentiment as
+   a secondary signal.
+7. Split the briefing into card news sets: 5 slides, 6 slides, 7 slides, and a
    custom AI suggestion.
-6. Export Markdown, JSON, and `.xlsx` files with separate sheets for briefing,
-   card news, Note, sources, and market data.
+8. Export Markdown, JSON, and `.xlsx` files with separate sheets for briefing,
+   source findings, scenarios, card news, Note, sources, and market data.
 
 ## Free Reasoning Options
 
 The app works without a paid API key by using its built-in local reasoning
-engine. That default engine is deterministic and always available.
+engine. That default engine is deterministic and always available, but the
+deepest reasoning quality comes from connecting a local Ollama model or a free
+OpenAI-compatible inference endpoint.
 
 Optional external reasoning backends:
 
