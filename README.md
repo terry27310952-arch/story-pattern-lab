@@ -53,12 +53,20 @@ briefings, card news, Note content, and Excel packages.
       schema.
     Supported card types are fixed to `market_conclusion`, `key_levels`,
     `derivatives`, `news_context`, `scenarios`, and `trade_plan`.
+    The visual layer is branded around `The Observer`: a faceless anonymous
+    market observer in black suit, black shirt, black tie, black leather gloves,
+    and warm orange rim light. Cards are vertical-first for 4:5
+    `1080x1350` and 9:16 `1080x1920`, not square layouts stretched vertically.
+    The renderer adds a 4:5 dark editorial preview, while the production data
+    includes image prompts for both vertical ratios.
 11. Export Markdown, JSON, and `.xlsx` files with separate sheets for briefing,
     source findings, scenarios, card news, Note, sources, market data, price
     levels, indicators, derivatives, and trader stance. Card sheets use the
     final schema: `card_type`, `eyebrow`, `headline`, `subheadline`,
     `key_message`, `metrics`, `insight`, `action`, `risk`, `visual_direction`,
-    and `source`.
+    and `source`. The Excel package also includes `Visual_Direction`, with
+    layout variant, character shot, character visibility, 4:5 prompt, 9:16
+    prompt, and negative prompt.
 12. Build Note content as a publishable trader note with content metadata, BTC
     data map, derivatives/indicator read, source-by-source interpretation,
     Bull/Base/Bear scenarios, weekly/daily operating notes, card-news conversion

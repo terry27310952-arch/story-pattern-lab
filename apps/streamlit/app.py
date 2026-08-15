@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import html
 from datetime import datetime
 
 import streamlit as st
@@ -31,7 +32,7 @@ except Exception:
     fetch_article_body = None
 
 
-APP_VERSION = "2026-08-15 editorial-card-schema-v10"
+APP_VERSION = "2026-08-15 observer-vertical-brand-v11"
 
 
 MARKET_STRUCTURE_LABELS = {
@@ -80,6 +81,130 @@ st.markdown(
         margin-bottom: 12px;
     }
     .muted { color: #52606D; font-size: 0.92rem; }
+    .observer-preview {
+        position: relative;
+        width: min(100%, 430px);
+        aspect-ratio: 4 / 5;
+        overflow: hidden;
+        border-radius: 8px;
+        border: 1px solid #2b241f;
+        background:
+            radial-gradient(circle at 78% 34%, rgba(241, 112, 36, 0.18), transparent 26%),
+            linear-gradient(155deg, #050505 0%, #10100f 58%, #080706 100%);
+        color: #f4efe6;
+        padding: 28px;
+        margin: 0 0 16px 0;
+        box-shadow: 0 18px 42px rgba(0,0,0,0.28);
+    }
+    .observer-preview::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(0deg, rgba(0,0,0,0.42), transparent 48%);
+        pointer-events: none;
+    }
+    .observer-copy { position: relative; z-index: 3; max-width: 78%; }
+    .observer-eyebrow {
+        color: #f17a2d;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 12px;
+    }
+    .observer-headline {
+        font-size: 1.65rem;
+        line-height: 1.12;
+        font-weight: 800;
+        color: #fff8ed;
+        margin-bottom: 12px;
+    }
+    .observer-sub {
+        color: #d8d0c3;
+        font-size: 0.92rem;
+        line-height: 1.45;
+        margin-bottom: 12px;
+    }
+    .observer-message {
+        color: #f1e7d9;
+        font-size: 0.95rem;
+        line-height: 1.48;
+    }
+    .observer-metrics {
+        position: absolute;
+        left: 28px;
+        right: 28px;
+        bottom: 58px;
+        z-index: 3;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+    }
+    .observer-metric {
+        border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(255,255,255,0.045);
+        padding: 9px 10px;
+        border-radius: 6px;
+    }
+    .observer-metric span {
+        display: block;
+        color: #a9a096;
+        font-size: 0.66rem;
+        text-transform: uppercase;
+        margin-bottom: 4px;
+    }
+    .observer-metric strong { color: #fff8ed; font-size: 0.98rem; }
+    .observer-metric.support strong { color: #7fcf9b; }
+    .observer-metric.risk strong,
+    .observer-metric.resistance strong { color: #e66d5f; }
+    .observer-source {
+        position: absolute;
+        left: 28px;
+        right: 28px;
+        bottom: 22px;
+        z-index: 3;
+        color: #82796f;
+        font-size: 0.68rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .observer-figure {
+        position: absolute;
+        z-index: 2;
+        right: 22px;
+        bottom: 26px;
+        width: 36%;
+        height: 48%;
+        filter: drop-shadow(-10px 0 18px rgba(241,112,36,0.22));
+        opacity: 0.92;
+    }
+    .observer-figure::before {
+        content: "";
+        position: absolute;
+        left: 36%;
+        top: 0;
+        width: 28%;
+        height: 24%;
+        border-radius: 50% 50% 46% 46%;
+        background: #010101;
+        box-shadow: -4px 0 0 rgba(241,112,36,0.44), 0 0 22px rgba(241,112,36,0.16);
+    }
+    .observer-figure::after {
+        content: "";
+        position: absolute;
+        left: 18%;
+        bottom: 0;
+        width: 64%;
+        height: 78%;
+        border-radius: 44% 44% 8% 8%;
+        background: linear-gradient(90deg, #020202, #14110f 50%, #030303);
+        border-left: 1px solid rgba(241,112,36,0.32);
+    }
+    .observer-preview.chart_primary .observer-figure,
+    .observer-preview.scenario_primary .observer-figure { width: 18%; height: 28%; opacity: 0.64; }
+    .observer-preview.data_primary .observer-figure,
+    .observer-preview.news_primary .observer-figure { width: 25%; height: 36%; opacity: 0.76; }
+    .observer-preview.hero_character .observer-copy { max-width: 64%; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -345,6 +470,89 @@ def cards_to_markdown(cards: list[dict]) -> str:
     return "\n".join(lines).strip()
 
 
+def visual_spec_rows(content_package: dict) -> list[dict]:
+    rows: list[dict] = []
+    for set_label, card_set in (content_package.get("cards") or {}).items():
+        for card in card_set:
+            direction = card.get("visual_direction") or {}
+            prompts = direction.get("image_prompts") or {}
+            source = card.get("source") or {}
+            rows.append(
+                {
+                    "set": set_label,
+                    "slide": card.get("slide"),
+                    "card_type": card.get("card_type"),
+                    "headline": card.get("headline"),
+                    "layout": direction.get("layout_variant"),
+                    "shot": direction.get("character_shot"),
+                    "visibility": direction.get("character_visibility"),
+                    "pose": direction.get("character_pose"),
+                    "position": direction.get("character_position"),
+                    "camera": direction.get("camera_angle"),
+                    "lighting": direction.get("lighting_intensity"),
+                    "focus": direction.get("visual_focus"),
+                    "prompt_4_5": prompts.get("4:5", ""),
+                    "prompt_9_16": prompts.get("9:16", ""),
+                    "negative_prompt": direction.get("negative_prompt", ""),
+                    "source": " · ".join([value for value in [source.get("publisher", ""), source.get("short_title", "")] if value]),
+                }
+            )
+    return rows
+
+
+def metric_variant(label: str) -> str:
+    lowered = str(label or "").lower()
+    if "지지" in lowered or "support" in lowered:
+        return "support"
+    if "저항" in lowered or "risk" in lowered or "resistance" in lowered:
+        return "resistance"
+    return ""
+
+
+def observer_card_preview_html(card: dict) -> str:
+    direction = card.get("visual_direction") or {}
+    layout = html.escape(str(direction.get("layout_variant") or "character_side"))
+    visibility = direction.get("character_visibility") or 0.3
+    try:
+        figure_width = max(14, min(54, float(visibility) * 100))
+    except Exception:
+        figure_width = 32
+    source = card.get("source") or {}
+    source_text = " · ".join([value for value in [source.get("publisher", ""), source.get("short_title", "")] if value])
+    metric_html = []
+    for metric in (card.get("metrics") or [])[:4]:
+        variant = metric_variant(metric.get("label", ""))
+        metric_html.append(
+            "<div class='observer-metric {variant}'><span>{label}</span><strong>{value}</strong></div>".format(
+                variant=html.escape(variant),
+                label=html.escape(str(metric.get("label", ""))),
+                value=html.escape(str(metric.get("value", ""))),
+            )
+        )
+    return """
+    <div class="observer-preview {layout}">
+      <div class="observer-copy">
+        <div class="observer-eyebrow">{eyebrow}</div>
+        <div class="observer-headline">{headline}</div>
+        <div class="observer-sub">{subheadline}</div>
+        <div class="observer-message">{message}</div>
+      </div>
+      <div class="observer-figure" style="width:{figure_width:.1f}%"></div>
+      <div class="observer-metrics">{metrics}</div>
+      <div class="observer-source">The Observer · {source}</div>
+    </div>
+    """.format(
+        layout=layout,
+        eyebrow=html.escape(str(card.get("eyebrow", ""))),
+        headline=html.escape(str(card.get("headline", ""))),
+        subheadline=html.escape(str(card.get("subheadline", ""))),
+        message=html.escape(str(card.get("key_message", ""))),
+        figure_width=figure_width,
+        metrics="".join(metric_html),
+        source=html.escape(source_text),
+    )
+
+
 def enrich_material(rows: list[dict], enabled: bool) -> tuple[list[dict], list[str]]:
     enriched: list[dict] = []
     logs: list[str] = []
@@ -564,12 +772,13 @@ def render_cards(content_package: dict) -> None:
         st.info("브리핑을 먼저 카드뉴스/Note로 분리해 주세요.")
         return
     cards = content_package.get("cards") or {}
-    tabs = st.tabs(["5장", "6장", "7장", "자율제안", "Note", "JSON"])
+    tabs = st.tabs(["5장", "6장", "7장", "자율제안", "브랜드 연출", "Note", "JSON"])
     for label, tab in zip(["5장", "6장", "7장", "자율제안"], tabs[:4]):
         with tab:
             card_set = cards.get(label, [])
             for card in card_set:
                 with st.expander(f"{card.get('slide')}. {card.get('headline')}", expanded=card.get("slide") == 1):
+                    st.markdown(observer_card_preview_html(card), unsafe_allow_html=True)
                     if card.get("eyebrow"):
                         st.caption(card.get("eyebrow"))
                     if card.get("subheadline"):
@@ -605,6 +814,41 @@ def render_cards(content_package: dict) -> None:
                 use_container_width=True,
             )
     with tabs[4]:
+        rows = visual_spec_rows(content_package)
+        if rows:
+            st.dataframe(
+                rows,
+                hide_index=True,
+                use_container_width=True,
+                column_order=[
+                    "set",
+                    "slide",
+                    "card_type",
+                    "headline",
+                    "layout",
+                    "shot",
+                    "visibility",
+                    "pose",
+                    "position",
+                    "camera",
+                    "lighting",
+                    "focus",
+                    "prompt_4_5",
+                    "prompt_9_16",
+                    "negative_prompt",
+                    "source",
+                ],
+            )
+            st.download_button(
+                "브랜드 연출 JSON 다운로드",
+                json.dumps(rows, ensure_ascii=False, indent=2),
+                file_name="observer_visual_prompts.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+        else:
+            st.info("브랜드 연출 데이터가 없습니다.")
+    with tabs[5]:
         st.text_area("Note Markdown", content_package.get("note_markdown", ""), height=520)
         st.download_button(
             "Note Markdown 다운로드",
@@ -613,7 +857,7 @@ def render_cards(content_package: dict) -> None:
             mime="text/markdown",
             use_container_width=True,
         )
-    with tabs[5]:
+    with tabs[6]:
         st.json(content_package)
 
 

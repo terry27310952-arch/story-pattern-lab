@@ -165,6 +165,66 @@ def add_card_sheet(wb: Workbook, name: str, cards: list[dict]) -> None:
     )
 
 
+def flatten_visual_direction_rows(content_package: dict) -> list[dict]:
+    rows: list[dict] = []
+    for set_label, cards in (content_package.get("cards") or {}).items():
+        for card in cards:
+            direction = card.get("visual_direction") or {}
+            prompts = direction.get("image_prompts") or {}
+            source = card.get("source") or {}
+            rows.append(
+                {
+                    "set": set_label,
+                    "slide": card.get("slide"),
+                    "card_type": card.get("card_type"),
+                    "headline": card.get("headline"),
+                    "layout_variant": direction.get("layout_variant"),
+                    "aspect_ratios": ", ".join(direction.get("aspect_ratios") or []),
+                    "character_visibility": direction.get("character_visibility"),
+                    "character_shot": direction.get("character_shot"),
+                    "character_pose": direction.get("character_pose"),
+                    "character_position": direction.get("character_position"),
+                    "camera_angle": direction.get("camera_angle"),
+                    "lighting_intensity": direction.get("lighting_intensity"),
+                    "visual_focus": direction.get("visual_focus"),
+                    "negative_space": direction.get("negative_space"),
+                    "prompt_4_5": prompts.get("4:5", ""),
+                    "prompt_9_16": prompts.get("9:16", ""),
+                    "negative_prompt": direction.get("negative_prompt", ""),
+                    "source": " · ".join([value for value in [source.get("publisher", ""), source.get("short_title", "")] if value]),
+                }
+            )
+    return rows
+
+
+def add_visual_direction_sheet(wb: Workbook, content_package: dict) -> None:
+    ws = wb.create_sheet("Visual_Direction")
+    append_table(
+        ws,
+        [
+            "set",
+            "slide",
+            "card_type",
+            "headline",
+            "layout_variant",
+            "aspect_ratios",
+            "character_visibility",
+            "character_shot",
+            "character_pose",
+            "character_position",
+            "camera_angle",
+            "lighting_intensity",
+            "visual_focus",
+            "negative_space",
+            "prompt_4_5",
+            "prompt_9_16",
+            "negative_prompt",
+            "source",
+        ],
+        flatten_visual_direction_rows(content_package),
+    )
+
+
 def add_note_sheet(wb: Workbook, note_markdown: str) -> None:
     ws = wb.create_sheet("Note")
     ws.append(["markdown"])
@@ -277,6 +337,7 @@ def build_excel_bytes(brief: dict, content_package: dict, resources: list[dict],
     add_daily_sheet(wb, brief)
     for name, cards in (content_package.get("cards") or {}).items():
         add_card_sheet(wb, f"Cards_{name}", cards)
+    add_visual_direction_sheet(wb, content_package)
     add_note_sheet(wb, content_package.get("note_markdown", ""))
     add_sources_sheet(wb, resources)
     add_market_sheet(wb, market_snapshot)

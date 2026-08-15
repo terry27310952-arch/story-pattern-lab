@@ -1096,6 +1096,141 @@ INSIGHT_LABELS = {
     "scenarios": ["세 가지 경로", "다음 분기점", "시나리오 지도"],
     "trade_plan": ["오늘 할 일", "행동 기준", "실제 매매 계획"],
 }
+LAYOUT_VARIANTS = [
+    "hero_character",
+    "character_side",
+    "chart_primary",
+    "data_primary",
+    "news_primary",
+    "scenario_primary",
+    "minimal_text",
+]
+OBSERVER_BASE_PROMPT = (
+    "Faceless anonymous market observer wearing a tailored black suit, black shirt, black tie and black leather gloves, "
+    "face completely hidden in shadow with absolutely no visible eyes, nose or mouth, subtle warm orange rim light outlining "
+    "the head and shoulders, premium low-key cinematic lighting, black institutional financial briefing atmosphere, elegant "
+    "editorial composition, restrained black and orange palette, realistic suit and leather texture, sophisticated and minimal, "
+    "not flashy, not promotional."
+)
+OBSERVER_NEGATIVE_PROMPT = [
+    "visible face",
+    "eyes",
+    "mouth",
+    "nose",
+    "facial expression",
+    "smiling",
+    "superhero vibe",
+    "sci-fi armor",
+    "cyberpunk neon overload",
+    "floating crypto coins",
+    "money rain",
+    "luxury car",
+    "yacht",
+    "gold chains",
+    "influencer thumbnail style",
+    "cartoon",
+    "anime",
+    "childish mascot",
+]
+OBSERVER_BRAND_SYSTEM = {
+    "brand_role": "The Observer",
+    "color_system": {
+        "background": "near-black",
+        "primary_text": "off-white",
+        "accent": "orange",
+        "support": "green accents only",
+        "resistance_risk": "red accents only",
+    },
+    "character_identity": {
+        "face": "completely hidden in shadow; no eyes, nose, mouth, or expression",
+        "wardrobe": "black suit, black shirt, black tie, black leather gloves",
+        "lighting": "warm orange rim light along head and shoulders",
+        "mood": "quiet observer, institutional intelligence, restrained tension",
+    },
+    "aspect_ratios": {
+        "4:5": {"width": 1080, "height": 1350, "safe_area": "top 12%, middle 50-55%, bottom 28-32%, footer 5-8%"},
+        "9:16": {"width": 1080, "height": 1920, "safe_area": "top 10-12%, middle 55-60%, bottom 25-30%, footer 5-8%"},
+    },
+}
+VISUAL_RULES = {
+    "opener": {
+        "visibility": (0.45, 0.60),
+        "shots": ["front_bust", "three_quarter"],
+        "layouts": ["hero_character", "character_side"],
+        "pose": "hands_calmly_clasped",
+        "position": "right_center",
+        "camera": "medium_close",
+        "lighting": "strong",
+        "focus": "brand_presence",
+        "negative_space": "large typography area on the left",
+    },
+    "market_conclusion": {
+        "visibility": (0.25, 0.40),
+        "shots": ["front_bust", "three_quarter", "full_body_small"],
+        "layouts": ["character_side", "hero_character", "minimal_text"],
+        "pose": "quietly_observing",
+        "position": "right_lower",
+        "camera": "medium",
+        "lighting": "medium",
+        "focus": "market_judgment",
+        "negative_space": "left and upper area for conclusion copy",
+    },
+    "key_levels": {
+        "visibility": (0.10, 0.20),
+        "shots": ["silhouette_closeup", "back_view", "full_body_small"],
+        "layouts": ["chart_primary", "minimal_text"],
+        "pose": "watching_price_levels",
+        "position": "left_edge",
+        "camera": "wide",
+        "lighting": "low",
+        "focus": "support_resistance_current_price",
+        "negative_space": "center kept open for separated price numbers",
+    },
+    "derivatives": {
+        "visibility": (0.15, 0.25),
+        "shots": ["over_shoulder", "seated_desk", "three_quarter"],
+        "layouts": ["data_primary", "character_side"],
+        "pose": "observing_data",
+        "position": "right_lower",
+        "camera": "medium",
+        "lighting": "medium",
+        "focus": "metrics_panel",
+        "negative_space": "top left for concise metrics hierarchy",
+    },
+    "news_context": {
+        "visibility": (0.20, 0.35),
+        "shots": ["seated_desk", "over_shoulder", "three_quarter"],
+        "layouts": ["news_primary", "character_side"],
+        "pose": "reviewing_headlines",
+        "position": "right_center",
+        "camera": "medium",
+        "lighting": "medium",
+        "focus": "restrained_headline_panels",
+        "negative_space": "left column for two or three headline panels",
+    },
+    "scenarios": {
+        "visibility": (0.05, 0.15),
+        "shots": ["full_body_small", "back_view"],
+        "layouts": ["scenario_primary", "chart_primary"],
+        "pose": "looking_at_three_paths",
+        "position": "bottom_center",
+        "camera": "wide",
+        "lighting": "low",
+        "focus": "bull_base_bear_paths",
+        "negative_space": "three vertical scenario lanes dominate the frame",
+    },
+    "trade_plan": {
+        "visibility": (0.30, 0.50),
+        "shots": ["front_bust", "seated_desk", "hand_closeup"],
+        "layouts": ["hero_character", "data_primary", "character_side"],
+        "pose": "calm_decisive_close",
+        "position": "right_lower",
+        "camera": "medium_close",
+        "lighting": "strong",
+        "focus": "entry_invalidation_wait",
+        "negative_space": "bottom area reserved for action conditions",
+    },
+}
 
 
 def short_source(row: dict) -> dict:
@@ -1171,6 +1306,151 @@ def sanitize_visible_text(value: object) -> str:
 def selected_label(card_type: str, index: int = 0) -> str:
     choices = INSIGHT_LABELS.get(card_type, ["핵심"])
     return choices[index % len(choices)]
+
+
+def clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def visual_role_for_card(card: dict) -> str:
+    if card.get("slide") == 1 and card.get("card_type") == "market_conclusion":
+        return "opener"
+    return card.get("card_type", "market_conclusion")
+
+
+def choose_layout_variant(role: str, previous_variant: str | None, metric_count: int, headline: str) -> str:
+    rule = VISUAL_RULES.get(role, VISUAL_RULES["market_conclusion"])
+    candidates = list(rule.get("layouts", ["character_side"]))
+    if metric_count >= 4 and "data_primary" in LAYOUT_VARIANTS and role not in {"opener", "scenarios"}:
+        candidates = ["data_primary"] + [item for item in candidates if item != "data_primary"]
+    if any(word in headline for word in ["방어", "회복", "가격", "경계"]) and "chart_primary" in candidates:
+        candidates = ["chart_primary"] + [item for item in candidates if item != "chart_primary"]
+    if previous_variant in candidates and len(candidates) > 1:
+        return candidates[1]
+    return candidates[0]
+
+
+def choose_character_shot(role: str, slide: int, metric_count: int) -> str:
+    shots = VISUAL_RULES.get(role, VISUAL_RULES["market_conclusion"]).get("shots", ["three_quarter"])
+    if role == "opener":
+        return "front_bust" if slide % 2 else "three_quarter"
+    if role == "key_levels" and metric_count >= 3:
+        return "back_view"
+    if role == "scenarios":
+        return "full_body_small"
+    return shots[(slide + metric_count) % len(shots)]
+
+
+def character_visibility(role: str, metric_count: int, layout_variant: str) -> float:
+    low, high = VISUAL_RULES.get(role, VISUAL_RULES["market_conclusion"]).get("visibility", (0.2, 0.35))
+    value = (low + high) / 2
+    if metric_count >= 4:
+        value -= 0.04
+    if layout_variant == "hero_character":
+        value += 0.06
+    if layout_variant in {"chart_primary", "scenario_primary"}:
+        value -= 0.04
+    return round(clamp(value, low, high), 2)
+
+
+def metric_visual_phrase(metrics: list[dict]) -> str:
+    if not metrics:
+        return "subtle BTC chart texture"
+    labels = [metric.get("label", "") for metric in metrics[:4] if metric.get("label")]
+    return "restrained data elements for " + ", ".join(labels)
+
+
+def aspect_ratio_phrase(ratio: str) -> str:
+    profile = OBSERVER_BRAND_SYSTEM["aspect_ratios"][ratio]
+    return f"{ratio} vertical composition, {profile['width']}x{profile['height']}"
+
+
+def build_observer_image_prompt(card: dict, direction: dict, ratio: str) -> str:
+    card_type = card.get("card_type", "market_conclusion")
+    role = direction.get("visual_role", card_type)
+    shot = direction.get("character_shot", "three_quarter")
+    pose = direction.get("character_pose", "quietly_observing")
+    layout = direction.get("layout_variant", "character_side")
+    focus = direction.get("visual_focus", "market data")
+    negative_space = direction.get("negative_space", "room for concise Korean typography")
+    metrics_phrase = metric_visual_phrase(card.get("metrics") or [])
+    role_phrase = {
+        "opener": "strong branded opening frame with the observer as the first visual anchor",
+        "market_conclusion": "quiet market conclusion card where the observer watches rather than speaks",
+        "key_levels": "price levels visually dominant, support and resistance separated as primary information",
+        "derivatives": "restrained institutional metrics panel, no cyberpunk hologram overload",
+        "news_context": "two or three restrained headline panels being reviewed calmly",
+        "scenarios": "three structured scenario paths for Bull, Base and Bear, information hierarchy dominant",
+        "trade_plan": "closing execution frame emphasizing entry, invalidation and wait conditions",
+    }.get(role, "premium market briefing card")
+    return (
+        f"{OBSERVER_BASE_PROMPT} {shot} shot, pose: {pose}, {role_phrase}, layout variant {layout}, "
+        f"character positioned {direction.get('character_position')}, camera angle {direction.get('camera_angle')}, "
+        f"{direction.get('lighting_intensity')} warm orange rim light, visual focus: {focus}, {metrics_phrase}, "
+        f"negative space: {negative_space}, near-black background, off-white typography space, orange accents, "
+        f"green only for support and red only for resistance or risk, premium editorial vertical design, "
+        f"{aspect_ratio_phrase(ratio)}."
+    )
+
+
+def visual_direction_for_card(card: dict, previous_variant: str | None) -> dict:
+    role = visual_role_for_card(card)
+    metric_count = len(card.get("metrics") or [])
+    rule = VISUAL_RULES.get(role, VISUAL_RULES["market_conclusion"])
+    layout_variant = choose_layout_variant(role, previous_variant, metric_count, card.get("headline", ""))
+    direction = {
+        "brand_role": OBSERVER_BRAND_SYSTEM["brand_role"],
+        "visual_role": role,
+        "layout_variant": layout_variant,
+        "aspect_ratios": ["4:5", "9:16"],
+        "safe_area": OBSERVER_BRAND_SYSTEM["aspect_ratios"],
+        "color_system": OBSERVER_BRAND_SYSTEM["color_system"],
+        "character_visibility": character_visibility(role, metric_count, layout_variant),
+        "character_shot": choose_character_shot(role, int(card.get("slide", 1) or 1), metric_count),
+        "character_pose": rule.get("pose"),
+        "character_position": rule.get("position"),
+        "camera_angle": rule.get("camera"),
+        "lighting_intensity": rule.get("lighting"),
+        "visual_focus": rule.get("focus"),
+        "negative_space": rule.get("negative_space"),
+        "text_rules": {
+            "max_core_sentences": 3,
+            "separate_numbers_from_interpretation": True,
+            "mobile_vertical_first": True,
+            "avoid_edge_crowding": True,
+        },
+        "image_prompts": {},
+        "negative_prompt": ", ".join(OBSERVER_NEGATIVE_PROMPT),
+    }
+    direction["image_prompts"] = {
+        "4:5": build_observer_image_prompt(card, direction, "4:5"),
+        "9:16": build_observer_image_prompt(card, direction, "9:16"),
+    }
+    return direction
+
+
+def editor_pass_visual_system(cards: list[dict]) -> list[dict]:
+    previous_variant: str | None = None
+    for card in cards:
+        direction = visual_direction_for_card(card, previous_variant)
+        if direction.get("layout_variant") == previous_variant:
+            role = direction.get("visual_role", card.get("card_type", "market_conclusion"))
+            alternatives = [
+                variant
+                for variant in VISUAL_RULES.get(role, VISUAL_RULES["market_conclusion"]).get("layouts", LAYOUT_VARIANTS)
+                if variant != previous_variant
+            ]
+            if not alternatives:
+                alternatives = [variant for variant in LAYOUT_VARIANTS if variant != previous_variant]
+            if alternatives:
+                direction["layout_variant"] = alternatives[0]
+                direction["image_prompts"] = {
+                    "4:5": build_observer_image_prompt(card, direction, "4:5"),
+                    "9:16": build_observer_image_prompt(card, direction, "9:16"),
+                }
+        card["visual_direction"] = direction
+        previous_variant = direction.get("layout_variant")
+    return cards
 
 
 def editor_pass_market_analysis(brief: dict, resources: list[dict], metrics: dict[str, dict]) -> dict:
@@ -1537,11 +1817,16 @@ def make_card_set(brief: dict, resources: list[dict], count: int, label: str) ->
     analysis["scenarios"] = brief.get("scenarios") or []
     plan = editor_pass_carousel_plan(count, analysis)
     cards = editor_pass_card_copy(plan, analysis, label)
+    cards = editor_pass_visual_system(cards)
     cards, qa_warnings = editor_pass_qa(cards)
     return cards, {
-        "passes": ["market_analysis", "carousel_plan", "card_copy", "qa"],
+        "passes": ["market_analysis", "carousel_plan", "card_copy", "observer_visual_system", "qa"],
         "locked_metric_ids": list(metrics.keys()),
         "card_types": [card["card_type"] for card in cards],
+        "layout_variants": [card.get("visual_direction", {}).get("layout_variant") for card in cards],
+        "character_shots": [card.get("visual_direction", {}).get("character_shot") for card in cards],
+        "aspect_ratios": ["4:5", "9:16"],
+        "brand_role": OBSERVER_BRAND_SYSTEM["brand_role"],
         "qa_warnings": qa_warnings + [warning for card in cards for warning in card.get("qa", {}).get("warnings", [])],
     }
 
@@ -1703,6 +1988,21 @@ def generate_content_package(brief: dict, resources: list[dict], custom_count: i
         "note_markdown": build_note_markdown(brief, resources),
         "content_quality": {
             "architecture": "DATA/RULES -> REASONING/EDITOR -> RENDERER",
+            "brand_role": OBSERVER_BRAND_SYSTEM["brand_role"],
+            "brand_system": OBSERVER_BRAND_SYSTEM,
+            "supported_aspect_ratios": ["4:5", "9:16"],
+            "layout_variants": LAYOUT_VARIANTS,
+            "character_shot_library": [
+                "front_bust",
+                "three_quarter",
+                "back_view",
+                "over_shoulder",
+                "silhouette_closeup",
+                "seated_desk",
+                "full_body_small",
+                "hand_closeup",
+            ],
+            "negative_prompt": ", ".join(OBSERVER_NEGATIVE_PROMPT),
             "selected_resources": len(resources),
             "source_findings": len(findings),
             "full_text_resources": sum(1 for row in resources if len(str(row.get("material") or "")) >= 800),
