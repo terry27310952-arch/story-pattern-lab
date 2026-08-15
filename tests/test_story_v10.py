@@ -155,7 +155,7 @@ class StoryV10Test(unittest.TestCase):
 
     def test_runtime_routes_to_v10_generic_stack(self) -> None:
         entry = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
-        self.assertIn('RUNTIME_TOKEN = "dual-pipeline-v10.1"', entry)
+        self.assertIn('RUNTIME_TOKEN = "dual-pipeline-v10.2"', entry)
         self.assertIn('sys.modules["story_engine"] = story_source_engine_v5', entry)
         self.assertIn('sys.modules["story_content_pipeline"] = story_content_pipeline_v5', entry)
         self.assertIn('sys.modules["mode_exporter"] = mode_exporter_v5', entry)
