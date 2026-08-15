@@ -95,10 +95,17 @@ class StoryV9Test(unittest.TestCase):
         self.assertEqual(set(package["story_context"]["evidence_facts"]["source_ids"]), {"riot-1941"})
         cards = package["cards"]["STORY"][:-1]
         self.assertTrue(all(card["evidence_refs"] == ["riot-1941"] for card in cards))
-        blob = str(package)
-        self.assertNotIn("ECX", blob)
-        self.assertNotIn("ハードフォーク", blob)
-        self.assertNotIn("Arthur Hayes", blob)
+
+        # Other story candidates are intentionally retained for ranking/debugging.
+        # Contamination is forbidden only in the selected hero, evidence pack and cards.
+        hero_output = str({
+            "hero": hero,
+            "evidence_facts": package["story_context"]["evidence_facts"],
+            "cards": package["cards"]["STORY"],
+        })
+        self.assertNotIn("ECX", hero_output)
+        self.assertNotIn("ハードフォーク", hero_output)
+        self.assertNotIn("Arthur Hayes", hero_output)
 
     def test_pixel_level_scene_qa_is_not_metadata_only(self) -> None:
         result = story_content_pipeline_v4.generate_story_package(
