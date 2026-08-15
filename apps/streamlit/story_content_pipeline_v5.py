@@ -11,7 +11,7 @@ import story_graph_engine
 import story_renderer_v5 as story_renderer
 
 
-STORY_CONTENT_PIPELINE_VERSION = "story-content-v10.1"
+STORY_CONTENT_PIPELINE_VERSION = "story-content-v10.2"
 DISPLAY_BRAND_LABEL = legacy.DISPLAY_BRAND_LABEL
 PROVIDER_LOCAL = legacy.PROVIDER_LOCAL
 PROVIDER_OLLAMA = legacy.PROVIDER_OLLAMA
@@ -94,13 +94,42 @@ def _fact_pack(graph: dict) -> dict:
 
 
 def _numeric_tokens(text: str) -> set[str]:
-    raw = re.findall(r"(?:\$\s*)?\d[\d,.]*(?:\.\d+)?\s*(?:%|MW|GW|メガワット|ギガワット|兆円|億円|万円|円|兆ドル|億ドル|万ドル|ドル|USD|JPY|billion|million|trillion|年間|年|か月|ヶ月)?", str(text or ""), flags=re.I)
-    normalized = set()
-    for token in raw:
-        value = re.sub(r"\s+|,", "", token).casefold().replace("約", "")
-        if value:
-            normalized.add(value)
-    return normalized
+    """Return unit-aware canonical claims for evidence validation.
+
+    Surface forms like `2028` and `2028年`, or `420MW` and `420メガワット`,
+    normalize to the same semantic token. This avoids false mismatches while still
+    rejecting a genuinely different year, amount, percentage or capacity.
+    """
+    value = str(text or "")
+    tokens: set[str] = set()
+
+    for year in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", value):
+        tokens.add(f"year:{year}")
+
+    for number, unit in re.findall(r"(\d[\d,.]*(?:\.\d+)?)\s*(MW|GW|メガワット|ギガワット)", value, flags=re.I):
+        canonical_unit = "mw" if unit.casefold() in {"mw", "メガワット"} else "gw"
+        tokens.add(f"capacity:{number.replace(',', '')}{canonical_unit}")
+
+    for number in re.findall(r"(\d+(?:\.\d+)?)\s*%", value):
+        tokens.add(f"percent:{number}")
+
+    money_pattern = re.compile(
+        r"(?:約\s*)?(?:\$\s*)?(\d[\d,.]*(?:\.\d+)?)\s*(兆円|億円|万円|円|兆ドル|億ドル|万ドル|ドル|USD|JPY|billion|million|trillion|bn|mn)",
+        flags=re.I,
+    )
+    for number, unit in money_pattern.findall(value):
+        unit_norm = unit.casefold().replace("usd", "ドル").replace("jpy", "円")
+        tokens.add(f"money:{number.replace(',', '')}:{unit_norm}")
+
+    for number, unit in re.findall(r"(?<!\d)(\d{1,3})\s*(年間|年|years?|months?|か月|ヶ月)(?!\d)", value, flags=re.I):
+        normalized_unit = unit.casefold()
+        if normalized_unit in {"年", "年間", "year", "years"}:
+            normalized_unit = "years"
+        elif normalized_unit in {"か月", "ヶ月", "month", "months"}:
+            normalized_unit = "months"
+        tokens.add(f"duration:{number}:{normalized_unit}")
+
+    return tokens
 
 
 def _claim_ok(headline: str, body: str, evidence: str) -> bool:
@@ -248,7 +277,6 @@ def generate_story_package(
     if plan.get("error") or not plan.get("cards"):
         return StoryGenerationResult({}, error=str(plan.get("error") or "Story plan could not be built from evidence."))
 
-    # The tag is descriptive metadata. It does not select the card arc or copy template.
     hero["archetype"] = plan.get("archetype_tag")
     hero["headline_ja"] = plan.get("headline_ja")
     hero["story_plan_version"] = plan.get("version")
