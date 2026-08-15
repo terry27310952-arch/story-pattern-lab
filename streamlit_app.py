@@ -10,7 +10,7 @@ import streamlit as st
 
 APP_DIR = Path(__file__).parent / "apps" / "streamlit"
 APP_FILE = APP_DIR / "app_v2.py"
-RUNTIME_TOKEN = "dual-pipeline-v10.1"
+RUNTIME_TOKEN = "dual-pipeline-v10.2"
 
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
