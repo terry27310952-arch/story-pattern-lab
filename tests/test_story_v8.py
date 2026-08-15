@@ -132,12 +132,12 @@ class StoryV8Test(unittest.TestCase):
         self.assertIn("Card_Previews", wb.sheetnames)
         self.assertEqual(len(getattr(wb["Card_Previews"], "_images", [])), 7)
 
-    def test_runtime_routes_all_story_layers_to_v8(self) -> None:
+    def test_runtime_routes_story_layers_to_v9(self) -> None:
         entry = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
-        self.assertIn('RUNTIME_TOKEN = "dual-pipeline-v8.0"', entry)
-        self.assertIn('sys.modules["story_engine"] = story_engine_v3', entry)
-        self.assertIn('sys.modules["story_content_pipeline"] = story_content_pipeline_v3', entry)
-        self.assertIn('sys.modules["mode_exporter"] = mode_exporter_v3', entry)
+        self.assertIn('RUNTIME_TOKEN = "dual-pipeline-v9.0"', entry)
+        self.assertIn('sys.modules["story_engine"] = story_engine_v4', entry)
+        self.assertIn('sys.modules["story_content_pipeline"] = story_content_pipeline_v4', entry)
+        self.assertIn('sys.modules["mode_exporter"] = mode_exporter_v4', entry)
 
 
 if __name__ == "__main__":
