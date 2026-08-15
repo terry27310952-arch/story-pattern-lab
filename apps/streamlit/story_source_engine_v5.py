@@ -5,7 +5,7 @@ import re
 from dataclasses import asdict, dataclass
 
 
-STORY_SOURCE_ENGINE_VERSION = "story-source-v10.0"
+STORY_SOURCE_ENGINE_VERSION = "story-source-v10.1"
 STORY_ENGINE_VERSION = STORY_SOURCE_ENGINE_VERSION
 
 _GENERIC_ENTITY_NAMES = {
@@ -34,8 +34,8 @@ _CHANGE_TERMS = [
 _CONFLICT_TERMS = ["but", "yet", "despite", "however", "while", "whereas", "一方", "しかし", "だが", "なのに", "対して"]
 _VISUAL_TERMS = [
     "factory", "mine", "mining", "data center", "server", "power", "plant", "office", "building", "ship", "store",
-    "document", "court", "police", "exchange", "fund", "factory", "工場", "採掘", "マイニング", "データセンター",
-    "サーバー", "電力", "発電", "施設", "庁", "裁判", "取引所", "店舗", "企業", "人物", "工場",
+    "document", "court", "police", "exchange", "fund", "工場", "採掘", "マイニング", "データセンター",
+    "サーバー", "電力", "発電", "施設", "庁", "裁判", "取引所", "店舗", "企業", "人物",
 ]
 _IMPLICATION_TERMS = [
     "valuation", "revenue", "profit", "market share", "price", "demand", "supply", "liquidity", "investor", "industry",
@@ -118,7 +118,6 @@ def _entity_details(row: dict) -> list[dict]:
     text = f"{title} {lead}"
     details: dict[str, dict] = {}
 
-    # English/romanized proper nouns. This is lexical, not a registry of companies.
     for match in re.findall(r"\b(?:[A-Z][A-Za-z0-9.&'-]{1,})(?:\s+(?:[A-Z][A-Za-z0-9.&'-]{1,}|of|and|&)){0,3}\b", f"{title} {lead[:1200]}"):
         name = match.strip(" .,:;-_")
         parts = [part.strip(" .,:;-_").casefold() for part in name.split()]
@@ -132,7 +131,6 @@ def _entity_details(row: dict) -> list[dict]:
         if confidence >= 0.70:
             details[name.casefold()] = {"name": name, "type": "proper_noun", "confidence": round(confidence, 2), "mentions": mentions}
 
-    # Acronyms/institutions, again no fixed entity list.
     for name in re.findall(r"(?<![A-Za-z])\b[A-Z]{2,8}\b(?![A-Za-z])", f"{title} {lead[:900]}"):
         if name.casefold() in _GENERIC_ENTITY_NAMES:
             continue
@@ -140,8 +138,6 @@ def _entity_details(row: dict) -> list[dict]:
         confidence = min(0.93, 0.68 + min(0.15, mentions * 0.04) + (0.08 if name in title else 0.0))
         details.setdefault(name.casefold(), {"name": name, "type": "institution_or_symbol", "confidence": round(confidence, 2), "mentions": mentions})
 
-    # Japanese named subjects often appear before particles/punctuation in titles. Keep
-    # only compact title chunks, avoiding generic finance words.
     for chunk in re.split(r"[、,:：―—\-「」『』()（）\s]+", title):
         name = chunk.strip()
         if not (2 <= len(name) <= 30) or not _japanese_text(name):
@@ -158,14 +154,15 @@ def _entity_details(row: dict) -> list[dict]:
 
 
 def _entities(row: dict) -> list[str]:
-    return [item["name"] for item in _entity_details(row) if float(item.get("confidence") or 0) >= 0.72][:6]
+    return [item["name"] for item in _entity_details(row) if item["confidence"] >= 0.72][:6]
 
 
 def _component_scores(row: dict) -> dict:
     title = _title(row)
     text = _combined(row)
     number_count = len(_numbers(text))
-    entities = _entity_details(row)
+    entity_details = _entity_details(row)
+    entity_names = [str(item.get("name") or "") for item in entity_details if item.get("name")]
     event_hits = _hits(text, _EVENT_TERMS)
     change_hits = _hits(text, _CHANGE_TERMS)
     conflict_hits = _hits(text, _CONFLICT_TERMS)
@@ -173,26 +170,21 @@ def _component_scores(row: dict) -> dict:
     implication_hits = _hits(text, _IMPLICATION_TERMS)
     material_len = len(_material(row))
 
+    title_has_entity = bool(entity_names and entity_names[0].casefold() in title.casefold())
     hook = min(100.0, 24 + min(30, event_hits * 11) + min(28, number_count * 4) + (12 if "?" in title or "？" in title else 0))
     conflict = min(100.0, conflict_hits * 28 + (18 if conflict_hits and number_count >= 2 else 0))
-    character = min(100.0, 18 + len(entities) * 15 + (14 if entities and entities[0].casefold() in title.casefold() else 0))
+    character = min(100.0, 18 + len(entity_names) * 15 + (14 if title_has_entity else 0))
     change = min(100.0, 15 + change_hits * 25 + min(25, event_hits * 5))
     scale = min(100.0, 15 + min(75, number_count * 9))
     implication = min(100.0, 18 + implication_hits * 15 + min(22, event_hits * 4))
-    visuality = min(100.0, 20 + visual_hits * 16 + min(20, len(entities) * 4))
+    visuality = min(100.0, 20 + visual_hits * 16 + min(20, len(entity_names) * 4))
     evidence = min(100.0, 20 + min(38, material_len / 65) + min(34, number_count * 5) + (8 if row.get("source_type") == "official" else 0))
     novelty = min(100.0, 20 + min(40, event_hits * 9) + min(30, change_hits * 11))
 
     return {
-        "story_hook_score": round(hook, 2),
-        "conflict_score": round(conflict, 2),
-        "character_score": round(character, 2),
-        "change_score": round(change, 2),
-        "scale_score": round(scale, 2),
-        "market_implication_score": round(implication, 2),
-        "visuality_score": round(visuality, 2),
-        "evidence_story_score": round(evidence, 2),
-        "novelty_score": round(novelty, 2),
+        "story_hook_score": round(hook, 2), "conflict_score": round(conflict, 2), "character_score": round(character, 2),
+        "change_score": round(change, 2), "scale_score": round(scale, 2), "market_implication_score": round(implication, 2),
+        "visuality_score": round(visuality, 2), "evidence_story_score": round(evidence, 2), "novelty_score": round(novelty, 2),
     }
 
 
@@ -201,15 +193,9 @@ def annotate_resource(row: dict) -> dict:
     scores = _component_scores(item)
     item.update(scores)
     item["story_score"] = round(
-        scores["story_hook_score"] * 0.15
-        + scores["conflict_score"] * 0.10
-        + scores["character_score"] * 0.10
-        + scores["change_score"] * 0.15
-        + scores["scale_score"] * 0.10
-        + scores["market_implication_score"] * 0.15
-        + scores["visuality_score"] * 0.10
-        + scores["evidence_story_score"] * 0.10
-        + scores["novelty_score"] * 0.05,
+        scores["story_hook_score"] * 0.15 + scores["conflict_score"] * 0.10 + scores["character_score"] * 0.10
+        + scores["change_score"] * 0.15 + scores["scale_score"] * 0.10 + scores["market_implication_score"] * 0.15
+        + scores["visuality_score"] * 0.10 + scores["evidence_story_score"] * 0.10 + scores["novelty_score"] * 0.05,
         2,
     )
     details = _entity_details(item)
@@ -252,7 +238,8 @@ def _number_tokens(row: dict) -> set[str]:
 
 
 def _entity_tokens(row: dict) -> set[str]:
-    return {str(item.get("name") or "").casefold() for item in row.get("story_entity_details") or _entity_details(row) if float(item.get("confidence") or 0) >= 0.78}
+    details = row.get("story_entity_details") or _entity_details(row)
+    return {str(item.get("name") or "").casefold() for item in details if float(item.get("confidence") or 0) >= 0.78 and item.get("name")}
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
@@ -332,7 +319,7 @@ def build_story_candidates(resources: list[dict]) -> list[dict]:
         candidate_id = "story_" + hashlib.sha1("|".join(ids).encode("utf-8", errors="ignore")).hexdigest()[:12]
         entities = list(hero.get("story_entities") or _entities(hero))
         title = _title(hero)
-        candidate = StoryCandidate(
+        candidates.append(StoryCandidate(
             id=candidate_id,
             topic=str(hero.get("story_topic") or (entities[0] if entities else title[:90])),
             archetype="dynamic",
@@ -342,19 +329,12 @@ def build_story_candidates(resources: list[dict]) -> list[dict]:
             source_names=list(dict.fromkeys(str(r.get("source") or "") for r in cluster if r.get("source")))[:5],
             headline_seed=title,
             headline_ja=title if _japanese_text(title) else "",
-            why_now_ja="",
-            conflict_ja="",
-            implication_ja="",
-            visual_motifs=[],
+            why_now_ja="", conflict_ja="", implication_ja="", visual_motifs=[],
             story_score=round(float(hero.get("story_score") or 0), 2),
             hero_story_score=_hero_score(hero, len(cluster), coherence),
             confidence=round(min(0.98, 0.70 + len(entities) * 0.035 + (0.07 if coherence >= 0.75 else 0.0)), 2),
-            cluster_size=len(cluster),
-            cluster_coherence=coherence,
-            event_fingerprint=event_fingerprint(hero),
-            hero_resource=hero,
-        )
-        candidates.append(candidate)
+            cluster_size=len(cluster), cluster_coherence=coherence, event_fingerprint=event_fingerprint(hero), hero_resource=hero,
+        ))
     return [c.to_dict() for c in sorted(candidates, key=lambda c: (c.hero_story_score, c.story_score), reverse=True)]
 
 
