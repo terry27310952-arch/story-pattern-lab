@@ -4,7 +4,7 @@ import copy
 import re
 
 
-STORY_OUTPUT_GUARD_VERSION = "story-output-guard-v6.0"
+STORY_OUTPUT_GUARD_VERSION = "story-output-guard-v6.1"
 DISPLAY_BRAND_LABEL = "キヨサキ"
 FORBIDDEN_VISIBLE_TOKENS = ["THE OBSERVER", "The Observer"]
 
@@ -65,3 +65,24 @@ def sanitize_story_package(package: dict) -> dict:
     quality["output_guard"] = STORY_OUTPUT_GUARD_VERSION
     quality["visible_language_policy"] = "ja-JP; no Korean; no THE OBSERVER; text-only キヨサキ"
     return next_package
+
+
+def apply_generation_guard(story_content_pipeline) -> None:
+    """Install only a final invariant guard around the independent story generator.
+
+    This is deliberately not a trader/story conversion patch. It cannot create cards,
+    choose an archetype, or alter evidence. It only enforces visible-language and brand
+    invariants on the already-independent Story package.
+    """
+    if getattr(story_content_pipeline, "_kiyosaki_story_output_guard", None) == STORY_OUTPUT_GUARD_VERSION:
+        return
+    original = story_content_pipeline.generate_story_package
+
+    def generate_story_package(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if getattr(result, "package", None):
+            result.package = sanitize_story_package(result.package)
+        return result
+
+    story_content_pipeline.generate_story_package = generate_story_package
+    story_content_pipeline._kiyosaki_story_output_guard = STORY_OUTPUT_GUARD_VERSION
