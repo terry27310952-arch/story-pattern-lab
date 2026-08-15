@@ -10,7 +10,7 @@ import streamlit as st
 
 APP_DIR = Path(__file__).parent / "apps" / "streamlit"
 APP_FILE = APP_DIR / "app_v2.py"
-RUNTIME_TOKEN = "dual-pipeline-v9.1"
+RUNTIME_TOKEN = "dual-pipeline-v9.2"
 
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -20,9 +20,7 @@ if str(APP_DIR) not in sys.path:
 # *_v3 module names to v4 in sys.modules. On the next rerun, story_engine_v4 imported
 # `story_engine_v3 as legacy`, but that name already pointed back to story_engine_v4,
 # so legacy.annotate_resource() recursively called itself until RecursionError.
-#
-# Repair any stale aliases BEFORE importing/reloading the v4 stack. The v4 modules
-# intentionally depend on the real v3 modules as their compatibility/base layer.
+# Repair stale aliases before importing/reloading the production stack.
 def _drop_poisoned_legacy_alias(module_name: str, expected_filename: str) -> None:
     module = sys.modules.get(module_name)
     if module is None:
@@ -40,26 +38,26 @@ for _module_name, _expected_filename in {
     _drop_poisoned_legacy_alias(_module_name, _expected_filename)
 
 
-# Trader keeps the stable reasoning engine. Story v4/v9.1 is layered on top of the
-# REAL v3 compatibility modules, never on aliases back to itself.
+# Trader keeps the stable reasoning engine. Story v9 is layered on top of the REAL
+# v3 compatibility modules, never on aliases back to itself.
 import reasoning_engine  # noqa: E402
 import card_renderer  # noqa: E402
 import story_engine_v3 as story_engine_legacy  # noqa: E402
 import story_renderer_v3 as story_renderer_legacy  # noqa: E402
 import story_content_pipeline_v3 as story_content_pipeline_legacy  # noqa: E402
 
-# Refresh the shared base first so every downstream `legacy` reference is genuine.
 importlib.reload(card_renderer)
 importlib.reload(story_engine_legacy)
 importlib.reload(story_renderer_legacy)
 importlib.reload(story_content_pipeline_legacy)
 
-# Pin the real legacy modules explicitly. These names must NEVER point to v4.
 sys.modules["story_engine_v3"] = story_engine_legacy
 sys.modules["story_renderer_v3"] = story_renderer_legacy
 sys.modules["story_content_pipeline_v3"] = story_content_pipeline_legacy
 
-# Import/reload the production v9 stack only after the legacy layer is repaired.
+# Import/reload Story v9.2 after the legacy layer is repaired. The article cleaner is
+# explicitly reloaded because Streamlit hot-reruns otherwise retain an older cleaner.
+import story_article_cleaner  # noqa: E402
 import story_engine_v4  # noqa: E402
 import story_renderer_v4  # noqa: E402
 import story_content_pipeline_v4  # noqa: E402
@@ -69,13 +67,13 @@ from brand_runtime import apply_brand_patch  # noqa: E402
 
 apply_brand_patch(reasoning_engine)
 
+importlib.reload(story_article_cleaner)
 importlib.reload(story_engine_v4)
 importlib.reload(story_renderer_v4)
 importlib.reload(story_content_pipeline_v4)
 importlib.reload(mode_exporter_v4)
 importlib.reload(story_output_guard)
 
-# Fail fast if a future runtime change poisons the compatibility layer again.
 if story_engine_v4.legacy is story_engine_v4:
     raise RuntimeError("Story runtime boot failed: story_engine_v4 legacy dependency points to itself")
 if story_content_pipeline_v4.legacy is story_content_pipeline_v4:
@@ -83,11 +81,9 @@ if story_content_pipeline_v4.legacy is story_content_pipeline_v4:
 if story_renderer_v4.legacy is story_renderer_v4:
     raise RuntimeError("Story runtime boot failed: story_renderer_v4 legacy dependency points to itself")
 
-# Visible-output guard only. Story selection/evidence/QA are owned by v9 modules.
 story_output_guard.apply_generation_guard(story_content_pipeline_v4)
 
 # app_v2 imports generic production names. Route ONLY those generic names to v9.
-# Do not overwrite *_v3 names: v9 imports them as its real compatibility layer.
 sys.modules["story_engine"] = story_engine_v4
 sys.modules["story_content_pipeline"] = story_content_pipeline_v4
 sys.modules["mode_exporter"] = mode_exporter_v4
@@ -123,6 +119,7 @@ card_renderer._kiyosaki_runtime_router = RUNTIME_TOKEN
 
 st.sidebar.caption(f"Runtime · {RUNTIME_TOKEN}")
 st.sidebar.caption(f"Story · {story_content_pipeline_v4.STORY_CONTENT_PIPELINE_VERSION}")
+st.sidebar.caption(f"Cleaner · {story_article_cleaner.STORY_ARTICLE_CLEANER_VERSION}")
 st.sidebar.caption(f"Story Engine · {story_engine_v4.STORY_ENGINE_VERSION}")
 st.sidebar.caption(f"Story Renderer · {story_renderer_v4.STORY_RENDERER_VERSION}")
 st.sidebar.caption(f"Excel · {mode_exporter_v4.MODE_EXPORTER_VERSION}")
