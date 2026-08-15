@@ -135,7 +135,7 @@ class StoryV10Test(unittest.TestCase):
         )
         self.assertIsNone(result.error)
         package = result.package
-        self.assertEqual(package["content_quality"]["pipeline"], "story-content-v10.1")
+        self.assertEqual(package["content_quality"]["pipeline"], "story-content-v10.2")
         self.assertEqual(package["content_quality"]["source_engine"], "story-source-v10.1")
         self.assertEqual(package["content_quality"]["graph_engine"], "story-graph-v10.1")
         cards = package["cards"]["STORY"][:-1]
