@@ -36,7 +36,7 @@ jobs:
             apps/streamlit/mode_resource_pipeline.py \
             apps/streamlit/trader_pipeline.py \
             apps/streamlit/story_article_cleaner.py \
-            apps/streamlit/story_engine_v4.py \
+            apps/streamlit/story_source_engine_v5.py \
             apps/streamlit/story_graph_engine.py \
             apps/streamlit/story_renderer_v4.py \
             apps/streamlit/story_renderer_v5.py \
