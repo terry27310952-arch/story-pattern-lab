@@ -12,10 +12,10 @@ from openpyxl import load_workbook
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "streamlit"))
 
-import mode_exporter_v2  # noqa: E402
-import story_content_pipeline_v2  # noqa: E402
-import story_engine_v2  # noqa: E402
-import story_renderer_v2  # noqa: E402
+import mode_exporter_v3  # noqa: E402
+import story_content_pipeline_v3  # noqa: E402
+import story_engine_v3  # noqa: E402
+import story_renderer_v3  # noqa: E402
 
 
 HISTORY_RESOURCE = {
@@ -54,9 +54,9 @@ GENERIC_RESOURCE = {
 }
 
 
-class ProductionStoryV7Test(unittest.TestCase):
+class ProductionStoryV8CompatibilityTest(unittest.TestCase):
     def test_exact_term_matching_prevents_sec_and_ai_false_positives(self) -> None:
-        row = story_engine_v2.annotate_resource(HISTORY_RESOURCE)
+        row = story_engine_v3.annotate_resource(HISTORY_RESOURCE)
         self.assertEqual(row["story_archetype_hint"], "historical_parallel")
         self.assertNotIn("SEC", row.get("story_entities") or [])
         motifs = " ".join(row.get("story_visual_motifs") or []).lower()
@@ -64,15 +64,15 @@ class ProductionStoryV7Test(unittest.TestCase):
         self.assertIn("archive", motifs)
 
     def test_story_pipeline_is_source_specific_without_external_model(self) -> None:
-        result = story_content_pipeline_v2.generate_story_package(
+        result = story_content_pipeline_v3.generate_story_package(
             [HISTORY_RESOURCE, GENERIC_RESOURCE],
             total_card_count=7,
-            config={"provider": story_content_pipeline_v2.PROVIDER_LOCAL},
-            generation_seed="history-v7",
+            config={"provider": story_content_pipeline_v3.PROVIDER_LOCAL},
+            generation_seed="history-v8",
         )
         self.assertIsNone(result.error)
         self.assertEqual(result.package["mode"], "story")
-        self.assertEqual((result.package.get("content_quality") or {}).get("pipeline"), "story-content-v7.0")
+        self.assertEqual((result.package.get("content_quality") or {}).get("pipeline"), "story-content-v8.0")
         cards = result.package["cards"]["STORY"]
         self.assertEqual(len(cards), 7)
         visible = " ".join(str(card.get("headline") or "") + " " + str(card.get("key_message") or "") for card in cards[:-1])
@@ -84,45 +84,49 @@ class ProductionStoryV7Test(unittest.TestCase):
         self.assertNotIn("Funding", visible)
         self.assertTrue(all(card.get("evidence_excerpt") for card in cards[:-1]))
 
-    def test_story_renderer_uses_role_and_layout_not_one_repeated_background(self) -> None:
-        result = story_content_pipeline_v2.generate_story_package(
+    def test_story_renderer_uses_role_scene_and_layout(self) -> None:
+        result = story_content_pipeline_v3.generate_story_package(
             [HISTORY_RESOURCE],
             total_card_count=7,
-            config={"provider": story_content_pipeline_v2.PROVIDER_LOCAL},
-            generation_seed="render-v7",
+            config={"provider": story_content_pipeline_v3.PROVIDER_LOCAL},
+            generation_seed="render-v8",
         )
         cards = result.package["cards"]["STORY"][:-1]
         layouts = [(card.get("visual_direction") or {}).get("layout_variant") for card in cards]
+        scenes = [(card.get("visual_direction") or {}).get("scene_type") for card in cards]
         self.assertGreater(len(set(layouts)), 3)
-        pngs = [story_renderer_v2.render_story_card_png(card, width=324, height=405) for card in cards]
+        self.assertGreater(len(set(scenes)), 3)
+        pngs = [story_renderer_v3.render_story_card_png(card, width=324, height=405) for card in cards]
         self.assertTrue(all(png.startswith(b"\x89PNG") for png in pngs))
         self.assertGreater(len(set(pngs)), 4)
 
     def test_story_excel_uses_explicit_renderer_and_contains_no_korean_output_labels(self) -> None:
-        result = story_content_pipeline_v2.generate_story_package(
+        result = story_content_pipeline_v3.generate_story_package(
             [HISTORY_RESOURCE],
             total_card_count=7,
-            config={"provider": story_content_pipeline_v2.PROVIDER_LOCAL},
-            generation_seed="excel-v7",
+            config={"provider": story_content_pipeline_v3.PROVIDER_LOCAL},
+            generation_seed="excel-v8",
         )
-        raw = mode_exporter_v2.build_story_excel(result.package, [HISTORY_RESOURCE])
+        raw = mode_exporter_v3.build_story_excel(result.package, [HISTORY_RESOURCE])
         wb = load_workbook(BytesIO(raw))
         self.assertGreaterEqual(len(getattr(wb["Card_Previews"], "_images", [])), 7)
         self.assertEqual(wb["Story_Cards"]["A2"].value, "STORY")
+        self.assertIn("Story_QA", wb.sheetnames)
         visible_cells = []
-        for ws_name in ["Card_Previews", "Story_Context", "Story_Cards"]:
+        for ws_name in ["Card_Previews", "Story_Context", "Story_Cards", "Story_QA"]:
             for row in wb[ws_name].iter_rows():
                 for cell in row:
                     if isinstance(cell.value, str):
                         visible_cells.append(cell.value)
         self.assertFalse([value for value in visible_cells if re.search(r"[가-힣]", value)])
 
-    def test_production_entrypoint_routes_to_v7_modules(self) -> None:
+    def test_production_entrypoint_routes_to_v8_modules(self) -> None:
         entry = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
-        self.assertIn("story_content_pipeline_v2", entry)
-        self.assertIn("mode_exporter_v2", entry)
-        self.assertIn("story_renderer_v2", entry)
-        self.assertIn('sys.modules["story_content_pipeline"] = story_content_pipeline_v2', entry)
+        self.assertIn("story_content_pipeline_v3", entry)
+        self.assertIn("mode_exporter_v3", entry)
+        self.assertIn("story_renderer_v3", entry)
+        self.assertIn('sys.modules["story_engine"] = story_engine_v3', entry)
+        self.assertIn('sys.modules["story_content_pipeline"] = story_content_pipeline_v3', entry)
         self.assertNotIn("story_pipeline_runtime.apply_reasoning_patch", entry)
 
 
