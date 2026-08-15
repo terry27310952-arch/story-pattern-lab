@@ -35,6 +35,7 @@ jobs:
             apps/streamlit/story_engine.py \
             apps/streamlit/story_pipeline_runtime.py \
             apps/streamlit/story_source_runtime.py \
+            apps/streamlit/story_deck_runtime.py \
             apps/streamlit/story_render_runtime.py \
             apps/streamlit/story_export_runtime.py \
             streamlit_app.py
