@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import hashlib
 from datetime import datetime
 
 import streamlit as st
@@ -32,7 +31,7 @@ except Exception:
     fetch_article_body = None
 
 
-APP_VERSION = "2026-08-14 content-depth-v9"
+APP_VERSION = "2026-08-15 editorial-card-schema-v10"
 
 
 MARKET_STRUCTURE_LABELS = {
@@ -308,30 +307,40 @@ def markdown_brief(brief: dict) -> str:
 def cards_to_markdown(cards: list[dict]) -> str:
     lines: list[str] = []
     for card in cards:
-        lines.append(f"## {card.get('slide')}. {card.get('headline')}")
-        if card.get("hook"):
-            lines.append(f"**후킹:** {card.get('hook')}")
-            lines.append("")
-        lines.append(card.get("body", ""))
+        lines.append(f"## {card.get('slide')}. {card.get('headline', '')}")
+        if card.get("eyebrow"):
+            lines.append(f"*{card.get('eyebrow')}*")
         lines.append("")
-        if card.get("data_points"):
-            lines.append("### 데이터 근거")
-            lines.append(card.get("data_points", ""))
+        if card.get("subheadline"):
+            lines.append(card.get("subheadline", ""))
             lines.append("")
-        if card.get("trader_angle"):
-            lines.append(f"### 트레이더 해석\n{card.get('trader_angle')}")
+        if card.get("key_message"):
+            lines.append(card.get("key_message", ""))
             lines.append("")
-        if card.get("source_evidence"):
-            lines.append("### 원문 근거")
-            lines.append(card.get("source_evidence", ""))
+        metrics = card.get("metrics") or []
+        if metrics:
+            for metric in metrics[:4]:
+                lines.append(f"- {metric.get('label')}: {metric.get('value')}")
             lines.append("")
-        if card.get("risk_line"):
-            lines.append(f"- 리스크: {card.get('risk_line', '')}")
-        lines.append(f"- 캡션: {card.get('caption', '')}")
-        lines.append(f"- CTA: {card.get('cta', '')}")
-        lines.append(f"- 차트 포커스: {card.get('chart_focus', '')}")
-        lines.append(f"- 비주얼: {card.get('visual_direction', '')}")
-        lines.append(f"- 출처 힌트: {card.get('source_hint', '')}")
+        insight = card.get("insight") or {}
+        if insight.get("visible") and insight.get("text"):
+            label = insight.get("label")
+            lines.append(f"### {label}" if label else "### 핵심")
+            lines.append(insight.get("text", ""))
+            lines.append("")
+        action = card.get("action") or {}
+        if action.get("visible") and action.get("text"):
+            prefix = f"{action.get('label')}: " if action.get("label") else ""
+            lines.append(f"> {prefix}{action.get('text')}")
+            lines.append("")
+        risk = card.get("risk") or {}
+        if risk.get("visible") and risk.get("text"):
+            lines.append(f"> {risk.get('text')}")
+            lines.append("")
+        source = card.get("source") or {}
+        source_text = " · ".join([value for value in [source.get("publisher", ""), source.get("short_title", "")] if value])
+        if source_text:
+            lines.append(f"`{source_text}`")
         lines.append("")
     return "\n".join(lines).strip()
 
@@ -560,25 +569,34 @@ def render_cards(content_package: dict) -> None:
         with tab:
             card_set = cards.get(label, [])
             for card in card_set:
-                card_key = hashlib.sha1(json.dumps(card, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:10]
                 with st.expander(f"{card.get('slide')}. {card.get('headline')}", expanded=card.get("slide") == 1):
-                    if card.get("hook"):
-                        st.markdown(f"**후킹:** {card.get('hook')}")
-                    st.write(card.get("body", ""))
-                    if card.get("data_points"):
-                        st.markdown("**데이터 근거**")
-                        st.markdown(card.get("data_points", ""))
-                    if card.get("trader_angle"):
-                        st.text_area("트레이더 해석", card.get("trader_angle", ""), height=110, key=f"{label}_{card.get('slide')}_{card_key}_angle")
-                    if card.get("source_evidence"):
-                        st.text_area("원문 근거", card.get("source_evidence", ""), height=130, key=f"{label}_{card.get('slide')}_{card_key}_evidence")
-                    if card.get("risk_line"):
-                        st.warning(card.get("risk_line", ""))
-                    st.caption(card.get("caption", ""))
-                    st.text_area("CTA", card.get("cta", ""), height=70, key=f"{label}_{card.get('slide')}_{card_key}_cta")
-                    st.text_area("차트 포커스", card.get("chart_focus", ""), height=70, key=f"{label}_{card.get('slide')}_{card_key}_chart")
-                    st.text_area("비주얼 디렉션", card.get("visual_direction", ""), height=80, key=f"{label}_{card.get('slide')}_{card_key}_visual")
-                    st.text_area("출처 힌트", card.get("source_hint", ""), height=70, key=f"{label}_{card.get('slide')}_{card_key}_source")
+                    if card.get("eyebrow"):
+                        st.caption(card.get("eyebrow"))
+                    if card.get("subheadline"):
+                        st.markdown(f"#### {card.get('subheadline')}")
+                    if card.get("key_message"):
+                        st.write(card.get("key_message", ""))
+                    metrics = card.get("metrics") or []
+                    if metrics:
+                        metric_columns = st.columns(min(len(metrics), 4))
+                        for metric, column in zip(metrics[:4], metric_columns):
+                            column.metric(metric.get("label", ""), metric.get("value", ""))
+                    insight = card.get("insight") or {}
+                    if insight.get("visible") and insight.get("text"):
+                        if insight.get("label"):
+                            st.markdown(f"**{insight.get('label')}**")
+                        st.write(insight.get("text", ""))
+                    action = card.get("action") or {}
+                    if action.get("visible") and action.get("text"):
+                        action_text = f"{action.get('label')}: {action.get('text')}" if action.get("label") else action.get("text")
+                        st.info(action_text)
+                    risk = card.get("risk") or {}
+                    if risk.get("visible") and risk.get("text"):
+                        st.warning(risk.get("text", ""))
+                    source = card.get("source") or {}
+                    source_text = " · ".join([value for value in [source.get("publisher", ""), source.get("short_title", "")] if value])
+                    if source_text:
+                        st.caption(source_text)
             st.download_button(
                 f"{label} Markdown 다운로드",
                 cards_to_markdown(card_set),

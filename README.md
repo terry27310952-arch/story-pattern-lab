@@ -42,14 +42,23 @@ briefings, card news, Note content, and Excel packages.
    a personal market view rather than a list of collected facts.
    Daily notes are written as time-zone interpretation essays with expected
    move, action plan, and no-trade criteria.
-10. Convert the briefing into production-ready card news sets: 5 slides, 6
-    slides, 7 slides, and a custom AI suggestion. Each card now carries a hook,
-    body copy, data evidence, source evidence, trader interpretation,
-    invalidation/risk line, CTA, chart focus, visual direction, and source hint.
+10. Convert the briefing into production-ready card news sets through a
+    three-layer pipeline:
+    - `DATA/RULES`: lock current price, support, resistance, rates, MA, RSI,
+      MACD, ATR, funding, open interest, Fear & Greed, source, URL,
+      generation date, and timeframe.
+    - `REASONING/EDITOR`: choose the important signals, plan the carousel,
+      write natural card copy, and run QA against repetition and internal labels.
+    - `RENDERER`: display only final user-facing card text from the agreed
+      schema.
+    Supported card types are fixed to `market_conclusion`, `key_levels`,
+    `derivatives`, `news_context`, `scenarios`, and `trade_plan`.
 11. Export Markdown, JSON, and `.xlsx` files with separate sheets for briefing,
     source findings, scenarios, card news, Note, sources, market data, price
-    levels, indicators, derivatives, and trader stance. Card sheets expose the
-    richer production columns instead of only headline/body/caption.
+    levels, indicators, derivatives, and trader stance. Card sheets use the
+    final schema: `card_type`, `eyebrow`, `headline`, `subheadline`,
+    `key_message`, `metrics`, `insight`, `action`, `risk`, `visual_direction`,
+    and `source`.
 12. Build Note content as a publishable trader note with content metadata, BTC
     data map, derivatives/indicator read, source-by-source interpretation,
     Bull/Base/Bear scenarios, weekly/daily operating notes, card-news conversion

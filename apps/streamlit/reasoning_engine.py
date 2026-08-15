@@ -1075,12 +1075,34 @@ def generate_trader_brief(resources: list[dict], market_snapshot: dict, briefing
     return normalize_external_brief(parsed, local, provider), None
 
 
-def source_hint(row: dict) -> str:
-    source = row.get("source", "")
-    title = row.get("title", "")
-    url = row.get("url", "")
-    pieces = [piece for piece in [source, title, url] if piece]
-    return " / ".join(pieces)
+CARD_TYPES = {"market_conclusion", "key_levels", "derivatives", "news_context", "scenarios", "trade_plan"}
+INTERNAL_VISIBLE_BLOCKLIST = [
+    "CTA",
+    "caption",
+    "캡션",
+    "raw_source",
+    "원문 근거",
+    "visual",
+    "비주얼",
+    "analysis",
+    "chart_focus",
+    "generation_note",
+]
+INSIGHT_LABELS = {
+    "market_conclusion": ["오늘의 판단", "한 줄 결론", "내가 보는 핵심"],
+    "key_levels": ["지금 볼 가격", "첫 번째 경계", "여기서 갈린다"],
+    "derivatives": ["숫자 뒤의 의미", "파생시장의 온도", "포지션 상태"],
+    "news_context": ["헤드라인보다 중요한 것", "가격과 연결해서 보면", "이 뉴스가 중요한 이유"],
+    "scenarios": ["세 가지 경로", "다음 분기점", "시나리오 지도"],
+    "trade_plan": ["오늘 할 일", "행동 기준", "실제 매매 계획"],
+}
+
+
+def short_source(row: dict) -> dict:
+    return {
+        "publisher": clean_text(row.get("source") or row.get("publisher") or "", 40),
+        "short_title": clean_text(row.get("title") or row.get("short_title") or "", 72),
+    }
 
 
 def bullet_join(items: list[object], limit: int = 4, text_limit: int = 240) -> str:
@@ -1095,208 +1117,433 @@ def format_count(value: object) -> str:
         return "0"
 
 
-def scenario_lines(scenarios: list[dict], limit: int = 3) -> str:
-    lines = []
-    for scenario in scenarios[:limit]:
-        lines.append(
-            clean_text(
-                f"{scenario.get('case', 'Scenario')}: {scenario.get('trigger', '')} -> "
-                f"{scenario.get('expected_path', '')} / {scenario.get('positioning', '')}",
-                380,
-            )
-        )
-    return bullet_join(lines, limit=limit, text_limit=380)
+def locked_metric(metric_id: str, label: str, raw_value: object, formatted: str, unit: str = "") -> dict | None:
+    if raw_value is None or raw_value == "" or formatted in {"데이터 미수집", ""}:
+        return None
+    return {"id": metric_id, "label": label, "value": formatted, "raw_value": raw_value, "unit": unit, "locked": True}
 
 
-def finding_lines(findings: list[dict], limit: int = 3) -> str:
-    lines = []
-    for item in findings[:limit]:
-        evidence = " / ".join(item.get("evidence", [])[:2])
-        lines.append(
-            clean_text(
-                f"[{item.get('source', '')}] {item.get('title', '')}: {item.get('role', '')}. "
-                f"근거는 {evidence}. 내 해석은 {item.get('trader_read', '')}",
-                420,
-            )
-        )
-    return bullet_join(lines, limit=limit, text_limit=420)
+def locked_market_metrics(brief: dict) -> dict[str, dict]:
+    market = brief.get("market_summary") or {}
+    items = [
+        locked_metric("btc_price", "BTC", market.get("btc_price"), as_price(market.get("btc_price")), "USD"),
+        locked_metric("btc_support", "지지", market.get("btc_nearest_support"), as_price(market.get("btc_nearest_support")), "USD"),
+        locked_metric("btc_resistance", "저항", market.get("btc_nearest_resistance"), as_price(market.get("btc_nearest_resistance")), "USD"),
+        locked_metric("btc_24h", "BTC 24H", market.get("btc_24h"), as_percent(market.get("btc_24h")), "%"),
+        locked_metric("btc_7d", "BTC 7D", market.get("btc_7d"), as_percent(market.get("btc_7d")), "%"),
+        locked_metric("eth_7d", "ETH 7D", market.get("eth_7d"), as_percent(market.get("eth_7d")), "%"),
+        locked_metric("nikkei_7d", "니케이 7D", market.get("nikkei_7d"), as_percent(market.get("nikkei_7d")), "%"),
+        locked_metric("gold_7d", "골드 7D", market.get("gold_7d"), as_percent(market.get("gold_7d")), "%"),
+        locked_metric("ma20", "MA20", market.get("btc_ma20"), as_price(market.get("btc_ma20")), "USD"),
+        locked_metric("ma50", "MA50", market.get("btc_ma50"), as_price(market.get("btc_ma50")), "USD"),
+        locked_metric("ma200", "MA200", market.get("btc_ma200"), as_price(market.get("btc_ma200")), "USD"),
+        locked_metric("rsi14", "RSI14", market.get("btc_rsi14"), as_plain_number(market.get("btc_rsi14"))),
+        locked_metric("macd", "MACD", market.get("btc_macd_bias"), str(market.get("btc_macd_bias") or "")),
+        locked_metric("atr14", "ATR14", market.get("btc_atr14"), as_price(market.get("btc_atr14")), "USD"),
+        locked_metric("funding", "Funding", market.get("btc_funding_rate"), as_percent(market.get("btc_funding_rate")), "%"),
+        locked_metric("mark_price", "Mark", market.get("btc_mark_price"), as_price(market.get("btc_mark_price")), "USD"),
+        locked_metric("open_interest", "OI", market.get("btc_open_interest_contracts"), f"{as_plain_number(market.get('btc_open_interest_contracts'))} contracts"),
+        locked_metric("fear_greed", "Fear & Greed", market.get("fear_greed"), as_plain_number(market.get("fear_greed"))),
+        locked_metric("generated_at", "생성 시각", brief.get("generated_at"), str(brief.get("generated_at") or "")),
+        locked_metric("timeframe", "타임프레임", brief.get("briefing_type"), "주간" if brief.get("briefing_type") == "weekly" else "일간"),
+    ]
+    return {item["id"]: item for item in items if item}
 
 
-def daily_lines(blocks: list[dict], limit: int = 4) -> str:
-    lines = []
-    for block in blocks[:limit]:
-        lines.append(
-            clean_text(
-                f"{block.get('time_zone', '')}: {block.get('decision', '')}. "
-                f"{block.get('expected_move', '')} {block.get('action_plan', '')}",
-                320,
-            )
-        )
-    return bullet_join(lines, limit=limit, text_limit=320)
+def metric_list(metrics: dict[str, dict], ids: list[str], limit: int = 4) -> list[dict]:
+    return [metrics[item] for item in ids if item in metrics][:limit]
 
 
-def card_blueprint(count: int) -> list[dict]:
-    base = [
-        {"role": "cover", "headline": "이번 장세, 내 결론"},
-        {"role": "levels", "headline": "BTC 기준 가격"},
-        {"role": "derivatives", "headline": "파생·보조지표 판독"},
-        {"role": "sources", "headline": "원문은 이렇게 읽었다"},
-        {"role": "action", "headline": "오늘의 매매 계획"},
+def normalize_sentence_key(text: object) -> str:
+    cleaned = re.sub(r"[\s\W_]+", "", str(text or "").lower())
+    for word in ["확인", "기다림", "관찰", "추격금지", "보류", "저항", "지지"]:
+        cleaned = cleaned.replace(word, word[:2])
+    return cleaned[:80]
+
+
+def sanitize_visible_text(value: object) -> str:
+    text = str(value or "")
+    for token in INTERNAL_VISIBLE_BLOCKLIST:
+        text = text.replace(token, "")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def selected_label(card_type: str, index: int = 0) -> str:
+    choices = INSIGHT_LABELS.get(card_type, ["핵심"])
+    return choices[index % len(choices)]
+
+
+def editor_pass_market_analysis(brief: dict, resources: list[dict], metrics: dict[str, dict]) -> dict:
+    market = brief.get("market_summary") or {}
+    stance = brief.get("trader_stance") or {}
+    findings = brief.get("source_findings") or []
+    funding = to_float(market.get("btc_funding_rate"))
+    rsi_value = to_float(market.get("btc_rsi14"))
+    support_distance = to_float(market.get("btc_support_distance_pct"))
+    resistance_distance = to_float(market.get("btc_resistance_distance_pct"))
+    btc_change = to_float(market.get("btc_7d"), 0.0) or 0.0
+    eth_change = to_float(market.get("eth_7d"), 0.0) or 0.0
+
+    importance = []
+    if support_distance is not None and abs(support_distance) <= 1.0:
+        importance.append("support_test")
+    if resistance_distance is not None and abs(resistance_distance) <= 1.2:
+        importance.append("resistance_test")
+    if funding is not None and funding > 0:
+        importance.append("long_bias")
+    if rsi_value is not None and (rsi_value >= 65 or rsi_value <= 40):
+        importance.append("momentum_extreme")
+    if findings:
+        importance.append("source_context")
+    if eth_change > btc_change:
+        importance.append("alt_rotation")
+    if not importance:
+        importance.append("range_control")
+
+    conflict = ""
+    if "long_bias" in importance and "resistance_test" in importance:
+        conflict = "롱 포지션은 우세하지만 저항 확인이 먼저입니다."
+    elif "support_test" in importance:
+        conflict = "가까운 지지가 깨지는지 버티는지가 첫 판단입니다."
+    elif "alt_rotation" in importance:
+        conflict = "알트 강도는 보이지만 BTC 기준축 확인이 우선입니다."
+    else:
+        conflict = "재료보다 가격 경계가 우선인 구간입니다."
+
+    primary_source = findings[0] if findings else resources[0] if resources else {}
+    return {
+        "importance": importance,
+        "conflict": conflict,
+        "stance": stance,
+        "market": market,
+        "findings": findings,
+        "resources": resources,
+        "daily_brief": brief.get("daily_brief") or [],
+        "primary_source": primary_source,
+        "metrics": metrics,
+        "support": metrics.get("btc_support", {}).get("value", ""),
+        "resistance": metrics.get("btc_resistance", {}).get("value", ""),
+        "price": metrics.get("btc_price", {}).get("value", ""),
+        "top_source_read": clean_text((findings[0] if findings else {}).get("trader_read", ""), 260),
+    }
+
+
+def editor_pass_carousel_plan(count: int, analysis: dict) -> list[dict]:
+    plan = [
+        {"card_type": "market_conclusion", "angle": "decision"},
+        {"card_type": "key_levels", "angle": "price_boundary"},
+        {"card_type": "derivatives", "angle": "positioning_temperature"},
+        {"card_type": "news_context", "angle": "source_meaning"},
+        {"card_type": "trade_plan", "angle": "execution"},
     ]
     if count >= 6:
-        base.insert(4, {"role": "scenario", "headline": "Bull/Base/Bear 분기"})
+        plan.insert(4, {"card_type": "scenarios", "angle": "path_split"})
     if count >= 7:
-        base.insert(5, {"role": "alts_macro", "headline": "알트·자산 이동 조건"})
+        plan.insert(5, {"card_type": "news_context", "angle": "asset_flow"})
     if count >= 8:
-        base.insert(-1, {"role": "daily", "headline": "시간대별 체크포인트"})
+        plan.insert(-1, {"card_type": "scenarios", "angle": "time_zone"})
     if count >= 9:
-        base.insert(-1, {"role": "risk", "headline": "틀렸다고 인정할 자리"})
-    return base[:count]
+        plan.insert(-1, {"card_type": "trade_plan", "angle": "risk_control"})
+    return plan[:count]
 
 
-def make_card_set(brief: dict, resources: list[dict], count: int, label: str) -> list[dict]:
-    findings = brief.get("source_findings") or []
-    scenarios = brief.get("scenarios") or []
-    market = brief.get("market_structure") or {}
-    stance = brief.get("trader_stance") or {}
-    daily = brief.get("daily_brief") or []
-    invalidations = brief.get("invalidation_points") or []
-    risk_notes = brief.get("risk_notes") or []
-    cards: list[dict] = []
+def scenario_summary(scenarios: list[dict], limit: int = 3) -> str:
+    labels = []
+    for scenario in scenarios[:limit]:
+        labels.append(f"{scenario.get('case')}: {clean_text(scenario.get('trigger'), 96)}")
+    return " / ".join(labels)
 
-    top_finding = findings[0] if findings else {}
-    top_resource = resources[0] if resources else {}
-    quality_source_hint = source_hint(top_resource) or source_hint(top_finding)
-    common_visual = (
-        "상단은 한 줄 결론, 중앙은 BTC 캔들/가격 레벨, 하단은 데이터 근거와 원문 출처를 작게 배치. "
-        "숫자는 현재가-지지-저항-펀딩-OI 순서로 고정한다."
-    )
 
-    for index, item in enumerate(card_blueprint(count), start=1):
-        role = item["role"]
-        headline = item["headline"]
-        hook = clean_text(brief.get("one_line", ""), 110)
-        body = clean_text(stance.get("market_read") or brief.get("one_line", ""), 260)
-        data_points = bullet_join(brief.get("key_points", [])[:3], limit=3, text_limit=260)
-        trader_angle = clean_text(stance.get("expected_path") or stance.get("subjective_note") or "", 320)
-        source_evidence = finding_lines(findings, limit=2)
-        caption = clean_text((brief.get("key_points") or [""])[0], 180)
-        risk_line = clean_text((invalidations or risk_notes or ["무효화 조건 확인 전에는 포지션을 키우지 않습니다."])[0], 220)
-        cta = "다음 캔들이 지지/저항 중 어느 쪽을 종가로 확정하는지 먼저 확인합니다."
-        chart_focus = "BTC 1D/4H, MA20/50/200, RSI14, MACD, ATR, 펀딩비, 미결제약정"
-        source = resources[(index - 1) % len(resources)] if resources else top_finding
-
-        if role == "cover":
-            hook = f"확신도 {stance.get('conviction_score', 'N/A')}점: 지금은 방향보다 자리의 질을 먼저 본다."
-            body = clean_text(
-                f"{stance.get('directional_bias', '')} / {stance.get('preferred_posture', '')}. "
-                f"{stance.get('market_read', brief.get('one_line', ''))}",
-                330,
+def top_findings_text(findings: list[dict], limit: int = 2) -> str:
+    lines = []
+    for item in findings[:limit]:
+        lines.append(
+            clean_text(
+                f"{item.get('source')}는 {item.get('role')}로 분류됩니다. "
+                f"{item.get('trader_read')}",
+                220,
             )
-            data_points = bullet_join(
-                [market.get("critical_levels", ""), market.get("derivatives", ""), market.get("trader_bias", "")],
-                limit=3,
-                text_limit=300,
-            )
-            trader_angle = clean_text(stance.get("subjective_note", ""), 320)
-            caption = "뉴스보다 가격이 그 뉴스를 어느 레벨에서 소화하는지가 우선입니다."
-        elif role == "levels":
-            hook = "오늘 브리핑의 첫 기준은 예측이 아니라 가격 경계입니다."
-            body = clean_text(market.get("critical_levels") or market.get("btc_axis") or brief.get("one_line"), 340)
-            data_points = bullet_join(
-                [market.get("technical_indicators", ""), market.get("btc_axis", ""), market.get("trader_expected_path", "")],
-                limit=3,
-                text_limit=330,
-            )
-            trader_angle = clean_text(stance.get("entry_plan", ""), 320)
-            caption = "지지는 방어 확인, 저항은 돌파 확인입니다. 그 사이에서는 매매를 강제하지 않습니다."
-        elif role == "derivatives":
-            hook = "현물 가격만 보면 늦고, 파생 포지션을 같이 봐야 합니다."
-            body = clean_text(f"{market.get('technical_indicators', '')} {market.get('derivatives', '')}", 380)
-            data_points = bullet_join(
-                [market.get("derivatives", ""), market.get("technical_indicators", ""), market.get("sentiment", "")],
-                limit=3,
-                text_limit=340,
-            )
-            trader_angle = "펀딩이 과열되는데 가격이 저항을 못 넘으면 추격하지 않고, OI가 늘면서 지지를 지키면 되돌림 진입만 봅니다."
-            caption = "펀딩비는 방향 예측이 아니라 포지션 쏠림의 온도계입니다."
-        elif role == "sources":
-            hook = "선택 원문은 호재/악재가 아니라 시장이 반응한 재료로 분류합니다."
-            body = clean_text(finding_lines(findings, limit=3) or "원문 확보 자료가 부족하면 제목/요약은 보조 신호로만 둡니다.", 520)
-            data_points = bullet_join(
-                [
-                    f"선택 리소스 {len(resources)}건",
-                    f"원문 해석 {len(findings)}건",
-                    f"상위 근거: {clean_text(' / '.join(top_finding.get('evidence', [])[:2]), 240)}",
-                ],
-                limit=3,
-                text_limit=300,
-            )
-            trader_angle = clean_text(top_finding.get("trader_read", ""), 360)
-            source_evidence = finding_lines(findings, limit=4)
-            caption = "원문은 가격 레벨과 결합될 때만 매매 근거가 됩니다."
-        elif role == "scenario":
-            hook = "내가 보는 장세는 하나의 정답보다 세 개의 경로로 관리해야 합니다."
-            body = clean_text(scenario_lines(scenarios, limit=3), 580)
-            data_points = scenario_lines(scenarios, limit=3)
-            trader_angle = clean_text(stance.get("expected_path", ""), 360)
-            caption = "Bull은 돌파 안착, Base는 박스권, Bear는 지지 이탈 회복 실패입니다."
-        elif role == "alts_macro":
-            hook = "알트는 BTC보다 먼저 사는 게 아니라 BTC 안정 뒤에 확인합니다."
-            body = clean_text(f"{market.get('alts', '')} {market.get('japan_risk', '')} {market.get('defensive_assets', '')}", 430)
-            data_points = bullet_join(
-                [market.get("alts", ""), market.get("japan_risk", ""), market.get("defensive_assets", "")],
-                limit=3,
-                text_limit=330,
-            )
-            trader_angle = clean_text(stance.get("alt_strategy", ""), 340)
-            caption = "BTC 안정, ETH 상대강도, 섹터 거래량 확산이 같이 나와야 알트 비중을 엽니다."
-        elif role == "daily":
-            hook = "일간 브리핑은 시간대별로 확인할 행동만 남겨야 합니다."
-            body = clean_text(daily_lines(daily, limit=4), 520)
-            data_points = daily_lines(daily, limit=4)
-            trader_angle = "아시아장은 위치 확인, 유럽장은 변동성 확인, 미국장은 종가와 파생 쏠림 확인으로 나눕니다."
-            caption = "시간대별 판단이 없으면 같은 뉴스를 계속 다르게 해석하게 됩니다."
-        elif role == "risk":
-            hook = "좋은 관점보다 중요한 것은 틀렸을 때 바로 줄이는 기준입니다."
-            body = clean_text(bullet_join(invalidations + risk_notes, limit=5, text_limit=300), 520)
-            data_points = bullet_join(invalidations, limit=4, text_limit=280)
-            trader_angle = clean_text(stance.get("risk_plan", ""), 360)
-            caption = "무효화 조건은 사후 핑계가 아니라 진입 전에 적어두는 가격입니다."
-        elif role == "action":
-            hook = "오늘 할 일은 예측을 늘리는 것이 아니라 행동 조건을 줄이는 것입니다."
-            body = clean_text(
-                f"{stance.get('entry_plan', '')} {stance.get('profit_plan', '')} {stance.get('risk_plan', '')}",
-                430,
-            )
-            data_points = bullet_join(
-                [stance.get("entry_plan", ""), stance.get("profit_plan", ""), stance.get("risk_plan", ""), stance.get("no_trade_zone", "")],
-                limit=4,
-                text_limit=300,
-            )
-            trader_angle = clean_text(stance.get("no_trade_zone", ""), 340)
-            caption = "매수/매도보다 먼저 할 일은 진입하지 않을 구간을 정하는 것입니다."
-
-        cards.append(
-            {
-                "set": label,
-                "slide": index,
-                "section_role": role,
-                "headline": headline,
-                "hook": hook,
-                "body": body,
-                "data_points": data_points,
-                "trader_angle": trader_angle,
-                "source_evidence": source_evidence,
-                "risk_line": risk_line,
-                "chart_focus": chart_focus,
-                "visual_direction": common_visual,
-                "source_hint": clean_text(source_hint(source) or quality_source_hint, 240),
-                "caption": caption,
-                "cta": cta,
-            }
         )
+    return " ".join(lines)
+
+
+def base_card(label: str, slide: int, card_type: str, source: dict) -> dict:
+    return {
+        "set": label,
+        "slide": slide,
+        "card_type": card_type if card_type in CARD_TYPES else "market_conclusion",
+        "eyebrow": "",
+        "headline": "",
+        "subheadline": "",
+        "key_message": "",
+        "metrics": [],
+        "insight": {"visible": True, "label": selected_label(card_type), "text": ""},
+        "action": {"visible": False, "label": "", "text": ""},
+        "risk": {"visible": False, "text": ""},
+        "visual_direction": {
+            "layout_variant": "editorial",
+            "character_visibility": 0.0,
+            "visual_focus": "BTC chart with locked metrics",
+            "negative_space": "right side for headline and one short sentence",
+        },
+        "source": short_source(source),
+        "qa": {"warnings": [], "risk_key": ""},
+    }
+
+
+def editor_pass_card_copy(plan: list[dict], analysis: dict, label: str) -> list[dict]:
+    metrics = analysis["metrics"]
+    stance = analysis["stance"]
+    market = analysis["market"]
+    findings = analysis["findings"]
+    resources = analysis["resources"]
+    scenarios = analysis.get("scenarios") or []
+    support = analysis.get("support", "")
+    resistance = analysis.get("resistance", "")
+    price = analysis.get("price", "")
+    cards = []
+
+    for index, item in enumerate(plan, start=1):
+        card_type = item["card_type"]
+        angle = item.get("angle", "")
+        source = resources[(index - 1) % len(resources)] if resources else analysis.get("primary_source", {})
+        card = base_card(label, index, card_type, source)
+
+        if card_type == "market_conclusion":
+            card.update(
+                {
+                    "eyebrow": "Market Read",
+                    "headline": "지금은 방향보다 경계가 먼저",
+                    "subheadline": f"BTC는 {support}와 {resistance} 사이에서 판단을 요구합니다.",
+                    "key_message": clean_text(stance.get("market_read") or analysis["conflict"], 180),
+                    "metrics": metric_list(metrics, ["btc_price", "btc_7d", "fear_greed"]),
+                    "insight": {
+                        "visible": True,
+                        "label": selected_label(card_type, index),
+                        "text": f"{analysis['conflict']} 뉴스보다 가격이 어느 경계에서 버티는지가 우선입니다.",
+                    },
+                }
+            )
+        elif card_type == "key_levels":
+            card.update(
+                {
+                    "eyebrow": "Price Map",
+                    "headline": f"{support} 방어, {resistance} 회복",
+                    "subheadline": "이 구간을 벗어나기 전까지는 방향을 단정하지 않습니다.",
+                    "key_message": f"{support}은 방어 확인, {resistance}은 회복 확인입니다.",
+                    "metrics": metric_list(metrics, ["btc_price", "btc_support", "btc_resistance", "atr14"]),
+                    "insight": {
+                        "visible": True,
+                        "label": selected_label(card_type, index),
+                        "text": "한가운데에서는 예측의 효율이 낮습니다. 가까운 경계에서 반응을 기다리는 쪽이 유리합니다.",
+                    },
+                    "action": {"visible": True, "label": "확인할 것", "text": f"{support} 반응부터 확인."},
+                    "risk": {"visible": True, "text": f"{support} 아래 종가 이탈이면 강세 해석을 낮춥니다."},
+                }
+            )
+            card["qa"]["risk_key"] = "btc_support_close_break"
+        elif card_type == "derivatives":
+            funding = metrics.get("funding", {}).get("value", "")
+            oi = metrics.get("open_interest", {}).get("value", "")
+            card.update(
+                {
+                    "eyebrow": "Derivatives",
+                    "headline": "포지션은 있는데, 확인은 가격이 한다",
+                    "subheadline": f"Funding {funding}, OI {oi}".strip(", "),
+                    "key_message": "파생 데이터는 방향 확정이 아니라 쏠림의 온도입니다.",
+                    "metrics": metric_list(metrics, ["mark_price", "funding", "open_interest", "rsi14"]),
+                    "insight": {
+                        "visible": True,
+                        "label": selected_label(card_type, index),
+                        "text": "펀딩이 플러스인데 저항을 넘지 못하면 추격보다 되돌림 확인이 먼저입니다.",
+                    },
+                }
+            )
+        elif card_type == "news_context" and angle == "asset_flow":
+            card.update(
+                {
+                    "eyebrow": "Asset Flow",
+                    "headline": "알트는 BTC 안정 뒤에 붙인다",
+                    "subheadline": "니케이, 골드, ETH 상대강도는 보조 신호입니다.",
+                    "key_message": clean_text((brief_alt := market.get("alts", "")) or "알트 판단은 BTC 기준축이 먼저입니다.", 180),
+                    "metrics": metric_list(metrics, ["eth_7d", "nikkei_7d", "gold_7d"]),
+                    "insight": {
+                        "visible": True,
+                        "label": selected_label(card_type, index),
+                        "text": clean_text(stance.get("alt_strategy") or brief_alt, 220),
+                    },
+                }
+            )
+        elif card_type == "news_context":
+            context = top_findings_text(findings) or "원문 확보가 부족하면 제목은 소재 후보로만 둡니다."
+            card.update(
+                {
+                    "eyebrow": "News Context",
+                    "headline": "헤드라인보다 가격 반응",
+                    "subheadline": "뉴스는 촉매, 가격은 판정표입니다.",
+                    "key_message": clean_text(context, 190),
+                    "metrics": metric_list(metrics, ["btc_price", "btc_support", "btc_resistance"]),
+                    "insight": {
+                        "visible": True,
+                        "label": selected_label(card_type, index),
+                        "text": clean_text(analysis.get("top_source_read") or context, 220),
+                    },
+                }
+            )
+        elif card_type == "scenarios" and angle == "time_zone":
+            daily = analysis.get("daily_brief") or []
+            first = daily[0] if daily else {}
+            card.update(
+                {
+                    "eyebrow": "Time Zone",
+                    "headline": "시간대마다 볼 것은 다르다",
+                    "subheadline": "아시아는 위치, 유럽은 변동성, 미국은 종가 확인.",
+                    "key_message": clean_text(first.get("decision") or first.get("expected_move") or "일간 판단은 시간대별로 나눠야 합니다.", 180),
+                    "metrics": metric_list(metrics, ["btc_price", "funding", "open_interest"]),
+                    "insight": {
+                        "visible": True,
+                        "label": selected_label(card_type, index),
+                        "text": clean_text(first.get("action_plan") or "같은 뉴스라도 어느 시간대에 가격이 반응하는지에 따라 해석이 달라집니다.", 220),
+                    },
+                    "action": {"visible": True, "label": "다음 확인", "text": "지금은 종가 확인이 먼저."},
+                }
+            )
+        elif card_type == "scenarios":
+            card.update(
+                {
+                    "eyebrow": "Scenario",
+                    "headline": "경로는 셋, 기준은 하나",
+                    "subheadline": scenario_summary(scenarios) or f"{support}와 {resistance}가 분기점입니다.",
+                    "key_message": clean_text((scenarios[0] if scenarios else {}).get("trader_view") or stance.get("expected_path"), 190),
+                    "metrics": metric_list(metrics, ["btc_support", "btc_resistance", "ma20", "ma50"]),
+                    "insight": {
+                        "visible": True,
+                        "label": selected_label(card_type, index),
+                        "text": "Bull은 돌파 안착, Base는 박스권 소모, Bear는 지지 이탈 후 회복 실패입니다.",
+                    },
+                    "action": {"visible": True, "label": "분기점", "text": f"{resistance} 회복 전까지는 기다림."},
+                }
+            )
+        elif card_type == "trade_plan" and angle == "risk_control":
+            card.update(
+                {
+                    "eyebrow": "Risk Control",
+                    "headline": "틀리면 줄이는 자리가 먼저",
+                    "subheadline": "좋은 관점도 무효화 가격이 없으면 매매 계획이 아닙니다.",
+                    "key_message": clean_text(stance.get("risk_plan"), 190),
+                    "metrics": metric_list(metrics, ["btc_support", "btc_resistance", "atr14"]),
+                    "insight": {
+                        "visible": True,
+                        "label": selected_label(card_type, index),
+                        "text": clean_text(stance.get("no_trade_zone"), 220),
+                    },
+                    "risk": {"visible": True, "text": f"{support} 아래 회복 실패는 포지션 축소 신호입니다."},
+                }
+            )
+            card["qa"]["risk_key"] = "btc_support_close_break"
+        elif card_type == "trade_plan":
+            card.update(
+                {
+                    "eyebrow": "Trade Plan",
+                    "headline": "오늘 할 일은 조건을 줄이는 것",
+                    "subheadline": "진입보다 먼저 기다릴 구간을 정합니다.",
+                    "key_message": clean_text(stance.get("entry_plan"), 190),
+                    "metrics": metric_list(metrics, ["btc_price", "btc_support", "btc_resistance", "funding"]),
+                    "insight": {
+                        "visible": True,
+                        "label": selected_label(card_type, index),
+                        "text": clean_text(stance.get("profit_plan") or stance.get("no_trade_zone"), 220),
+                    },
+                    "action": {"visible": True, "label": "행동 기준", "text": "이 구간에서는 관찰이 포지션이다."},
+                }
+            )
+
+        cards.append(card)
     return cards
+
+
+def visible_card_text(card: dict) -> str:
+    pieces = [
+        card.get("eyebrow", ""),
+        card.get("headline", ""),
+        card.get("subheadline", ""),
+        card.get("key_message", ""),
+        card.get("insight", {}).get("label", ""),
+        card.get("insight", {}).get("text", ""),
+        card.get("action", {}).get("label", ""),
+        card.get("action", {}).get("text", ""),
+        card.get("risk", {}).get("text", ""),
+    ]
+    pieces.extend(metric.get("value", "") for metric in card.get("metrics", []) or [])
+    return " ".join(str(piece) for piece in pieces if piece)
+
+
+def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
+    warnings: list[str] = []
+    seen_risks: set[str] = set()
+    seen_actions: set[str] = set()
+    seen_messages: set[str] = set()
+    visible_action_budget = max(2, min(4, len(cards) // 2 + 1))
+    visible_action_count = 0
+
+    for card in cards:
+        card_type = card.get("card_type")
+        if card_type not in CARD_TYPES:
+            warnings.append(f"invalid card_type normalized: {card_type}")
+            card["card_type"] = "market_conclusion"
+        for field in ["eyebrow", "headline", "subheadline", "key_message"]:
+            card[field] = sanitize_visible_text(card.get(field, ""))
+        for nested in ["insight", "action", "risk"]:
+            if isinstance(card.get(nested), dict):
+                for key in ["label", "text"]:
+                    if key in card[nested]:
+                        card[nested][key] = sanitize_visible_text(card[nested].get(key, ""))
+        if len(card.get("metrics", []) or []) > 4:
+            card["metrics"] = card["metrics"][:4]
+            card["qa"]["warnings"].append("metric_limit_trimmed")
+        if normalize_sentence_key(card.get("headline")) == normalize_sentence_key(card.get("key_message")):
+            card["key_message"] = card.get("subheadline") or card.get("key_message")
+            card["qa"]["warnings"].append("headline_key_message_deduped")
+        risk_key = card.get("qa", {}).get("risk_key") or normalize_sentence_key(card.get("risk", {}).get("text"))
+        if card.get("risk", {}).get("visible"):
+            if risk_key in seen_risks:
+                card["risk"]["visible"] = False
+                card["qa"]["warnings"].append("duplicate_risk_hidden")
+            else:
+                seen_risks.add(risk_key)
+        if card.get("action", {}).get("visible"):
+            action_key = normalize_sentence_key(card.get("action", {}).get("text"))
+            if action_key in seen_actions or visible_action_count >= visible_action_budget:
+                card["action"]["visible"] = False
+                card["qa"]["warnings"].append("duplicate_or_excess_action_hidden")
+            else:
+                seen_actions.add(action_key)
+                visible_action_count += 1
+        message_key = normalize_sentence_key(card.get("key_message"))
+        if message_key in seen_messages:
+            card["key_message"] = sanitize_visible_text(card.get("insight", {}).get("text") or card.get("subheadline"))
+            card["qa"]["warnings"].append("repeated_message_rewritten")
+        seen_messages.add(normalize_sentence_key(card.get("key_message")))
+        for blocked in INTERNAL_VISIBLE_BLOCKLIST:
+            if blocked in visible_card_text(card):
+                card["qa"]["warnings"].append(f"blocked_label_removed:{blocked}")
+                warnings.append(f"blocked visible token removed: {blocked}")
+    return cards, warnings
+
+
+def make_card_set(brief: dict, resources: list[dict], count: int, label: str) -> tuple[list[dict], dict]:
+    metrics = locked_market_metrics(brief)
+    analysis = editor_pass_market_analysis(brief, resources, metrics)
+    analysis["scenarios"] = brief.get("scenarios") or []
+    plan = editor_pass_carousel_plan(count, analysis)
+    cards = editor_pass_card_copy(plan, analysis, label)
+    cards, qa_warnings = editor_pass_qa(cards)
+    return cards, {
+        "passes": ["market_analysis", "carousel_plan", "card_copy", "qa"],
+        "locked_metric_ids": list(metrics.keys()),
+        "card_types": [card["card_type"] for card in cards],
+        "qa_warnings": qa_warnings + [warning for card in cards for warning in card.get("qa", {}).get("warnings", [])],
+    }
 
 
 def build_note_markdown(brief: dict, resources: list[dict]) -> str:
@@ -1420,7 +1667,7 @@ def build_note_markdown(brief: dict, resources: list[dict]) -> str:
             "## 8. 게시용 카피",
             f"- 썸네일 문구: {brief.get('one_line', '')}",
             f"- 댓글 질문: 이번 장세는 BTC 기준축이 알트를 살리는 구조인가, 아니면 뉴스만 순환하는 박스권인가?",
-            "- CTA: 다음 캔들이 지지/저항 중 어느 쪽을 종가로 확정하는지 먼저 확인하세요.",
+            "- 다음 관찰 포인트: 다음 캔들이 지지/저항 중 어느 쪽을 종가로 확정하는지 먼저 확인하세요.",
             "",
             "## 9. 무효화 조건과 리스크",
         ]
@@ -1439,30 +1686,57 @@ def build_note_markdown(brief: dict, resources: list[dict]) -> str:
 
 def generate_content_package(brief: dict, resources: list[dict], custom_count: int = 8) -> dict:
     suggested = max(5, min(9, custom_count or 8))
+    cards_5, meta_5 = make_card_set(brief, resources, 5, "5장")
+    cards_6, meta_6 = make_card_set(brief, resources, 6, "6장")
+    cards_7, meta_7 = make_card_set(brief, resources, 7, "7장")
+    cards_custom, meta_custom = make_card_set(brief, resources, suggested, "자율제안")
     cards = {
-        "5장": make_card_set(brief, resources, 5, "5장"),
-        "6장": make_card_set(brief, resources, 6, "6장"),
-        "7장": make_card_set(brief, resources, 7, "7장"),
-        "자율제안": make_card_set(brief, resources, suggested, "자율제안"),
+        "5장": cards_5,
+        "6장": cards_6,
+        "7장": cards_7,
+        "자율제안": cards_custom,
     }
     findings = brief.get("source_findings") or []
+    editor_meta = {"5장": meta_5, "6장": meta_6, "7장": meta_7, "자율제안": meta_custom}
     return {
         "cards": cards,
         "note_markdown": build_note_markdown(brief, resources),
         "content_quality": {
+            "architecture": "DATA/RULES -> REASONING/EDITOR -> RENDERER",
             "selected_resources": len(resources),
             "source_findings": len(findings),
             "full_text_resources": sum(1 for row in resources if len(str(row.get("material") or "")) >= 800),
-            "card_columns": [
-                "hook",
-                "body",
-                "data_points",
-                "trader_angle",
-                "source_evidence",
-                "risk_line",
-                "cta",
-                "chart_focus",
+            "locked_fields": [
+                "current_price",
+                "support",
+                "resistance",
+                "change_rates",
+                "moving_averages",
+                "rsi",
+                "macd",
+                "atr",
+                "funding_rate",
+                "open_interest",
+                "fear_greed",
+                "source",
+                "url",
+                "generated_at",
+                "timeframe",
             ],
+            "card_schema": [
+                "card_type",
+                "eyebrow",
+                "headline",
+                "subheadline",
+                "key_message",
+                "metrics",
+                "insight",
+                "action",
+                "risk",
+                "visual_direction",
+                "source",
+            ],
+            "editor_passes": editor_meta,
             "note_sections": [
                 "오늘의 결론",
                 "숫자로 보는 BTC 맵",
