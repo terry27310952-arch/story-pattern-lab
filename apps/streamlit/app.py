@@ -18,6 +18,7 @@ from market_data import (
     summarize_market,
 )
 from reasoning_engine import (
+    DEFAULT_BRAND_OUTRO,
     DEFAULT_OUTPUT_LOCALE,
     PROVIDER_LOCAL,
     PROVIDER_OLLAMA,
@@ -33,7 +34,7 @@ except Exception:
     fetch_article_body = None
 
 
-APP_VERSION = "2026-08-15 observer-vertical-brand-v11"
+APP_VERSION = "2026-08-15 kiyosaki-editorial-carousel-v12"
 
 
 MARKET_STRUCTURE_LABELS = {
@@ -206,6 +207,40 @@ st.markdown(
     .observer-preview.data_primary .observer-figure,
     .observer-preview.news_primary .observer-figure { width: 25%; height: 36%; opacity: 0.76; }
     .observer-preview.hero_character .observer-copy { max-width: 64%; }
+    .observer-preview.brand_outro {
+        background:
+            radial-gradient(circle at 50% 38%, rgba(241, 112, 36, 0.22), transparent 28%),
+            linear-gradient(180deg, #020202 0%, #0a0908 58%, #000000 100%);
+    }
+    .observer-preview.brand_outro .observer-copy {
+        max-width: 100%;
+        text-align: center;
+        margin: 0 auto;
+    }
+    .observer-preview.brand_outro .observer-headline {
+        font-size: 2rem;
+        line-height: 1.04;
+        margin-top: 8px;
+        white-space: pre-line;
+    }
+    .observer-preview.brand_outro .observer-sub { color: #f17a2d; }
+    .observer-preview.brand_outro .observer-message {
+        position: absolute;
+        left: 24px;
+        right: 24px;
+        top: 322px;
+        white-space: pre-line;
+        font-size: 1rem;
+    }
+    .observer-preview.brand_outro .observer-metrics { display: none; }
+    .observer-preview.brand_outro .observer-figure {
+        left: 25%;
+        right: auto;
+        bottom: 120px;
+        width: 50%;
+        height: 44%;
+        opacity: 0.98;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -520,6 +555,7 @@ def observer_card_preview_html(card: dict) -> str:
         figure_width = 32
     source = card.get("source") or {}
     source_text = " · ".join([value for value in [source.get("publisher", ""), source.get("short_title", "")] if value])
+    footer_text = card.get("footer") or f"The Observer · {source_text}"
     metric_html = []
     for metric in (card.get("metrics") or [])[:4]:
         variant = metric_variant(metric.get("label", ""))
@@ -540,7 +576,7 @@ def observer_card_preview_html(card: dict) -> str:
       </div>
       <div class="observer-figure" style="width:{figure_width:.1f}%"></div>
       <div class="observer-metrics">{metrics}</div>
-      <div class="observer-source">The Observer · {source}</div>
+      <div class="observer-source">{footer}</div>
     </div>
     """.format(
         layout=layout,
@@ -550,7 +586,7 @@ def observer_card_preview_html(card: dict) -> str:
         message=html.escape(str(card.get("key_message", ""))),
         figure_width=figure_width,
         metrics="".join(metric_html),
-        source=html.escape(source_text),
+        footer=html.escape(footer_text),
     )
 
 
@@ -923,7 +959,11 @@ with st.sidebar:
     auto_fetch_body = st.checkbox("선택 리소스 원문 전체 자동 취합", value=True)
     st.caption("커뮤니티 자료는 제목/반응량만 사용하고, 기사/미디어 자료는 선택된 항목 전부의 본문 취합을 시도합니다. 선택 수를 늘릴수록 전문성은 올라가지만 생성 시간도 늘어납니다.")
     output_locale = st.selectbox("카드 출력 locale", ["ja-JP", "ko-KR"], index=0 if DEFAULT_OUTPUT_LOCALE == "ja-JP" else 1)
-    custom_card_count = st.slider("자율제안 장수", 5, 9, 8, 1)
+    custom_card_count = st.slider("자율제안 분석 카드 수", 5, 7, 6, 1)
+    with st.expander("브랜드 엔딩", expanded=False):
+        st.caption("마지막 카드는 항상 고정 브랜드 발행 카드로 붙습니다.")
+        brand_account = st.text_input("FOLLOW 계정 ID", value=env_value("BRAND_ACCOUNT", ""))
+        brand_cta = st.text_area("고정 CTA", value=DEFAULT_BRAND_OUTRO["cta"], height=72)
 
     st.divider()
     st.caption(f"버전: {APP_VERSION}")
@@ -1114,6 +1154,11 @@ with tabs[3]:
         if make_content:
             resources_for_content = st.session_state.enriched_resources or selected
             config = provider_config(provider_label, temperature)
+            config["brand_outro"] = {
+                "brand_name": DEFAULT_BRAND_OUTRO["brand_name"],
+                "cta": brand_cta.strip() or DEFAULT_BRAND_OUTRO["cta"],
+                "account": brand_account.strip(),
+            }
             st.session_state.content_package = generate_content_package(brief, resources_for_content, custom_card_count, config, output_locale)
             st.success("카드뉴스/Note 생성 완료")
         render_cards(st.session_state.content_package)

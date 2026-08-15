@@ -1234,7 +1234,25 @@ def generate_trader_brief(resources: list[dict], market_snapshot: dict, briefing
     return normalize_external_brief(parsed, local, provider), None
 
 
-CARD_TYPES = {"market_conclusion", "key_levels", "derivatives", "news_context", "scenarios", "trade_plan"}
+MIN_CONTENT_CARDS = 5
+PREFERRED_CONTENT_CARDS = 6
+MAX_CONTENT_CARDS = 7
+BRAND_OUTRO_TYPE = "brand_outro"
+DEFAULT_BRAND_OUTRO = {
+    "brand_name": "勢力ハンター キヨサキ",
+    "cta": "フォローして、\n勢力が入ったポイントを無料でチェック。",
+    "account": "",
+    "locked": True,
+}
+CARD_TYPES = {
+    "market_conclusion",
+    "key_levels",
+    "derivatives",
+    "news_context",
+    "scenarios",
+    "trade_plan",
+    BRAND_OUTRO_TYPE,
+}
 INTERNAL_VISIBLE_BLOCKLIST = [
     "CTA",
     "caption",
@@ -1246,6 +1264,24 @@ INTERNAL_VISIBLE_BLOCKLIST = [
     "analysis",
     "chart_focus",
     "generation_note",
+]
+JA_TRANSLATIONESE_PATTERNS = [
+    "することが重要です",
+    "と考えられます",
+    "であると言えるでしょう",
+    "する必要があります",
+    "注視する必要があります",
+    "市場動向を確認する必要があります",
+]
+JA_EMPTY_VARIABLE_PATTERNS = [
+    r"との間",
+    r"はです",
+    r"は。",
+    r"が。",
+    r"undefined",
+    r"\bnull\b",
+    r"\bNaN\b",
+    r"\$[\s。/]*($|\n)",
 ]
 INSIGHT_LABELS = {
     "market_conclusion": ["오늘의 판단", "한 줄 결론", "내가 보는 핵심"],
@@ -1262,6 +1298,7 @@ JA_INSIGHT_LABELS = {
     "news_context": ["見出しより反応", "市場の読み方", "価格とつなげる"],
     "scenarios": ["3つの経路", "次の分岐点", "シナリオ"],
     "trade_plan": ["今日の行動", "実行条件", "待つ基準"],
+    "brand_outro": ["FOLLOW", "THE OBSERVER", "勢力ハンター"],
 }
 METRIC_LABELS_BY_LOCALE = {
     "ja-JP": {
@@ -1285,6 +1322,10 @@ METRIC_LABELS_BY_LOCALE = {
         "Fear & Greed": "F&G",
         "생성 시각": "AS OF",
         "타임프레임": "TIMEFRAME",
+        "BTC Dominance": "BTC DOM",
+        "ETH/BTC": "ETH/BTC",
+        "TOTAL2": "TOTAL2",
+        "TOTAL3": "TOTAL3",
     },
     "ko-KR": {},
 }
@@ -1297,9 +1338,10 @@ LAYOUT_VARIANTS = [
     "news_primary",
     "scenario_primary",
     "minimal_text",
+    "brand_outro",
 ]
 OBSERVER_BASE_PROMPT = (
-    "Faceless anonymous market observer wearing a tailored black suit, black shirt, black tie and black leather gloves, "
+    "Faceless adult male anonymous market observer wearing a tailored black suit, black shirt, black tie and black leather gloves, "
     "face completely hidden in shadow with absolutely no visible eyes, nose or mouth, subtle warm orange rim light outlining "
     "the head and shoulders, premium low-key cinematic lighting, black institutional financial briefing atmosphere, elegant "
     "editorial composition, restrained black and orange palette, realistic suit and leather texture, sophisticated and minimal, "
@@ -1327,6 +1369,7 @@ OBSERVER_NEGATIVE_PROMPT = [
 ]
 OBSERVER_BRAND_SYSTEM = {
     "brand_role": "The Observer",
+    "publisher_brand": DEFAULT_BRAND_OUTRO["brand_name"],
     "reference_asset_path": "assets/brand/observer_reference.png",
     "color_system": {
         "background": "near-black",
@@ -1424,6 +1467,17 @@ VISUAL_RULES = {
         "focus": "entry_invalidation_wait",
         "negative_space": "bottom area reserved for action conditions",
     },
+    "brand_outro": {
+        "visibility": (0.50, 0.70),
+        "shots": ["front_bust", "three_quarter", "silhouette_closeup"],
+        "layouts": ["brand_outro", "hero_character"],
+        "pose": "hands_clasped_strong_brand_presence",
+        "position": "center",
+        "camera": "medium_close",
+        "lighting": "strong",
+        "focus": "brand_name_character_and_follow_cta",
+        "negative_space": "top and bottom reserved for rendered Japanese brand copy",
+    },
 }
 
 
@@ -1473,6 +1527,10 @@ def locked_market_metrics(brief: dict) -> dict[str, dict]:
         locked_metric("mark_price", "Mark", market.get("btc_mark_price"), as_price(market.get("btc_mark_price")), "USD"),
         locked_metric("open_interest", "OI", market.get("btc_open_interest_contracts"), f"{as_plain_number(market.get('btc_open_interest_contracts'))} contracts"),
         locked_metric("fear_greed", "Fear & Greed", market.get("fear_greed"), as_plain_number(market.get("fear_greed"))),
+        locked_metric("btc_dominance", "BTC Dominance", market.get("btc_dominance"), as_percent(market.get("btc_dominance")), "%"),
+        locked_metric("eth_btc", "ETH/BTC", market.get("eth_btc"), as_plain_number(market.get("eth_btc"))),
+        locked_metric("total2", "TOTAL2", market.get("total2_market_cap"), as_price(market.get("total2_market_cap")), "USD"),
+        locked_metric("total3", "TOTAL3", market.get("total3_market_cap"), as_price(market.get("total3_market_cap")), "USD"),
         locked_metric("generated_at", "생성 시각", brief.get("generated_at"), str(brief.get("generated_at") or "")),
         locked_metric("timeframe", "타임프레임", brief.get("briefing_type"), "주간" if brief.get("briefing_type") == "weekly" else "일간"),
     ]
@@ -1487,14 +1545,23 @@ def normalize_sentence_key(text: object) -> str:
     cleaned = re.sub(r"[\s\W_]+", "", str(text or "").lower())
     for word in ["확인", "기다림", "관찰", "추격금지", "보류", "저항", "지지"]:
         cleaned = cleaned.replace(word, word[:2])
+    for word in ["追わない", "待つ", "確認", "反応", "価格", "境界", "終値", "上抜け", "割る"]:
+        cleaned = cleaned.replace(word.lower(), word[:2].lower())
     return cleaned[:80]
+
+
+def has_ja_empty_variable(text: str) -> bool:
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in JA_EMPTY_VARIABLE_PATTERNS)
 
 
 def sanitize_visible_text(value: object) -> str:
     text = str(value or "")
     for token in INTERNAL_VISIBLE_BLOCKLIST:
         text = text.replace(token, "")
-    return re.sub(r"\s+", " ", text).strip()
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def selected_label(card_type: str, index: int = 0) -> str:
@@ -1572,6 +1639,10 @@ def build_canonical_content_model(brief: dict, resources: list[dict], metrics: d
             "funding": market.get("btc_funding_rate"),
             "open_interest": market.get("btc_open_interest_contracts"),
             "fear_greed": market.get("fear_greed"),
+            "btc_dominance": market.get("btc_dominance"),
+            "eth_btc": market.get("eth_btc"),
+            "total2_market_cap": market.get("total2_market_cap"),
+            "total3_market_cap": market.get("total3_market_cap"),
         },
         "thesis": {
             "market_bias": canonical_bias_code(brief),
@@ -1594,6 +1665,8 @@ def clamp(value: float, low: float, high: float) -> float:
 
 
 def visual_role_for_card(card: dict) -> str:
+    if card.get("card_type") == BRAND_OUTRO_TYPE:
+        return BRAND_OUTRO_TYPE
     if card.get("slide") == 1 and card.get("card_type") == "market_conclusion":
         return "opener"
     return card.get("card_type", "market_conclusion")
@@ -1614,6 +1687,8 @@ def choose_layout_variant(role: str, previous_variant: str | None, metric_count:
 def choose_character_shot(role: str, slide: int, metric_count: int) -> str:
     shots = VISUAL_RULES.get(role, VISUAL_RULES["market_conclusion"]).get("shots", ["three_quarter"])
     if role == "opener":
+        return "front_bust" if slide % 2 else "three_quarter"
+    if role == BRAND_OUTRO_TYPE:
         return "front_bust" if slide % 2 else "three_quarter"
     if role == "key_levels" and metric_count >= 3:
         return "back_view"
@@ -1653,7 +1728,7 @@ def build_observer_image_prompt(card: dict, direction: dict, ratio: str) -> str:
     pose = direction.get("character_pose", "quietly_observing")
     layout = direction.get("layout_variant", "character_side")
     focus = direction.get("visual_focus", "market data")
-    negative_space = direction.get("negative_space", "room for concise Korean typography")
+    negative_space = direction.get("negative_space", "room for renderer-composited Japanese typography")
     metrics_phrase = metric_visual_phrase(card.get("metrics") or [])
     role_phrase = {
         "opener": "strong branded opening frame with the observer as the first visual anchor",
@@ -1663,13 +1738,15 @@ def build_observer_image_prompt(card: dict, direction: dict, ratio: str) -> str:
         "news_context": "two or three restrained headline panels being reviewed calmly",
         "scenarios": "three structured scenario paths for Bull, Base and Bear, information hierarchy dominant",
         "trade_plan": "closing execution frame emphasizing entry, invalidation and wait conditions",
+        "brand_outro": "fixed branded ending card, character and brand recall are dominant, no complex chart UI",
     }.get(role, "premium market briefing card")
     return (
         f"{OBSERVER_BASE_PROMPT} {shot} shot, pose: {pose}, {role_phrase}, layout variant {layout}, "
         f"character positioned {direction.get('character_position')}, camera angle {direction.get('camera_angle')}, "
         f"{direction.get('lighting_intensity')} warm orange rim light, visual focus: {focus}, {metrics_phrase}, "
         f"negative space: {negative_space}, near-black background, off-white typography space, orange accents, "
-        f"green only for support and red only for resistance or risk, premium editorial vertical design, "
+        f"green only for support and red only for resistance or risk, no readable Japanese text generated by the image model, "
+        f"leave clean empty areas for the renderer to composite all Japanese copy, premium editorial vertical design, "
         f"{aspect_ratio_phrase(ratio)}."
     )
 
@@ -1804,23 +1881,198 @@ def editor_pass_market_analysis(brief: dict, resources: list[dict], metrics: dic
     }
 
 
+def metric_available(metrics: dict[str, dict], metric_id: str) -> bool:
+    metric = metrics.get(metric_id) or {}
+    value = metric.get("raw_value")
+    return value is not None and value != "" and metric.get("value") not in {"", "데이터 미수집"}
+
+
+def count_available(metrics: dict[str, dict], metric_ids: list[str]) -> int:
+    return sum(1 for metric_id in metric_ids if metric_available(metrics, metric_id))
+
+
+def evidence_profile(card_type: str, angle: str, analysis: dict) -> dict:
+    metrics = analysis.get("metrics") or {}
+    findings = analysis.get("findings") or []
+    resources = analysis.get("resources") or []
+    evidence: list[dict] = []
+
+    def add_metric(metric_id: str) -> None:
+        if metric_available(metrics, metric_id):
+            metric = metrics[metric_id]
+            evidence.append({"type": "metric", "id": metric_id, "value": metric.get("raw_value")})
+
+    if card_type == "market_conclusion":
+        for metric_id in ["btc_price", "btc_support", "btc_resistance", "fear_greed"]:
+            add_metric(metric_id)
+        strength = 0.72 + min(0.2, len(evidence) * 0.04)
+        novelty = 0.9
+        relevance = 0.95
+        actionability = 0.72
+        overlap = 0.1
+    elif card_type == "key_levels":
+        for metric_id in ["btc_price", "btc_support", "btc_resistance", "atr14"]:
+            add_metric(metric_id)
+        core = count_available(metrics, ["btc_price", "btc_support", "btc_resistance"])
+        strength = 0.95 if core == 3 else 0.45
+        novelty = 0.86
+        relevance = 0.96
+        actionability = 0.9
+        overlap = 0.18
+    elif card_type == "derivatives":
+        for metric_id in ["mark_price", "funding", "open_interest", "rsi14", "macd"]:
+            add_metric(metric_id)
+        core = count_available(metrics, ["mark_price", "funding", "open_interest"])
+        strength = 0.62 + min(0.25, core * 0.08) if core >= 2 else 0.42
+        novelty = 0.78
+        relevance = 0.82
+        actionability = 0.64
+        overlap = 0.25
+    elif card_type == "news_context" and angle == "asset_flow":
+        for metric_id in ["btc_7d", "eth_7d", "eth_btc", "btc_dominance", "total2", "total3"]:
+            add_metric(metric_id)
+        structural = count_available(metrics, ["eth_btc", "btc_dominance", "total2", "total3"])
+        strength = 0.7 if structural >= 2 and count_available(metrics, ["btc_7d", "eth_7d"]) >= 2 else 0.35
+        novelty = 0.62 if strength >= 0.6 else 0.38
+        relevance = 0.7
+        actionability = 0.55
+        overlap = 0.48
+    elif card_type == "news_context":
+        for metric_id in ["btc_price", "btc_support", "btc_resistance", "btc_24h"]:
+            add_metric(metric_id)
+        source = findings[0] if findings else resources[0] if resources else {}
+        if source:
+            evidence.append(
+                {
+                    "type": "source",
+                    "publisher": source.get("source") or source.get("publisher"),
+                    "title": source.get("title") or source.get("short_title"),
+                    "url": source.get("url"),
+                }
+            )
+        strength = 0.72 if source and count_available(metrics, ["btc_price", "btc_support", "btc_resistance"]) >= 2 else 0.45
+        novelty = 0.72
+        relevance = 0.76
+        actionability = 0.55
+        overlap = 0.32
+    elif card_type == "scenarios" and angle == "time_zone":
+        session_metrics = ["asia_session_change", "europe_session_change", "us_session_change", "session_volume", "session_volatility", "us_close"]
+        for metric_id in session_metrics:
+            add_metric(metric_id)
+        strength = 0.72 if count_available(metrics, session_metrics) >= 3 else 0.2
+        novelty = 0.58 if strength >= 0.6 else 0.25
+        relevance = 0.62
+        actionability = 0.5
+        overlap = 0.62
+    elif card_type == "scenarios":
+        for metric_id in ["btc_support", "btc_resistance", "ma20", "ma50"]:
+            add_metric(metric_id)
+        core = count_available(metrics, ["btc_support", "btc_resistance"])
+        strength = 0.84 if core == 2 else 0.4
+        novelty = 0.76
+        relevance = 0.86
+        actionability = 0.78
+        overlap = 0.36
+    elif card_type == "trade_plan" and angle == "risk_control":
+        for metric_id in ["btc_support", "btc_resistance", "atr14", "macd"]:
+            add_metric(metric_id)
+        strength = 0.68 if count_available(metrics, ["btc_support", "btc_resistance", "atr14"]) >= 2 else 0.42
+        novelty = 0.52
+        relevance = 0.72
+        actionability = 0.82
+        overlap = 0.56
+    elif card_type == "trade_plan":
+        for metric_id in ["btc_price", "btc_support", "btc_resistance", "macd"]:
+            add_metric(metric_id)
+        strength = 0.88 if count_available(metrics, ["btc_price", "btc_support", "btc_resistance"]) >= 3 else 0.45
+        novelty = 0.82
+        relevance = 0.88
+        actionability = 0.94
+        overlap = 0.28
+    else:
+        strength = 0.0
+        novelty = 0.0
+        relevance = 0.0
+        actionability = 0.0
+        overlap = 1.0
+
+    return {
+        "evidence_strength": round(strength, 2),
+        "novelty": round(novelty, 2),
+        "relevance": round(relevance, 2),
+        "actionability": round(actionability, 2),
+        "overlap": round(overlap, 2),
+        "evidence": evidence,
+    }
+
+
+def gate_carousel_plan(plan: list[dict], analysis: dict, desired_count: int) -> list[dict]:
+    gated: list[dict] = []
+    seen_roles: set[tuple[str, str]] = set()
+    for item in plan:
+        card_type = item.get("card_type")
+        angle = item.get("angle", "")
+        if card_type == BRAND_OUTRO_TYPE:
+            continue
+        scores = evidence_profile(card_type, angle, analysis)
+        role_key = (card_type, angle)
+        if scores["evidence_strength"] < 0.6:
+            continue
+        if scores["novelty"] < 0.5 and role_key in seen_roles:
+            continue
+        if scores["overlap"] > 0.7:
+            continue
+        next_item = dict(item)
+        next_item["evidence_score"] = {
+            "evidence_strength": scores["evidence_strength"],
+            "novelty": scores["novelty"],
+            "relevance": scores["relevance"],
+            "actionability": scores["actionability"],
+            "overlap": scores["overlap"],
+        }
+        next_item["evidence"] = scores["evidence"]
+        gated.append(next_item)
+        seen_roles.add(role_key)
+        if len(gated) >= desired_count:
+            break
+    if not any(item.get("card_type") == "trade_plan" and item.get("angle") == "execution" for item in gated):
+        execution_scores = evidence_profile("trade_plan", "execution", analysis)
+        if execution_scores["evidence_strength"] >= 0.6:
+            execution_item = {
+                "card_type": "trade_plan",
+                "angle": "execution",
+                "evidence_score": {
+                    "evidence_strength": execution_scores["evidence_strength"],
+                    "novelty": execution_scores["novelty"],
+                    "relevance": execution_scores["relevance"],
+                    "actionability": execution_scores["actionability"],
+                    "overlap": execution_scores["overlap"],
+                },
+                "evidence": execution_scores["evidence"],
+            }
+            if len(gated) >= desired_count and gated:
+                gated[-1] = execution_item
+            else:
+                gated.append(execution_item)
+    return gated
+
+
 def editor_pass_carousel_plan(count: int, analysis: dict) -> list[dict]:
+    desired_count = max(MIN_CONTENT_CARDS, min(MAX_CONTENT_CARDS, count or PREFERRED_CONTENT_CARDS))
     plan = [
         {"card_type": "market_conclusion", "angle": "decision"},
         {"card_type": "key_levels", "angle": "price_boundary"},
         {"card_type": "derivatives", "angle": "positioning_temperature"},
         {"card_type": "news_context", "angle": "source_meaning"},
-        {"card_type": "trade_plan", "angle": "execution"},
+        {"card_type": "news_context", "angle": "asset_flow"},
+        {"card_type": "scenarios", "angle": "time_zone"},
     ]
-    if count >= 6:
-        plan.insert(4, {"card_type": "scenarios", "angle": "path_split"})
-    if count >= 7:
-        plan.insert(5, {"card_type": "news_context", "angle": "asset_flow"})
-    if count >= 8:
-        plan.insert(-1, {"card_type": "scenarios", "angle": "time_zone"})
-    if count >= 9:
-        plan.insert(-1, {"card_type": "trade_plan", "angle": "risk_control"})
-    return plan[:count]
+    if desired_count >= 6:
+        plan.append({"card_type": "scenarios", "angle": "path_split"})
+    if desired_count >= 7:
+        plan.append({"card_type": "trade_plan", "angle": "risk_control"})
+    plan.append({"card_type": "trade_plan", "angle": "execution"})
+    return gate_carousel_plan(plan, analysis, desired_count)
 
 
 def scenario_summary(scenarios: list[dict], limit: int = 3) -> str:
@@ -1878,9 +2130,9 @@ def metric_ids_for_card(card_type: str, angle: str) -> list[str]:
     if card_type == "derivatives":
         return ["mark_price", "funding", "open_interest", "rsi14", "macd"]
     if card_type == "news_context" and angle == "asset_flow":
-        return ["eth_7d", "nikkei_7d", "gold_7d"]
+        return ["btc_7d", "eth_7d", "eth_btc", "btc_dominance"]
     if card_type == "news_context":
-        return ["btc_price", "btc_support", "btc_resistance"]
+        return ["btc_price", "btc_24h", "btc_support", "btc_resistance"]
     if card_type == "scenarios":
         return ["btc_support", "btc_resistance", "ma20", "ma50"]
     if card_type == "trade_plan":
@@ -1899,6 +2151,17 @@ def build_semantic_cards(plan: list[dict], analysis: dict, label: str, semantic:
         source = resources[(index - 1) % len(resources)] if resources else primary_source
         card = base_card(label, index, card_type, source)
         card["metrics"] = metric_list(metrics, metric_ids_for_card(card_type, angle))
+        card["evidence_score"] = item.get("evidence_score") or evidence_profile(card_type, angle, analysis).get("evidence_score", {})
+        if not card["evidence_score"]:
+            profile = evidence_profile(card_type, angle, analysis)
+            card["evidence_score"] = {
+                "evidence_strength": profile["evidence_strength"],
+                "novelty": profile["novelty"],
+                "relevance": profile["relevance"],
+                "actionability": profile["actionability"],
+                "overlap": profile["overlap"],
+            }
+        card["evidence"] = item.get("evidence") or evidence_profile(card_type, angle, analysis).get("evidence", [])
         card["semantic"] = {
             "role": semantic_role(card_type, angle),
             "angle": angle,
@@ -1918,21 +2181,41 @@ def build_semantic_cards(plan: list[dict], analysis: dict, label: str, semantic:
 def ja_copy_for_card(card: dict) -> dict:
     card_type = card.get("card_type")
     role = card.get("semantic", {}).get("role")
-    support = metric_value(card, "btc_support")
-    resistance = metric_value(card, "btc_resistance")
-    price = metric_value(card, "btc_price")
+    source = card.get("source") or {}
+    semantic = card.get("semantic") or {}
+    support = metric_value(card, "btc_support") or as_price(semantic.get("support"))
+    resistance = metric_value(card, "btc_resistance") or as_price(semantic.get("resistance"))
+    price = metric_value(card, "btc_price") or as_price(semantic.get("current_price"))
+    btc_24h = metric_value(card, "btc_24h")
     funding = metric_value(card, "funding")
     oi = metric_value(card, "open_interest")
     rsi_value = metric_value(card, "rsi14")
     mark = metric_value(card, "mark_price")
+    btc_7d = metric_value(card, "btc_7d")
+    eth_7d = metric_value(card, "eth_7d")
+    eth_btc = metric_value(card, "eth_btc")
+    btc_dominance = metric_value(card, "btc_dominance")
+    source_title = clean_text(source.get("short_title") or "選択ニュース", 42)
+
+    if card_type == BRAND_OUTRO_TYPE:
+        brand = card.get("brand_outro") or DEFAULT_BRAND_OUTRO
+        return {
+            "eyebrow": "THE OBSERVER",
+            "headline": str(brand.get("brand_name") or DEFAULT_BRAND_OUTRO["brand_name"]).replace(" ", "\n"),
+            "subheadline": "The Observer",
+            "key_message": brand.get("cta") or DEFAULT_BRAND_OUTRO["cta"],
+            "insight": {"visible": False, "label": "", "text": ""},
+            "action": {"visible": False, "label": "", "text": ""},
+            "risk": {"visible": False, "text": ""},
+        }
 
     if card_type == "market_conclusion":
         return {
             "eyebrow": "THE OBSERVER",
             "headline": "まだ追わない。境界を見る。",
-            "subheadline": f"BTCは{support}と{resistance}の間で判断待ち。",
-            "key_message": "材料よりも、価格がどちらの境界を守るかが先です。",
-            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "強い結論を出す場面ではなく、反応を読む場面です。"},
+            "subheadline": f"下は{support}。\n上は{resistance}。",
+            "key_message": "価格はまだ答えていない。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "強い結論より、まず境界の反応を読む場面です。"},
             "action": {"visible": False, "label": "", "text": ""},
             "risk": {"visible": False, "text": ""},
         }
@@ -1940,19 +2223,19 @@ def ja_copy_for_card(card: dict) -> dict:
         return {
             "eyebrow": "PRICE MAP",
             "headline": "価格はこの2点で決まる",
-            "subheadline": f"SUPPORT {support} / RESISTANCE {resistance}",
-            "key_message": f"{support}は防衛、{resistance}は回復確認。",
-            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "中心では予測の精度が落ちます。反応を見る場所を絞ります。"},
-            "action": {"visible": True, "label": "次に見ること", "text": f"{support}の反応を先に確認。"},
-            "risk": {"visible": True, "text": f"{support}を終値で割るなら、強気解釈はいったん下げます。"},
+            "subheadline": f"SUPPORT {support}\nRESISTANCE {resistance}",
+            "key_message": f"{support}を守れるか。\n{resistance}を上抜けられるか。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "真ん中ではなく、反応が出る場所だけを見る。"},
+            "action": {"visible": True, "label": "次に見ること", "text": f"まず{support}の反応。"},
+            "risk": {"visible": True, "text": f"終値で{support}を割るなら、見方を変える。"},
         }
     if card_type == "derivatives":
         return {
             "eyebrow": "DERIVATIVES",
             "headline": "ポジションは温まっている",
             "subheadline": f"MARK {mark} / FUNDING {funding} / OI {oi}",
-            "key_message": "先物の傾きは方向ではなく、温度を示しています。",
-            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"RSI {rsi_value}で過熱感が薄いなら、価格確認を待つ余地があります。"},
+            "key_message": "ロング優勢。\nただし、まだ過熱ではない。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"RSI {rsi_value}。温度は上がったが、価格の確認はまだ残る。"},
             "action": {"visible": False, "label": "", "text": ""},
             "risk": {"visible": False, "text": ""},
         }
@@ -1960,9 +2243,9 @@ def ja_copy_for_card(card: dict) -> dict:
         return {
             "eyebrow": "ASSET FLOW",
             "headline": "アルトはBTCの後でいい",
-            "subheadline": "先に見るのは、BTCの安定と相対強度。",
-            "key_message": "単独材料よりも、資金が広がる順番を見ます。",
-            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "BTCが基準を守るまでは、アルト材料は候補に留めます。"},
+            "subheadline": f"BTC 7D {btc_7d} / ETH 7D {eth_7d}\nETH/BTC {eth_btc}",
+            "key_message": "広がる順番を見る。\n単独材料だけでは追わない。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"BTC Dominance {btc_dominance}を合わせて、資金の広がりを読む。"},
             "action": {"visible": False, "label": "", "text": ""},
             "risk": {"visible": False, "text": ""},
         }
@@ -1970,9 +2253,9 @@ def ja_copy_for_card(card: dict) -> dict:
         return {
             "eyebrow": "NEWS CONTEXT",
             "headline": "見出しより、反応を見る",
-            "subheadline": "ニュースは材料。判定は価格。",
-            "key_message": "市場がどの価格帯でニュースを消化したかを優先します。",
-            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"いまの基準は{price}そのものより、{support}と{resistance}への反応です。"},
+            "subheadline": f"{source_title}\nBTC {btc_24h} / {resistance}未回復",
+            "key_message": "材料はある。\n価格はまだ答えていない。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"{price}で止まっているだけでは足りない。見るのは{resistance}の上。"},
             "action": {"visible": False, "label": "", "text": ""},
             "risk": {"visible": False, "text": ""},
         }
@@ -1990,10 +2273,10 @@ def ja_copy_for_card(card: dict) -> dict:
         return {
             "eyebrow": "SCENARIO",
             "headline": "経路は3つ。基準は1つ。",
-            "subheadline": "Bull / Base / Bear を価格で分ける。",
-            "key_message": f"{support}を守るか、{resistance}を回復するかで次の読みを変えます。",
-            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "強気は回復定着、基本はレンジ消化、弱気は支持割れ後の戻り失敗です。"},
-            "action": {"visible": True, "label": "分岐点", "text": f"{resistance}回復までは待つ。"},
+            "subheadline": f"BULL  {resistance}突破\nBASE  {support} - {resistance}\nBEAR  {support}割れ",
+            "key_message": "分岐は予想ではなく、価格で切る。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "上で定着なら強気。間ならレンジ。下で戻せないなら弱気。"},
+            "action": {"visible": True, "label": "分岐点", "text": f"{resistance}の上で終値。"},
             "risk": {"visible": False, "text": ""},
         }
     if card_type == "trade_plan" and role == "risk_control":
@@ -2009,10 +2292,10 @@ def ja_copy_for_card(card: dict) -> dict:
     return {
         "eyebrow": "TRADE PLAN",
         "headline": "今日は条件だけを残す",
-        "subheadline": "入るより先に、待つ場所を決める。",
-        "key_message": f"{support}付近の反応、または{resistance}回復後の浅い押し目だけを見ます。",
+        "subheadline": "入る条件より、\n入らない条件を先に決める。",
+        "key_message": f"{support}付近の反応。\nまたは{resistance}回復後の浅い押し目。",
         "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "触らない時間を決めることも、ポジション管理です。"},
-        "action": {"visible": True, "label": "行動基準", "text": "この区間では、観察もポジション。"},
+        "action": {"visible": True, "label": "行動基準", "text": "今は待つ。"},
         "risk": {"visible": False, "text": ""},
     }
 
@@ -2064,6 +2347,70 @@ def localize_cards(cards: list[dict], locale: str = DEFAULT_OUTPUT_LOCALE) -> li
         )
         localized.append(next_card)
     return localized
+
+
+def brand_outro_settings(config: dict | None = None) -> dict:
+    settings = dict(DEFAULT_BRAND_OUTRO)
+    candidate = (config or {}).get("brand_outro") or {}
+    for key in ["brand_name", "cta", "account"]:
+        if candidate.get(key):
+            settings[key] = str(candidate[key])
+    settings["locked"] = True
+    return settings
+
+
+def make_brand_outro_card(
+    label: str,
+    slide: int,
+    locale: str,
+    config: dict | None = None,
+    visual_direction: dict | None = None,
+) -> dict:
+    brand = brand_outro_settings(config)
+    footer = f"FOLLOW / {brand['account']}" if brand.get("account") else "FOLLOW"
+    card = base_card(label, slide, BRAND_OUTRO_TYPE, {"source": brand["brand_name"], "title": "Brand Ending"})
+    card.update(
+        {
+            "locale": locale,
+            "eyebrow": "THE OBSERVER",
+            "headline": brand["brand_name"].replace(" ", "\n"),
+            "subheadline": "The Observer",
+            "key_message": brand["cta"],
+            "metrics": [],
+            "insight": {"visible": False, "label": "", "text": ""},
+            "action": {"visible": False, "label": "", "text": ""},
+            "risk": {"visible": False, "text": ""},
+            "source": {"publisher": brand["brand_name"], "short_title": footer},
+            "brand_outro": brand,
+            "footer": footer,
+            "evidence_score": {
+                "evidence_strength": 1.0,
+                "novelty": 1.0,
+                "relevance": 1.0,
+                "actionability": 1.0,
+                "overlap": 0.0,
+            },
+            "evidence": [{"type": "brand", "locked": True}],
+        }
+    )
+    if visual_direction:
+        card["visual_direction"] = visual_direction
+    return card
+
+
+def enforce_brand_outro(cards: list[dict], label: str, locale: str, config: dict | None = None) -> list[dict]:
+    content_cards = [card for card in cards if card.get("card_type") != BRAND_OUTRO_TYPE]
+    existing_outro = next((card for card in reversed(cards) if card.get("card_type") == BRAND_OUTRO_TYPE), {})
+    visual_direction = existing_outro.get("visual_direction") if isinstance(existing_outro, dict) else None
+    final_slide = len(content_cards) + 1
+    outro = make_brand_outro_card(label, final_slide, locale, config, visual_direction)
+    return content_cards + [outro]
+
+
+def renumber_cards(cards: list[dict]) -> list[dict]:
+    for index, card in enumerate(cards, start=1):
+        card["slide"] = index
+    return cards
 
 
 def base_card(label: str, slide: int, card_type: str, source: dict) -> dict:
@@ -2289,9 +2636,11 @@ def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
 
     for card in cards:
         card_type = card.get("card_type")
+        card.setdefault("qa", {}).setdefault("renderable", True)
         if card_type not in CARD_TYPES:
             warnings.append(f"invalid card_type normalized: {card_type}")
             card["card_type"] = "market_conclusion"
+            card_type = card["card_type"]
         for field in ["eyebrow", "headline", "subheadline", "key_message"]:
             card[field] = sanitize_visible_text(card.get(field, ""))
         for nested in ["insight", "action", "risk"]:
@@ -2306,13 +2655,13 @@ def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
             card["key_message"] = card.get("subheadline") or card.get("key_message")
             card["qa"]["warnings"].append("headline_key_message_deduped")
         risk_key = card.get("qa", {}).get("risk_key") or normalize_sentence_key(card.get("risk", {}).get("text"))
-        if card.get("risk", {}).get("visible"):
+        if card_type != BRAND_OUTRO_TYPE and card.get("risk", {}).get("visible"):
             if risk_key in seen_risks:
                 card["risk"]["visible"] = False
                 card["qa"]["warnings"].append("duplicate_risk_hidden")
             else:
                 seen_risks.add(risk_key)
-        if card.get("action", {}).get("visible"):
+        if card_type != BRAND_OUTRO_TYPE and card.get("action", {}).get("visible"):
             action_key = normalize_sentence_key(card.get("action", {}).get("text"))
             if action_key in seen_actions or visible_action_count >= visible_action_budget:
                 card["action"]["visible"] = False
@@ -2330,12 +2679,28 @@ def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
                 card["qa"]["warnings"].append(f"blocked_label_removed:{blocked}")
                 warnings.append(f"blocked visible token removed: {blocked}")
         locale = card.get("locale") or DEFAULT_OUTPUT_LOCALE
-        if locale == "ja-JP" and re.search(r"[가-힣]", visible_card_text(card)):
-            card["qa"]["warnings"].append("ja_validation_hangul_detected")
-            warnings.append("ja-JP visible text contains Korean characters")
+        visible_text = visible_card_text(card)
+        if locale == "ja-JP":
+            if re.search(r"[가-힣]", visible_text):
+                card["qa"]["warnings"].append("ja_validation_hangul_detected")
+                card["qa"]["renderable"] = False
+                warnings.append("ja-JP visible text contains Korean characters")
+            for pattern in JA_TRANSLATIONESE_PATTERNS:
+                if pattern in visible_text:
+                    card["qa"]["warnings"].append(f"ja_translationese_pattern:{pattern}")
+                    warnings.append(f"Japanese translationese pattern detected: {pattern}")
+            if has_ja_empty_variable(visible_text):
+                card["qa"]["warnings"].append("empty_variable_pattern_detected")
+                card["qa"]["renderable"] = False
+                warnings.append("empty dynamic variable pattern detected")
         if any(not metric.get("locked") for metric in card.get("metrics", []) or []):
             card["qa"]["warnings"].append("numeric_validation_unlocked_metric")
             warnings.append("metric missing locked flag")
+        evidence_strength = to_float((card.get("evidence_score") or {}).get("evidence_strength"))
+        if card_type != BRAND_OUTRO_TYPE and (evidence_strength is None or evidence_strength < 0.6):
+            card["qa"]["warnings"].append("evidence_gate_failed")
+            card["qa"]["renderable"] = False
+            warnings.append(f"analysis card evidence below threshold: {card_type}")
         direction = card.get("visual_direction") or {}
         layout = direction.get("layout_variant")
         shot = direction.get("character_shot")
@@ -2354,11 +2719,25 @@ def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
         if card.get("slide") == 1 and visibility is not None and visibility < 0.45:
             card["qa"]["warnings"].append("character_validation_cover_underbranded")
             warnings.append("cover character visibility below 0.45")
+        if card_type == BRAND_OUTRO_TYPE and visibility is not None and visibility < 0.5:
+            card["qa"]["warnings"].append("brand_outro_character_underexposed")
+            warnings.append("brand_outro character visibility below 0.50")
         prompt = " ".join((direction.get("image_prompts") or {}).values())
-        required_identity = ["Faceless anonymous market observer", "black suit", "black shirt", "black tie", "black leather gloves", "orange rim light"]
+        required_identity = ["Faceless", "black suit", "black shirt", "black tie", "black leather gloves", "orange rim light"]
         if prompt and any(item not in prompt for item in required_identity):
             card["qa"]["warnings"].append("character_validation_identity_prompt_missing")
             warnings.append("character identity prompt missing immutable constraint")
+    if not cards or cards[-1].get("card_type") != BRAND_OUTRO_TYPE:
+        warnings.append("final card is not brand_outro")
+    else:
+        final_text = visible_card_text(cards[-1])
+        brand = cards[-1].get("brand_outro") or DEFAULT_BRAND_OUTRO
+        if brand.get("brand_name") not in final_text.replace("\n", " "):
+            cards[-1]["qa"]["warnings"].append("brand_name_missing")
+            warnings.append("brand_outro missing fixed brand name")
+        if "勢力が入ったポイントを無料でチェック" not in final_text:
+            cards[-1]["qa"]["warnings"].append("brand_cta_missing")
+            warnings.append("brand_outro missing fixed CTA")
     return cards, warnings
 
 
@@ -2370,6 +2749,7 @@ def make_card_set(
     config: dict | None = None,
     locale: str = DEFAULT_OUTPUT_LOCALE,
 ) -> tuple[list[dict], dict]:
+    content_count = max(MIN_CONTENT_CARDS, min(MAX_CONTENT_CARDS, count or PREFERRED_CONTENT_CARDS))
     metrics = locked_market_metrics(brief)
     semantic = build_canonical_content_model(brief, resources, metrics)
     semantic["locale"] = locale
@@ -2377,12 +2757,14 @@ def make_card_set(
     analysis["scenarios"] = brief.get("scenarios") or []
     active_config = config or {"provider": PROVIDER_LOCAL}
     plan_result = reason(
-        {"count": count, "analysis": analysis, "semantic": semantic},
+        {"count": content_count, "analysis": analysis, "semantic": semantic},
         "carousel_plan",
         REASONING_SCHEMAS["carousel_plan"],
         active_config,
     )
-    plan = plan_result.get("cards") or deterministic_safe_reason({"count": count}, "carousel_plan").get("cards", [])
+    plan = gate_carousel_plan(plan_result.get("cards") or [], analysis, content_count)
+    if not plan:
+        plan = editor_pass_carousel_plan(content_count, analysis)
     copy_result = reason(
         {"plan": plan, "analysis": analysis, "label": label, "semantic": semantic},
         "card_copy",
@@ -2397,6 +2779,7 @@ def make_card_set(
         active_config,
     )
     cards = localization_result.get("cards") or localize_cards(cards, locale)
+    cards = enforce_brand_outro(cards, label, locale, active_config)
     visual_result = reason(
         {"cards": cards, "semantic": semantic},
         "visual_direction",
@@ -2404,17 +2787,24 @@ def make_card_set(
         active_config,
     )
     cards = visual_result.get("cards") or editor_pass_visual_system(cards)
+    cards = enforce_brand_outro(cards, label, locale, active_config)
+    cards = renumber_cards(cards)
     cards, qa_warnings = editor_pass_qa(cards)
     return cards, {
-        "passes": ["market_analysis", "semantic_content_model", "carousel_plan", "card_copy", "ja_localization", "observer_visual_system", "qa"],
+        "passes": ["market_analysis", "semantic_content_model", "carousel_plan", "evidence_gate", "card_copy", "ja_localization", "observer_visual_system", "brand_outro_lock", "qa"],
         "locale": locale,
         "semantic_model": semantic,
         "locked_metric_ids": list(metrics.keys()),
+        "requested_content_cards": content_count,
+        "content_card_count": sum(1 for card in cards if card.get("card_type") != BRAND_OUTRO_TYPE),
+        "final_card_count": len(cards),
         "card_types": [card["card_type"] for card in cards],
         "layout_variants": [card.get("visual_direction", {}).get("layout_variant") for card in cards],
         "character_shots": [card.get("visual_direction", {}).get("character_shot") for card in cards],
         "aspect_ratios": ["4:5", "9:16"],
         "brand_role": OBSERVER_BRAND_SYSTEM["brand_role"],
+        "publisher_brand": brand_outro_settings(active_config)["brand_name"],
+        "evidence_gate": [card.get("evidence_score") for card in cards if card.get("card_type") != BRAND_OUTRO_TYPE],
         "reasoning": {
             "plan": plan_result.get("_reasoning_meta", {}),
             "copy": copy_result.get("_reasoning_meta", {}),
@@ -2570,7 +2960,7 @@ def generate_content_package(
     config: dict | None = None,
     locale: str = DEFAULT_OUTPUT_LOCALE,
 ) -> dict:
-    suggested = max(5, min(9, custom_count or 8))
+    suggested = max(MIN_CONTENT_CARDS, min(MAX_CONTENT_CARDS, custom_count or PREFERRED_CONTENT_CARDS))
     active_locale = locale if locale in SUPPORTED_OUTPUT_LOCALES else DEFAULT_OUTPUT_LOCALE
     cards_5, meta_5 = make_card_set(brief, resources, 5, "5장", config, active_locale)
     cards_6, meta_6 = make_card_set(brief, resources, 6, "6장", config, active_locale)
@@ -2588,8 +2978,10 @@ def generate_content_package(
         "cards": cards,
         "note_markdown": build_note_markdown(brief, resources),
         "content_quality": {
-            "architecture": "DATA/RULES -> REASONING/EDITOR -> RENDERER",
+            "architecture": "DATA -> REASONING/EDITORIAL -> LOCALIZATION/VISUAL DIRECTION -> RENDERER",
             "brand_role": OBSERVER_BRAND_SYSTEM["brand_role"],
+            "publisher_brand": brand_outro_settings(config)["brand_name"],
+            "final_brand_card": brand_outro_settings(config),
             "production_locale": active_locale,
             "brand_system": OBSERVER_BRAND_SYSTEM,
             "supported_aspect_ratios": ["4:5", "9:16"],
@@ -2605,6 +2997,12 @@ def generate_content_package(
                 "hand_closeup",
             ],
             "negative_prompt": ", ".join(OBSERVER_NEGATIVE_PROMPT),
+            "content_card_range": {
+                "minimum": MIN_CONTENT_CARDS,
+                "preferred": PREFERRED_CONTENT_CARDS,
+                "maximum": MAX_CONTENT_CARDS,
+                "final_brand_card": 1,
+            },
             "selected_resources": len(resources),
             "source_findings": len(findings),
             "full_text_resources": sum(1 for row in resources if len(str(row.get("material") or "")) >= 800),
@@ -2620,6 +3018,8 @@ def generate_content_package(
                 "funding_rate",
                 "open_interest",
                 "fear_greed",
+                "btc_dominance",
+                "eth_btc",
                 "source",
                 "url",
                 "generated_at",
@@ -2637,6 +3037,7 @@ def generate_content_package(
                 "risk",
                 "visual_direction",
                 "source",
+                BRAND_OUTRO_TYPE,
             ],
             "editor_passes": editor_meta,
             "note_sections": [

@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 
 USER_AGENT = "Mozilla/5.0 StoryPatternLab/1.1; crypto-market-levels"
-MARKET_SCHEMA_VERSION = "price-level-depth-v5-derivatives"
+MARKET_SCHEMA_VERSION = "price-level-depth-v6-global-context"
 
 
 TRADING_ASSETS = {
@@ -710,6 +710,7 @@ def summarize_market(snapshot: dict) -> dict:
     gold = find_asset(snapshot, "Gold Futures")
     dxy = find_asset(snapshot, "US Dollar Index")
     fear = snapshot.get("fear_greed", {})
+    global_context = snapshot.get("global_context", {}) or {}
     btc_tech = snapshot.get("technicals", {}).get("Bitcoin", {})
     btc_indicators = btc_tech.get("indicators", {})
     btc_levels = btc_tech.get("levels", {})
@@ -746,6 +747,10 @@ def summarize_market(snapshot: dict) -> dict:
         support_distance = distance_pct(safe_float(btc_support_level), safe_float(btc_price))
     if resistance_distance is None:
         resistance_distance = distance_pct(safe_float(btc_resistance_level), safe_float(btc_price))
+    eth_btc = None
+    if safe_float(eth.get("price")) is not None and safe_float(btc_price) not in (None, 0):
+        eth_btc = round(safe_float(eth.get("price")) / safe_float(btc_price), 8)
+
     return {
         "bias": bias,
         "label": label,
@@ -774,11 +779,15 @@ def summarize_market(snapshot: dict) -> dict:
         "btc_derivatives_source": btc_derivative.get("source"),
         "eth_price": eth.get("price"),
         "eth_7d": eth.get("change_7d"),
+        "eth_btc": global_context.get("eth_btc") or eth_btc,
         "sol_price": sol.get("price"),
         "sol_7d": sol.get("change_7d"),
         "nikkei_7d": nikkei.get("change_7d"),
         "gold_7d": gold.get("change_7d"),
         "dxy_7d": dxy.get("change_7d"),
+        "btc_dominance": global_context.get("btc_dominance"),
+        "total2_market_cap": global_context.get("total2_market_cap"),
+        "total3_market_cap": global_context.get("total3_market_cap"),
         "fear_greed": fear.get("value"),
         "fear_greed_label": fear.get("classification"),
     }

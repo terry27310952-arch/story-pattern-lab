@@ -3,7 +3,8 @@
 Streamlit app for collecting Japanese and global crypto media, Japanese
 community signals, CoinMarketCap/Yahoo Finance public headline lists, and live
 market context, then turning selected full-text resources into trader-facing
-briefings, card news, Note content, and Excel packages.
+briefings, card news, Note content, and Excel packages for the Japanese
+editorial brand `勢力ハンター キヨサキ`.
 
 ## Core Flow
 
@@ -42,23 +43,28 @@ briefings, card news, Note content, and Excel packages.
    a personal market view rather than a list of collected facts.
    Daily notes are written as time-zone interpretation essays with expected
    move, action plan, and no-trade criteria.
-10. Convert the briefing into production-ready card news sets through a
-    three-layer pipeline:
-    - `DATA/RULES`: lock current price, support, resistance, rates, MA, RSI,
-      MACD, ATR, funding, open interest, Fear & Greed, source, URL,
-      generation date, and timeframe.
-    - `REASONING/EDITOR`: choose the important signals, plan the carousel,
-      write natural card copy, and run QA against repetition and internal labels.
-    - `RENDERER`: display only final user-facing card text from the agreed
-      schema.
+10. Convert the briefing into production-ready editorial carousel sets through
+    a four-layer pipeline:
+    - `DATA`: lock current price, support, resistance, rates, MA, RSI, MACD,
+      ATR, funding, open interest, Fear & Greed, BTC dominance, ETH/BTC,
+      source, URL, generation date, and timeframe.
+    - `REASONING/EDITORIAL`: choose important signals, score evidence, remove
+      weak or overlapping card candidates, and plan the carousel narrative.
+    - `LOCALIZATION/VISUAL DIRECTION`: create Japanese-native editorial copy
+      and choose vertical layout, character shot, pose, camera, and hierarchy.
+    - `RENDERER`: display only final user-facing card text, metrics, sources,
+      and renderer-composited Japanese typography.
     Supported card types are fixed to `market_conclusion`, `key_levels`,
-    `derivatives`, `news_context`, `scenarios`, and `trade_plan`.
+    `derivatives`, `news_context`, `scenarios`, `trade_plan`, and
+    `brand_outro`.
     The visual layer is branded around `The Observer`: a faceless anonymous
     market observer in black suit, black shirt, black tie, black leather gloves,
     and warm orange rim light. Cards are vertical-first for 4:5
     `1080x1350` and 9:16 `1080x1920`, not square layouts stretched vertically.
-    The renderer adds a 4:5 dark editorial preview, while the production data
-    includes image prompts for both vertical ratios.
+    Image prompts never ask the image model to render long Japanese text; the
+    renderer composites copy, metrics, chart labels, and sources. Every set ends
+    with a locked `brand_outro` card:
+    `勢力ハンター キヨサキ` / `フォローして、勢力が入ったポイントを無料でチェック。`
 11. Export Markdown, JSON, and `.xlsx` files with separate sheets for briefing,
     source findings, scenarios, card news, Note, sources, market data, price
     levels, indicators, derivatives, and trader stance. Card sheets use the
