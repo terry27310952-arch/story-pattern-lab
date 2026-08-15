@@ -29,16 +29,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r apps/streamlit/requirements.txt
 
-      - name: Compile story runtime
+      - name: Compile production pipelines
         run: |
           python -m py_compile \
+            apps/streamlit/content_modes.py \
+            apps/streamlit/mode_resource_pipeline.py \
+            apps/streamlit/trader_pipeline.py \
             apps/streamlit/story_engine.py \
+            apps/streamlit/story_content_pipeline.py \
+            apps/streamlit/story_output_guard.py \
+            apps/streamlit/mode_exporter.py \
+            apps/streamlit/app_v2.py \
+            apps/streamlit/visual_variation_runtime.py \
+            apps/streamlit/story_render_runtime.py \
+            streamlit_app.py
+
+      - name: Compile legacy compatibility modules
+        run: |
+          python -m py_compile \
             apps/streamlit/story_pipeline_runtime.py \
             apps/streamlit/story_source_runtime.py \
             apps/streamlit/story_deck_runtime.py \
-            apps/streamlit/story_render_runtime.py \
-            apps/streamlit/story_export_runtime.py \
-            streamlit_app.py
+            apps/streamlit/story_export_runtime.py
 
       - name: Run regression tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
