@@ -16,6 +16,7 @@ import story_engine  # noqa: E402
 import story_export_runtime  # noqa: E402
 import story_pipeline_runtime  # noqa: E402
 import story_render_runtime  # noqa: E402
+import story_source_runtime  # noqa: E402
 import visual_variation_runtime  # noqa: E402
 
 
@@ -122,6 +123,31 @@ class StoryEngineV5Test(unittest.TestCase):
         self.assertNotEqual(money, policy)
         self.assertEqual(money[0], "hook")
         self.assertEqual(money[-1], "watch")
+
+    def test_source_patch_expands_story_rich_sources_and_preserves_selection(self) -> None:
+        captured = {}
+
+        def collect_resources(selected_rss, selected_public, limit):
+            captured["rss"] = list(selected_rss)
+            return [GENERIC, MONEY_FLOW], ["ok"]
+
+        fake = SimpleNamespace(
+            collect_resources=collect_resources,
+            RSS_SOURCES={
+                "CoinDesk Global": {},
+                "Blockworks": {},
+                "BeInCrypto": {},
+                "CRYPTO TIMES JP": {},
+            },
+        )
+        story_source_runtime.apply_source_patch(fake)
+        rows, logs = fake.collect_resources(["CoinDesk Global"], [], 20)
+        self.assertIn("CoinDesk Global", captured["rss"])
+        self.assertIn("Blockworks", captured["rss"])
+        self.assertIn("BeInCrypto", captured["rss"])
+        self.assertIn("CRYPTO TIMES JP", captured["rss"])
+        self.assertEqual(rows[0]["source"], "Blockworks")
+        self.assertEqual(logs, ["ok"])
 
     def test_storyify_removes_character_from_content_but_locks_outro(self) -> None:
         brief = {"story_context": story_engine.story_context([MONEY_FLOW, GENERIC])}
