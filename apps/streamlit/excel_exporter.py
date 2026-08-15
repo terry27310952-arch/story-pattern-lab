@@ -80,13 +80,16 @@ def add_source_findings_sheet(wb: Workbook, brief: dict) -> None:
                 "source": item.get("source", ""),
                 "title": item.get("title", ""),
                 "role": item.get("role", ""),
+                "asset_relevance": item.get("asset_relevance", {}),
+                "display_headline_ja": item.get("display_headline_ja", ""),
+                "news_reaction": item.get("news_reaction", {}),
                 "material_chars": item.get("material_chars", ""),
                 "evidence": "\n".join(item.get("evidence", [])),
                 "trader_read": item.get("trader_read", ""),
                 "url": item.get("url", ""),
             }
         )
-    append_table(ws, ["source", "title", "role", "material_chars", "evidence", "trader_read", "url"], rows)
+    append_table(ws, ["source", "title", "role", "asset_relevance", "display_headline_ja", "news_reaction", "material_chars", "evidence", "trader_read", "url"], rows)
 
 
 def add_scenarios_sheet(wb: Workbook, brief: dict) -> None:
@@ -157,6 +160,11 @@ def add_card_sheet(wb: Workbook, name: str, cards: list[dict]) -> None:
             "insight",
             "action",
             "risk",
+            "trade_plan",
+            "card_purpose",
+            "new_information",
+            "semantic_summary",
+            "provenance",
             "visual_direction",
             "source",
             "qa",

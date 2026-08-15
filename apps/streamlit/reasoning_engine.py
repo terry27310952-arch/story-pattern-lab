@@ -104,6 +104,72 @@ def source_quality(row: dict) -> dict:
     }
 
 
+ASSET_KEYWORDS = {
+    "BTC": ["BTC", "Bitcoin", "ビットコイン", "bitcoin"],
+    "ETH": ["ETH", "Ethereum", "イーサリアム", "ether"],
+    "SOL": ["SOL", "Solana", "ソラナ"],
+    "XRP": ["XRP", "Ripple", "リップル"],
+    "LINK": ["LINK", "Chainlink", "チェーンリンク"],
+    "DOGE": ["DOGE", "Dogecoin", "ドージ"],
+}
+
+
+def infer_asset_relevance(row: dict) -> dict:
+    title = str(row.get("title") or row.get("short_title") or "")
+    tags = str(row.get("tags") or "")
+    material = str(row.get("material") or row.get("excerpt") or "")[:1200]
+    haystack = f"{title} {tags} {material}".lower()
+    scores: dict[str, float] = {}
+    for asset, keywords in ASSET_KEYWORDS.items():
+        score = 0.0
+        for keyword in keywords:
+            lowered = keyword.lower()
+            if lowered in str(title).lower():
+                score += 0.45
+            if lowered in str(tags).lower():
+                score += 0.35
+            if lowered in haystack:
+                score += 0.2
+        if score:
+            scores[asset] = round(min(1.0, score), 3)
+    primary_asset = max(scores, key=scores.get) if scores else "BTC" if "crypto" in haystack or "market" in haystack else ""
+    secondary_assets = [asset for asset, score in sorted(scores.items(), key=lambda item: -item[1]) if asset != primary_asset and score >= 0.25]
+    macro_terms = ["fed", "boj", "nikkei", "gold", "dollar", "yield", "macro", "etf", "regulation", "sec"]
+    macro_relevance = 0.65 if any(term in haystack for term in macro_terms) else 0.0
+    market_scope = "asset_specific" if primary_asset and scores.get(primary_asset, 0) >= 0.5 else "macro" if macro_relevance else "market_general"
+    return {
+        "primary_asset": primary_asset,
+        "secondary_assets": secondary_assets,
+        "market_scope": market_scope,
+        "btc_relevance": scores.get("BTC", 0.35 if market_scope in {"macro", "market_general"} else 0.0),
+        "alt_relevance": max([score for asset, score in scores.items() if asset != "BTC"] or [0.0]),
+        "macro_relevance": macro_relevance,
+    }
+
+
+def japanese_short_headline(title: object, relevance: dict | None = None) -> str:
+    raw = clean_text(title, 180)
+    lower = raw.lower()
+    asset = (relevance or {}).get("primary_asset") or ""
+    if asset == "LINK" or "chainlink" in lower:
+        return "Chainlinkへの期待が再浮上"
+    if asset == "ETH" or "ethereum" in lower:
+        return "Ethereum材料を価格で確認"
+    if asset == "SOL" or "solana" in lower:
+        return "Solanaの強さは続くか"
+    if "etf" in lower:
+        return "ETFフローを価格で確認"
+    if "fund" in lower or "flow" in lower:
+        return "資金フローに変化"
+    if "regulat" in lower or "sec" in lower:
+        return "規制材料を市場が消化"
+    if "bitcoin" in lower or "btc" in lower:
+        return "BTC材料を価格で確認"
+    words = re.split(r"[\s,:;|/\\-]+", raw)
+    compact = " ".join(words[:4]).strip()
+    return clean_text(compact, 32) if compact else "市場材料を確認"
+
+
 def source_claims(row: dict, source_id: str) -> list[dict]:
     material = str(row.get("material") or row.get("full_material") or row.get("excerpt") or "")
     claims = []
@@ -133,6 +199,8 @@ def normalize_sources(resources: list[dict]) -> list[dict]:
         source_id = stable_source_id(item, index)
         item["source_id"] = source_id
         item["source_quality"] = source_quality(item)
+        item["asset_relevance"] = infer_asset_relevance(item)
+        item["display_headline_ja"] = japanese_short_headline(item.get("title"), item["asset_relevance"])
         item["claims"] = source_claims(item, source_id)
         item.setdefault("event_cluster_id", "cluster_" + hashlib.sha1(clean_text(item.get("title"), 180).lower().encode("utf-8", errors="ignore")).hexdigest()[:10])
         item.setdefault("source_credibility", item["source_quality"]["quality_score"])
@@ -153,6 +221,9 @@ def canonical_sources(resources: list[dict]) -> dict[str, dict]:
             "posted_at": row.get("posted_at"),
             "collected_at": row.get("collected_at"),
             "source_quality": row.get("source_quality") or source_quality(row),
+            "asset_relevance": row.get("asset_relevance") or infer_asset_relevance(row),
+            "display_headline_ja": row.get("display_headline_ja") or japanese_short_headline(row.get("title"), row.get("asset_relevance")),
+            "news_reaction": row.get("news_reaction") or {"available": False},
             "event_cluster_id": row.get("event_cluster_id"),
             "claims": row.get("claims") or source_claims(row, row["source_id"]),
         }
@@ -591,6 +662,9 @@ def build_source_findings(resources: list[dict], market_summary: dict) -> list[d
                 "evidence": evidence,
                 "evidence_refs": [f"source:{claim.get('claim_id')}" for claim in row.get("claims", [])[: max(1, min(3, len(evidence)))]],
                 "source_quality": row.get("source_quality") or source_quality(row),
+                "asset_relevance": row.get("asset_relevance") or infer_asset_relevance(row),
+                "display_headline_ja": row.get("display_headline_ja") or japanese_short_headline(title, row.get("asset_relevance")),
+                "news_reaction": row.get("news_reaction") or {"available": False},
                 "trader_read": trader_read,
                 "url": row.get("url", ""),
             }
@@ -1106,6 +1180,7 @@ def copy_fields_from_card(card: dict) -> dict:
         "insight": card.get("insight", {"visible": False, "label": "", "text": ""}),
         "action": card.get("action", {"visible": False, "label": "", "text": ""}),
         "risk": card.get("risk", {"visible": False, "text": ""}),
+        "trade_plan": card.get("trade_plan", {}),
     }
 
 
@@ -1442,6 +1517,11 @@ DEFAULT_BRAND_OUTRO = {
     "account": "",
     "locked": True,
 }
+BRAND_CTA_PRESETS = {
+    "A": "フォローして、\n勢力が入ったポイントを無料でチェック。",
+    "B": "フォローして、\n勢力のエントリーポイントを無料でチェック。",
+    "C": "フォローして、\n勢力が動いた価格帯を無料でチェック。",
+}
 CARD_TYPES = {
     "market_conclusion",
     "key_levels",
@@ -1513,6 +1593,11 @@ METRIC_LABELS_BY_LOCALE = {
         "BTC": "BTC",
         "지지": "SUPPORT",
         "저항": "RESISTANCE",
+        "Primary Support": "PRIMARY SUPPORT",
+        "Primary Resistance": "PRIMARY RESISTANCE",
+        "Support Quality": "SUPPORT Q",
+        "Resistance Quality": "RESISTANCE Q",
+        "Resistance Cluster": "RESISTANCE CLUSTER",
         "BTC 24H": "BTC 24H",
         "BTC 7D": "BTC 7D",
         "ETH 7D": "ETH 7D",
@@ -1525,8 +1610,16 @@ METRIC_LABELS_BY_LOCALE = {
         "MACD": "MACD",
         "ATR14": "ATR14",
         "Funding": "FUNDING",
+        "Funding 24H Avg": "FUNDING 24H AVG",
+        "Funding Percentile": "FUNDING PCTL",
         "Mark": "MARK",
         "OI": "OI",
+        "OI 1H": "OI 1H",
+        "OI 4H": "OI 4H",
+        "OI 24H": "OI 24H",
+        "BTC 1H": "BTC 1H",
+        "BTC 4H": "BTC 4H",
+        "BTC 24H Futures": "BTC 24H",
         "Fear & Greed": "F&G",
         "생성 시각": "AS OF",
         "타임프레임": "TIMEFRAME",
@@ -1696,6 +1789,9 @@ def short_source(row: dict) -> dict:
         "short_title": clean_text(row.get("title") or row.get("short_title") or "", 72),
         "url": clean_text(row.get("url") or "", 500),
         "source_quality": row.get("source_quality") or {},
+        "asset_relevance": row.get("asset_relevance") or {},
+        "display_headline_ja": clean_text(row.get("display_headline_ja") or "", 72),
+        "news_reaction": row.get("news_reaction") or {"available": False},
     }
 
 
@@ -1717,6 +1813,18 @@ def locked_metric(metric_id: str, label: str, raw_value: object, formatted: str,
     return {"id": metric_id, "label": label, "value": formatted, "raw_value": raw_value, "unit": unit, "locked": True}
 
 
+def format_cluster(cluster: dict | None) -> str:
+    if not cluster:
+        return ""
+    lower = cluster.get("lower")
+    upper = cluster.get("upper")
+    if lower is None or upper is None:
+        return ""
+    if lower == upper:
+        return as_price(lower)
+    return f"{as_price(lower)}〜{as_price(upper)}"
+
+
 def locked_market_metrics(
     canonical_market_summary: dict,
     generated_at: object | None = None,
@@ -1733,6 +1841,26 @@ def locked_market_metrics(
         locked_metric("btc_price", "BTC", market.get("btc_price"), as_price(market.get("btc_price")), "USD"),
         locked_metric("btc_support", "지지", market.get("btc_nearest_support"), as_price(market.get("btc_nearest_support")), "USD"),
         locked_metric("btc_resistance", "저항", market.get("btc_nearest_resistance"), as_price(market.get("btc_nearest_resistance")), "USD"),
+        locked_metric("btc_primary_support", "Primary Support", market.get("btc_primary_support"), as_price(market.get("btc_primary_support")), "USD"),
+        locked_metric("btc_primary_resistance", "Primary Resistance", market.get("btc_primary_resistance"), as_price(market.get("btc_primary_resistance")), "USD"),
+        locked_metric(
+            "btc_primary_support_quality",
+            "Support Quality",
+            (market.get("btc_primary_support_profile") or {}).get("level_quality_score"),
+            as_plain_number((market.get("btc_primary_support_profile") or {}).get("level_quality_score")),
+        ),
+        locked_metric(
+            "btc_primary_resistance_quality",
+            "Resistance Quality",
+            (market.get("btc_primary_resistance_profile") or {}).get("level_quality_score"),
+            as_plain_number((market.get("btc_primary_resistance_profile") or {}).get("level_quality_score")),
+        ),
+        locked_metric(
+            "btc_resistance_cluster",
+            "Resistance Cluster",
+            (market.get("btc_resistance_clusters") or [{}])[0] if market.get("btc_resistance_clusters") else None,
+            format_cluster((market.get("btc_resistance_clusters") or [{}])[0] if market.get("btc_resistance_clusters") else None),
+        ),
         locked_metric("btc_24h", "BTC 24H", market.get("btc_24h"), as_percent(market.get("btc_24h")), "%"),
         locked_metric("btc_7d", "BTC 7D", market.get("btc_7d"), as_percent(market.get("btc_7d")), "%"),
         locked_metric("eth_7d", "ETH 7D", market.get("eth_7d"), as_percent(market.get("eth_7d")), "%"),
@@ -1745,8 +1873,16 @@ def locked_market_metrics(
         locked_metric("macd", "MACD", market.get("btc_macd_bias"), str(market.get("btc_macd_bias") or "")),
         locked_metric("atr14", "ATR14", market.get("btc_atr14"), as_price(market.get("btc_atr14")), "USD"),
         locked_metric("funding", "Funding", market.get("btc_funding_rate"), as_percent(market.get("btc_funding_rate")), "%"),
+        locked_metric("funding_avg_24h", "Funding 24H Avg", market.get("btc_funding_average_24h"), as_percent(market.get("btc_funding_average_24h")), "%"),
+        locked_metric("funding_percentile", "Funding Percentile", market.get("btc_funding_percentile"), as_plain_number(market.get("btc_funding_percentile"))),
         locked_metric("mark_price", "Mark", market.get("btc_mark_price"), as_price(market.get("btc_mark_price")), "USD"),
         locked_metric("open_interest", "OI", market.get("btc_open_interest_contracts"), f"{as_plain_number(market.get('btc_open_interest_contracts'))} contracts"),
+        locked_metric("oi_change_1h", "OI 1H", market.get("btc_oi_change_1h"), as_percent(market.get("btc_oi_change_1h")), "%"),
+        locked_metric("oi_change_4h", "OI 4H", market.get("btc_oi_change_4h"), as_percent(market.get("btc_oi_change_4h")), "%"),
+        locked_metric("oi_change_24h", "OI 24H", market.get("btc_oi_change_24h"), as_percent(market.get("btc_oi_change_24h")), "%"),
+        locked_metric("btc_price_change_1h", "BTC 1H", market.get("btc_price_change_1h"), as_percent(market.get("btc_price_change_1h")), "%"),
+        locked_metric("btc_price_change_4h", "BTC 4H", market.get("btc_price_change_4h"), as_percent(market.get("btc_price_change_4h")), "%"),
+        locked_metric("btc_price_change_24h", "BTC 24H Futures", market.get("btc_price_change_24h"), as_percent(market.get("btc_price_change_24h")), "%"),
         locked_metric("fear_greed", "Fear & Greed", market.get("fear_greed"), as_plain_number(market.get("fear_greed"))),
         locked_metric("btc_dominance", "BTC Dominance", market.get("btc_dominance"), as_percent(market.get("btc_dominance")), "%"),
         locked_metric("eth_btc", "ETH/BTC", market.get("eth_btc"), as_plain_number(market.get("eth_btc"))),
@@ -1758,7 +1894,7 @@ def locked_market_metrics(
     return {item["id"]: item for item in items if item}
 
 
-def metric_list(metrics: dict[str, dict], ids: list[str], limit: int = 4) -> list[dict]:
+def metric_list(metrics: dict[str, dict], ids: list[str], limit: int = 8) -> list[dict]:
     return [metrics[item] for item in ids if item in metrics][:limit]
 
 
@@ -1856,6 +1992,8 @@ def build_canonical_content_model(brief: dict, resources: list[dict], metrics: d
     primary_source = findings[0] if findings else resources[0] if resources else {}
     support = market.get("btc_nearest_support")
     resistance = market.get("btc_nearest_resistance")
+    primary_support = market.get("btc_primary_support") or support
+    primary_resistance = market.get("btc_primary_resistance") or resistance
     return {
         "locale": DEFAULT_OUTPUT_LOCALE,
         "timeframe": brief.get("briefing_type") or "daily",
@@ -1864,6 +2002,14 @@ def build_canonical_content_model(brief: dict, resources: list[dict], metrics: d
             "current_price": market.get("btc_price"),
             "support": support,
             "resistance": resistance,
+            "primary_support": primary_support,
+            "primary_resistance": primary_resistance,
+            "support_profile": market.get("btc_primary_support_profile"),
+            "resistance_profile": market.get("btc_primary_resistance_profile"),
+            "support_clusters": market.get("btc_support_clusters", []),
+            "resistance_clusters": market.get("btc_resistance_clusters", []),
+            "next_supports": market.get("btc_next_supports", []),
+            "next_resistances": market.get("btc_next_resistances", []),
             "btc_24h": market.get("btc_24h"),
             "btc_7d": market.get("btc_7d"),
             "eth_7d": market.get("eth_7d"),
@@ -1877,7 +2023,15 @@ def build_canonical_content_model(brief: dict, resources: list[dict], metrics: d
             "atr14": market.get("btc_atr14"),
             "mark_price": market.get("btc_mark_price"),
             "funding": market.get("btc_funding_rate"),
+            "funding_average_24h": market.get("btc_funding_average_24h"),
+            "funding_percentile": market.get("btc_funding_percentile"),
             "open_interest": market.get("btc_open_interest_contracts"),
+            "oi_change_1h": market.get("btc_oi_change_1h"),
+            "oi_change_4h": market.get("btc_oi_change_4h"),
+            "oi_change_24h": market.get("btc_oi_change_24h"),
+            "price_change_1h": market.get("btc_price_change_1h"),
+            "price_change_4h": market.get("btc_price_change_4h"),
+            "price_change_24h": market.get("btc_price_change_24h"),
             "fear_greed": market.get("fear_greed"),
             "btc_dominance": market.get("btc_dominance"),
             "eth_btc": market.get("eth_btc"),
@@ -1887,8 +2041,8 @@ def build_canonical_content_model(brief: dict, resources: list[dict], metrics: d
         "thesis": {
             "market_bias": canonical_bias_code(brief),
             "primary_signal": canonical_primary_signal(market),
-            "action_condition": {"type": "confirm_boundary", "level": resistance},
-            "risk_condition": {"type": "support_close_break", "level": support},
+            "action_condition": {"type": "confirm_boundary", "level": primary_resistance},
+            "risk_condition": {"type": "support_close_break", "level": primary_support},
             "primary_source_role": primary_source.get("role", ""),
         },
         "source": {
@@ -2145,10 +2299,10 @@ def evidence_profile(card_type: str, angle: str, analysis: dict) -> dict:
             evidence_refs.append(f"metric:{metric_id}")
 
     if card_type == "market_conclusion":
-        for metric_id in ["btc_price", "btc_support", "btc_resistance", "rsi14", "macd", "funding", "open_interest", "fear_greed"]:
+        for metric_id in ["btc_price", "btc_7d", "rsi14", "macd", "funding", "open_interest", "fear_greed"]:
             add_metric(metric_id)
         has_price = count_available(metrics, ["btc_price"]) == 1
-        has_boundary = count_available(metrics, ["btc_support", "btc_resistance"]) >= 1
+        has_boundary = count_available(metrics, ["btc_primary_support", "btc_primary_resistance", "btc_support", "btc_resistance"]) >= 1
         has_context = count_available(metrics, ["rsi14", "macd", "funding", "open_interest", "fear_greed"]) >= 1
         strength = 0.78 if has_price and has_boundary and has_context else 0.35
         novelty = 0.9
@@ -2156,19 +2310,22 @@ def evidence_profile(card_type: str, angle: str, analysis: dict) -> dict:
         actionability = 0.72
         overlap = 0.1
     elif card_type == "key_levels":
-        for metric_id in ["btc_price", "btc_support", "btc_resistance", "atr14"]:
+        for metric_id in ["btc_price", "btc_primary_support", "btc_primary_resistance", "btc_resistance_cluster", "atr14"]:
             add_metric(metric_id)
-        core = count_available(metrics, ["btc_price", "btc_support", "btc_resistance"])
+        core = count_available(metrics, ["btc_price", "btc_primary_support", "btc_primary_resistance"])
         strength = 0.95 if core == 3 else 0.45
         novelty = 0.86
         relevance = 0.96
         actionability = 0.9
         overlap = 0.18
     elif card_type == "derivatives":
-        for metric_id in ["mark_price", "funding", "open_interest", "rsi14", "macd"]:
+        for metric_id in ["mark_price", "funding", "open_interest", "oi_change_24h", "funding_avg_24h", "rsi14", "macd"]:
             add_metric(metric_id)
         core = count_available(metrics, ["mark_price", "funding", "open_interest"])
+        has_delta = count_available(metrics, ["oi_change_1h", "oi_change_4h", "oi_change_24h", "funding_avg_24h", "funding_percentile"]) >= 1
         strength = 0.62 + min(0.25, core * 0.08) if core >= 2 else 0.42
+        if core >= 2 and not has_delta:
+            strength = min(strength, 0.68)
         novelty = 0.78
         relevance = 0.82
         actionability = 0.64
@@ -2185,7 +2342,18 @@ def evidence_profile(card_type: str, angle: str, analysis: dict) -> dict:
     elif card_type == "news_context":
         for metric_id in ["btc_price", "btc_support", "btc_resistance", "btc_24h"]:
             add_metric(metric_id)
-        source = next((item for item in findings if (item.get("source_quality") or {}).get("quality_score", 0) >= 0.55), findings[0] if findings else resources[0] if resources else {})
+        source = next(
+            (
+                item
+                for item in findings
+                if (item.get("source_quality") or {}).get("quality_score", 0) >= 0.55
+                and (
+                    (item.get("asset_relevance") or {}).get("btc_relevance", 0) >= 0.45
+                    or (item.get("asset_relevance") or {}).get("market_scope") in {"macro", "market_general"}
+                )
+            ),
+            {},
+        )
         if source:
             source_id = source.get("source_id") or stable_source_id(source, 1)
             source_ref = (source.get("evidence_refs") or [f"source:{source_id}:claim01"])[0]
@@ -2201,7 +2369,8 @@ def evidence_profile(card_type: str, angle: str, analysis: dict) -> dict:
             )
             evidence_refs.append(source_ref)
         source_quality_score = (source.get("source_quality") or {}).get("quality_score", 0) if source else 0
-        strength = 0.72 if source and source_quality_score >= 0.55 and count_available(metrics, ["btc_price", "btc_support", "btc_resistance"]) >= 2 else 0.45
+        btc_relevance = (source.get("asset_relevance") or {}).get("btc_relevance", 0) if source else 0
+        strength = 0.72 if source and source_quality_score >= 0.55 and btc_relevance >= 0.45 and count_available(metrics, ["btc_price", "btc_support", "btc_resistance"]) >= 2 else 0.45
         novelty = 0.72
         relevance = 0.76
         actionability = 0.55
@@ -2216,26 +2385,26 @@ def evidence_profile(card_type: str, angle: str, analysis: dict) -> dict:
         actionability = 0.5
         overlap = 0.62
     elif card_type == "scenarios":
-        for metric_id in ["btc_support", "btc_resistance", "ma20", "ma50"]:
+        for metric_id in ["btc_primary_support", "btc_primary_resistance", "btc_resistance_cluster", "ma20", "ma50"]:
             add_metric(metric_id)
-        core = count_available(metrics, ["btc_support", "btc_resistance"])
+        core = count_available(metrics, ["btc_primary_support", "btc_primary_resistance"])
         strength = 0.84 if core == 2 else 0.4
         novelty = 0.76
         relevance = 0.86
         actionability = 0.78
         overlap = 0.36
     elif card_type == "trade_plan" and angle == "risk_control":
-        for metric_id in ["btc_support", "btc_resistance", "atr14", "macd"]:
+        for metric_id in ["btc_primary_support", "btc_primary_resistance", "atr14", "macd"]:
             add_metric(metric_id)
-        strength = 0.68 if count_available(metrics, ["btc_support", "btc_resistance", "atr14"]) >= 2 else 0.42
+        strength = 0.68 if count_available(metrics, ["btc_primary_support", "btc_primary_resistance", "atr14"]) >= 2 else 0.42
         novelty = 0.52
         relevance = 0.72
         actionability = 0.82
         overlap = 0.56
     elif card_type == "trade_plan":
-        for metric_id in ["btc_price", "btc_support", "btc_resistance", "macd"]:
+        for metric_id in ["btc_price", "btc_primary_support", "btc_primary_resistance", "macd"]:
             add_metric(metric_id)
-        strength = 0.88 if count_available(metrics, ["btc_price", "btc_support", "btc_resistance"]) >= 3 else 0.45
+        strength = 0.88 if count_available(metrics, ["btc_price", "btc_primary_support", "btc_primary_resistance"]) >= 3 else 0.45
         novelty = 0.82
         relevance = 0.88
         actionability = 0.94
@@ -2368,6 +2537,63 @@ def metric_value(card: dict, metric_id: str, default: str = "") -> str:
     return default
 
 
+def metric_raw_value(card: dict, metric_id: str) -> object:
+    for metric in card.get("metrics") or []:
+        if metric.get("id") == metric_id:
+            return metric.get("raw_value")
+    return None
+
+
+def first_cluster_text(card: dict) -> str:
+    cluster = metric_value(card, "btc_resistance_cluster")
+    if cluster:
+        return cluster
+    clusters = (card.get("semantic") or {}).get("resistance_clusters") or []
+    return format_cluster(clusters[0]) if clusters else ""
+
+
+def derivative_positioning_text(card: dict) -> str:
+    funding = to_float(metric_raw_value(card, "funding"))
+    oi_24h = to_float(metric_raw_value(card, "oi_change_24h"))
+    price_24h = to_float(metric_raw_value(card, "btc_price_change_24h"))
+    percentile = to_float(metric_raw_value(card, "funding_percentile"))
+    if funding is None:
+        return "先物は方向より、データの欠けを確認する。"
+    if funding < 0:
+        return "ショート側に傾く。\n買いの偏りとは見ない。"
+    if oi_24h is None:
+        if funding > 0.03 or (percentile is not None and percentile >= 0.8):
+            return "ロングの偏りはある。\nただ、OI変化なしでは強く断定しない。"
+        if funding > 0:
+            return "偏りはまだ小さい。\nOI変化がないので、優勢とは言い切らない。"
+        return "偏りはまだ小さい。\n価格の確認を優先する。"
+    if price_24h is not None and price_24h > 0 and oi_24h > 0 and funding > 0:
+        return "価格上昇にOI増加。\n新規ロングが入った可能性を見る。"
+    if price_24h is not None and price_24h < 0 and oi_24h > 0:
+        return "価格下落にOI増加。\n新規ショート、またはヘッジの可能性。"
+    if price_24h is not None and price_24h > 0 and oi_24h < 0:
+        return "価格上昇にOI減少。\nショートカバーの可能性を見る。"
+    if price_24h is not None and price_24h < 0 and oi_24h < 0:
+        return "価格下落にOI減少。\nポジション縮小を疑う場面。"
+    if funding > 0 and oi_24h > 0:
+        return "ロング側に傾いている。\nただし価格変化と合わせて見る。"
+    return "偏りは限定的。\n絶対値だけでは方向を決めない。"
+
+
+def rsi_interpretation_text(card: dict) -> str:
+    rsi_value = metric_value(card, "rsi14")
+    rsi_raw = to_float(metric_raw_value(card, "rsi14"))
+    if rsi_raw is None:
+        return "RSIは未確認。価格の反応を優先。"
+    if rsi_raw >= 75:
+        return f"RSI {rsi_value}。過熱感が出ている。"
+    if rsi_raw >= 60:
+        return f"RSI {rsi_value}。勢いはあるが、飛び乗りは避ける。"
+    if rsi_raw >= 45:
+        return f"RSI {rsi_value}。モメンタムは中立圏。"
+    return f"RSI {rsi_value}。弱さが残る。戻りの質を見る。"
+
+
 def semantic_role(card_type: str, angle: str) -> str:
     if card_type == "market_conclusion":
         return "market_decision"
@@ -2392,17 +2618,17 @@ def metric_ids_for_card(card_type: str, angle: str) -> list[str]:
     if card_type == "market_conclusion":
         return ["btc_price", "btc_7d", "fear_greed"]
     if card_type == "key_levels":
-        return ["btc_price", "btc_support", "btc_resistance", "atr14"]
+        return ["btc_price", "btc_primary_support", "btc_primary_resistance", "btc_resistance_cluster", "atr14"]
     if card_type == "derivatives":
-        return ["mark_price", "funding", "open_interest", "rsi14", "macd"]
+        return ["mark_price", "funding", "open_interest", "oi_change_24h", "funding_avg_24h", "rsi14", "macd"]
     if card_type == "news_context" and angle == "asset_flow":
         return ["btc_7d", "eth_7d", "eth_btc", "btc_dominance"]
     if card_type == "news_context":
         return ["btc_price", "btc_24h", "btc_support", "btc_resistance"]
     if card_type == "scenarios":
-        return ["btc_support", "btc_resistance", "ma20", "ma50"]
+        return ["btc_primary_support", "btc_primary_resistance", "btc_resistance_cluster", "ma20", "ma50"]
     if card_type == "trade_plan":
-        return ["btc_price", "btc_support", "btc_resistance", "macd"]
+        return ["btc_price", "btc_primary_support", "btc_primary_resistance", "macd"]
     return ["btc_price"]
 
 
@@ -2410,15 +2636,15 @@ def required_metric_ids_for_card(card_type: str, angle: str = "") -> list[str]:
     if card_type == "market_conclusion":
         return ["btc_price"]
     if card_type == "key_levels":
-        return ["btc_price", "btc_support", "btc_resistance"]
+        return ["btc_price", "btc_primary_support", "btc_primary_resistance"]
     if card_type == "derivatives":
         return ["funding", "open_interest"]
     if card_type == "news_context":
         return ["btc_price"]
     if card_type == "scenarios":
-        return ["btc_support", "btc_resistance"]
+        return ["btc_primary_support", "btc_primary_resistance"]
     if card_type == "trade_plan":
-        return ["btc_support", "btc_resistance"]
+        return ["btc_primary_support", "btc_primary_resistance"]
     return []
 
 
@@ -2439,6 +2665,9 @@ def source_from_evidence_refs(evidence_refs: list[str], sources: dict[str, dict]
                     "short_title": source.get("title", ""),
                     "url": source.get("url", ""),
                     "source_quality": source.get("source_quality", {}),
+                    "asset_relevance": source.get("asset_relevance", {}),
+                    "display_headline_ja": source.get("display_headline_ja", ""),
+                    "news_reaction": source.get("news_reaction") or {"available": False},
                 }
     if fallback:
         source_id = fallback.get("source_id") or stable_source_id(fallback, 1)
@@ -2448,8 +2677,84 @@ def source_from_evidence_refs(evidence_refs: list[str], sources: dict[str, dict]
             "short_title": fallback.get("title") or fallback.get("short_title") or "",
             "url": fallback.get("url", ""),
             "source_quality": fallback.get("source_quality") or source_quality(fallback),
+            "asset_relevance": fallback.get("asset_relevance") or infer_asset_relevance(fallback),
+            "display_headline_ja": fallback.get("display_headline_ja") or japanese_short_headline(fallback.get("title"), fallback.get("asset_relevance")),
+            "news_reaction": fallback.get("news_reaction") or {"available": False},
         }
     return {"source_id": "market_snapshot", "publisher": "Market Data", "short_title": "Canonical snapshot", "url": "", "source_quality": {"quality_score": 1.0}}
+
+
+def provenance_for_card(card_type: str, evidence_refs: list[str], source: dict) -> dict:
+    data_sources = []
+    editorial_sources = []
+    community_sources = []
+    if any(ref.startswith("metric:") for ref in evidence_refs) or card_type in {"market_conclusion", "key_levels", "derivatives", "scenarios", "trade_plan"}:
+        if card_type == "derivatives":
+            data_sources.extend(["Binance Futures", "Bybit/OKX fallback"])
+        else:
+            data_sources.extend(["Binance", "CoinGecko"])
+    if source.get("url"):
+        source_item = {
+            "source_id": source.get("source_id"),
+            "publisher": source.get("publisher"),
+            "title": source.get("short_title"),
+            "url": source.get("url"),
+        }
+        if (source.get("source_quality") or {}).get("source_type") == "community":
+            community_sources.append(source_item)
+        else:
+            editorial_sources.append(source_item)
+    return {
+        "data_sources": data_sources,
+        "editorial_sources": editorial_sources,
+        "community_sources": community_sources,
+    }
+
+
+CARD_PURPOSES = {
+    "market_conclusion": {
+        "card_purpose": "market_thesis",
+        "new_information": "sentiment and price-structure tension",
+        "semantic_key": "market_thesis_not_price_map",
+    },
+    "key_levels": {
+        "card_purpose": "price_map",
+        "new_information": "primary support/resistance and structural cluster",
+        "semantic_key": "primary_level_map",
+    },
+    "derivatives": {
+        "card_purpose": "positioning_read",
+        "new_information": "funding, OI delta, and momentum state",
+        "semantic_key": "derivative_positioning_delta",
+    },
+    "news_context": {
+        "card_purpose": "news_relevance_context",
+        "new_information": "asset relevance, source claim, and reaction availability",
+        "semantic_key": "news_claim_source_binding",
+    },
+    "scenarios": {
+        "card_purpose": "scenario_map",
+        "new_information": "bull/base/bear paths using clusters and moving averages",
+        "semantic_key": "cluster_based_scenarios",
+    },
+    "trade_plan": {
+        "card_purpose": "execution_rules",
+        "new_information": "entry, wait, and invalidation conditions",
+        "semantic_key": "entry_wait_invalid",
+    },
+    BRAND_OUTRO_TYPE: {
+        "card_purpose": "brand_outro",
+        "new_information": "locked brand recall and follow CTA",
+        "semantic_key": "locked_brand_outro",
+    },
+}
+
+
+def purpose_profile(card_type: str, angle: str = "") -> dict:
+    profile = dict(CARD_PURPOSES.get(card_type) or CARD_PURPOSES["market_conclusion"])
+    if angle:
+        profile["semantic_key"] = f"{profile['semantic_key']}:{angle}"
+    return profile
 
 
 def build_semantic_cards(plan: list[dict], analysis: dict, label: str, semantic: dict) -> list[dict]:
@@ -2478,7 +2783,12 @@ def build_semantic_cards(plan: list[dict], analysis: dict, label: str, semantic:
             }
         card["evidence"] = item.get("evidence") or evidence_profile(card_type, angle, analysis).get("evidence", [])
         card["evidence_refs"] = item.get("evidence_refs") or evidence_profile(card_type, angle, analysis).get("evidence_refs", [])
+        card["provenance"] = provenance_for_card(card_type, card["evidence_refs"], source)
         card["semantic_summary"] = item.get("semantic_summary") or evidence_profile(card_type, angle, analysis).get("semantic_summary", {})
+        purpose = purpose_profile(card_type, angle)
+        card["card_purpose"] = purpose["card_purpose"]
+        card["new_information"] = purpose["new_information"]
+        card["semantic_summary"]["semantic_key"] = purpose["semantic_key"]
         card["semantic"] = {
             "role": semantic_role(card_type, angle),
             "angle": angle,
@@ -2486,6 +2796,14 @@ def build_semantic_cards(plan: list[dict], analysis: dict, label: str, semantic:
             "primary_signal": semantic.get("thesis", {}).get("primary_signal"),
             "support": semantic.get("market", {}).get("support"),
             "resistance": semantic.get("market", {}).get("resistance"),
+            "primary_support": semantic.get("market", {}).get("primary_support"),
+            "primary_resistance": semantic.get("market", {}).get("primary_resistance"),
+            "support_profile": semantic.get("market", {}).get("support_profile"),
+            "resistance_profile": semantic.get("market", {}).get("resistance_profile"),
+            "support_clusters": semantic.get("market", {}).get("support_clusters"),
+            "resistance_clusters": semantic.get("market", {}).get("resistance_clusters"),
+            "next_supports": semantic.get("market", {}).get("next_supports"),
+            "next_resistances": semantic.get("market", {}).get("next_resistances"),
             "current_price": semantic.get("market", {}).get("current_price"),
             "risk_condition": semantic.get("thesis", {}).get("risk_condition"),
             "action_condition": semantic.get("thesis", {}).get("action_condition"),
@@ -2500,46 +2818,26 @@ def ja_copy_for_card(card: dict) -> dict:
     role = card.get("semantic", {}).get("role")
     source = card.get("source") or {}
     semantic = card.get("semantic") or {}
-    support = metric_value(card, "btc_support") or as_price(semantic.get("support"))
-    resistance = metric_value(card, "btc_resistance") or as_price(semantic.get("resistance"))
+    support = metric_value(card, "btc_primary_support") or metric_value(card, "btc_support") or as_price(semantic.get("primary_support") or semantic.get("support"))
+    resistance = metric_value(card, "btc_primary_resistance") or metric_value(card, "btc_resistance") or as_price(semantic.get("primary_resistance") or semantic.get("resistance"))
+    nearest_support = metric_value(card, "btc_support") or as_price(semantic.get("support"))
+    nearest_resistance = metric_value(card, "btc_resistance") or as_price(semantic.get("resistance"))
+    resistance_cluster = first_cluster_text(card)
     price = metric_value(card, "btc_price") or as_price(semantic.get("current_price"))
     btc_24h = metric_value(card, "btc_24h")
     funding = metric_value(card, "funding")
+    funding_avg = metric_value(card, "funding_avg_24h")
     oi = metric_value(card, "open_interest")
+    oi_24h = metric_value(card, "oi_change_24h")
     rsi_value = metric_value(card, "rsi14")
     mark = metric_value(card, "mark_price")
     btc_7d = metric_value(card, "btc_7d")
     eth_7d = metric_value(card, "eth_7d")
     eth_btc = metric_value(card, "eth_btc")
     btc_dominance = metric_value(card, "btc_dominance")
-    source_title = clean_text(source.get("short_title") or "選択ニュース", 42)
-    funding_raw = None
-    rsi_raw = None
-    for metric in card.get("metrics") or []:
-        if metric.get("id") == "funding":
-            funding_raw = to_float(metric.get("raw_value"))
-        if metric.get("id") == "rsi14":
-            rsi_raw = to_float(metric.get("raw_value"))
-    if funding_raw is None:
-        derivative_message = "先物は方向より、温度を見る。"
-    elif funding_raw > 0.03:
-        derivative_message = "ロング寄り。\n過熱の手前まで温度が上がる。"
-    elif funding_raw > 0:
-        derivative_message = "ロング寄り。\nただし、まだ一方向ではない。"
-    elif funding_raw < -0.01:
-        derivative_message = "ショート側に傾く。\n反発時の巻き戻しも見る。"
-    else:
-        derivative_message = "偏りは小さい。\n価格の確認を優先する。"
-    if rsi_raw is None:
-        rsi_message = "RSIは未確認。価格の反応を優先。"
-    elif rsi_raw >= 75:
-        rsi_message = f"RSI {rsi_value}。過熱圏。追うより冷ます場面。"
-    elif rsi_raw >= 60:
-        rsi_message = f"RSI {rsi_value}。勢いはあるが、飛び乗りは避ける。"
-    elif rsi_raw >= 45:
-        rsi_message = f"RSI {rsi_value}。中立圏。次の価格確認が先。"
-    else:
-        rsi_message = f"RSI {rsi_value}。弱さが残る。戻りの質を見る。"
+    source_title = clean_text(source.get("display_headline_ja") or source.get("short_title") or "選択ニュース", 42)
+    derivative_message = derivative_positioning_text(card)
+    rsi_message = rsi_interpretation_text(card)
 
     if card_type == BRAND_OUTRO_TYPE:
         brand = card.get("brand_outro") or DEFAULT_BRAND_OUTRO
@@ -2554,30 +2852,35 @@ def ja_copy_for_card(card: dict) -> dict:
         }
 
     if card_type == "market_conclusion":
+        fear = metric_value(card, "fear_greed")
+        thesis_headline = "センチメントは弱い。\nでも、価格はまだ崩れていない。"
+        if to_float(metric_raw_value(card, "btc_7d"), 0) is not None and (to_float(metric_raw_value(card, "btc_7d"), 0) or 0) > 0:
+            thesis_headline = "値動きは強い。\nただ、過熱は追わない。"
         return {
             "eyebrow": "THE OBSERVER",
-            "headline": "まだ追わない。境界を見る。",
-            "subheadline": f"下は{support}。\n上は{resistance}。",
-            "key_message": "価格はまだ答えていない。",
-            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "強い結論より、まず境界の反応を読む場面です。"},
+            "headline": thesis_headline,
+            "subheadline": f"BTC 7D {btc_7d} / F&G {fear}",
+            "key_message": "材料ではなく、いま市場に残っている矛盾を見る。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "このカードは方向予想ではなく、今日の市場テーマを決めるための1枚です。"},
             "action": {"visible": False, "label": "", "text": ""},
             "risk": {"visible": False, "text": ""},
         }
     if card_type == "key_levels":
+        upper_text = resistance_cluster or resistance
         return {
             "eyebrow": "PRICE MAP",
-            "headline": "価格はこの2点で決まる",
-            "subheadline": f"SUPPORT {support}\nRESISTANCE {resistance}",
-            "key_message": f"{support}を守れるか。\n{resistance}を上抜けられるか。",
-            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "真ん中ではなく、反応が出る場所だけを見る。"},
-            "action": {"visible": True, "label": "次に見ること", "text": f"まず{support}の反応。"},
-            "risk": {"visible": True, "text": f"終値で{support}を割るなら、見方を変える。"},
+            "headline": "まず見るのはこの2点",
+            "subheadline": f"SUPPORT {support}\nRESISTANCE {upper_text}",
+            "key_message": f"下は{support}。\n上は{upper_text}を回復できるか。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"nearestは{nearest_support} / {nearest_resistance}。主役にするのは構造のあるレベルです。"},
+            "action": {"visible": False, "label": "", "text": ""},
+            "risk": {"visible": False, "text": ""},
         }
     if card_type == "derivatives":
         return {
             "eyebrow": "DERIVATIVES",
-            "headline": "ポジションは温まっている",
-            "subheadline": f"MARK {mark} / FUNDING {funding} / OI {oi}",
+            "headline": "絶対値だけでは読まない",
+            "subheadline": f"MARK {mark} / FUNDING {funding} / OI 24H {oi_24h or '未取得'}",
             "key_message": derivative_message,
             "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": rsi_message},
             "action": {"visible": False, "label": "", "text": ""},
@@ -2594,12 +2897,26 @@ def ja_copy_for_card(card: dict) -> dict:
             "risk": {"visible": False, "text": ""},
         }
     if card_type == "news_context":
+        asset_relevance = source.get("asset_relevance") or {}
+        primary_asset = asset_relevance.get("primary_asset") or "BTC"
+        news_reaction = source.get("news_reaction") or {}
+        reaction_available = bool(news_reaction.get("available"))
+        reaction_line = (
+            f"{news_reaction.get('asset', primary_asset)} {as_percent(news_reaction.get('change_4h'))}"
+            if reaction_available
+            else "reaction data unavailable"
+        )
+        observer_text = (
+            "反応データがあるので、材料と値動きを同じ時間軸で見る。"
+            if reaction_available
+            else "反応データがないため、材料と現在位置を分けて見る。"
+        )
         return {
             "eyebrow": "NEWS CONTEXT",
-            "headline": "見出しと価格を並べる",
-            "subheadline": f"{source_title}\nBTC {btc_24h} / 現在 {price}",
-            "key_message": "この材料と、\n現在の価格位置を並べて見る。",
-            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"反応を断定せず、{support}と{resistance}のどちらに近いかを見る。"},
+            "headline": source_title,
+            "subheadline": f"WHAT {primary_asset} / WHY {source.get('publisher', '')}\nREACTION {reaction_line}",
+            "key_message": observer_text,
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"BTC relevance {as_plain_number(asset_relevance.get('btc_relevance'))}。低い場合はBTC反応として扱わない。"},
             "action": {"visible": False, "label": "", "text": ""},
             "risk": {"visible": False, "text": ""},
         }
@@ -2614,13 +2931,16 @@ def ja_copy_for_card(card: dict) -> dict:
             "risk": {"visible": False, "text": ""},
         }
     if card_type == "scenarios":
+        upper_text = resistance_cluster or resistance
+        ma20 = metric_value(card, "ma20")
+        ma50 = metric_value(card, "ma50")
         return {
             "eyebrow": "SCENARIO",
-            "headline": "経路は3つ。基準は1つ。",
-            "subheadline": f"BULL  {resistance}突破\nBASE  {support} - {resistance}\nBEAR  {support}割れ",
-            "key_message": "分岐は予想ではなく、価格で切る。",
-            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "上で定着なら強気。間ならレンジ。下で戻せないなら弱気。"},
-            "action": {"visible": True, "label": "分岐点", "text": f"{resistance}の上で終値。"},
+            "headline": "突破は点ではなく帯で見る",
+            "subheadline": f"BULL  {upper_text}回復 → {ma20 or ma50}\nBASE  {support} - {upper_text}\nBEAR  {support}割れ",
+            "key_message": "一本の上抜けだけで完了にしない。\nMAとクラスターまで見る。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"MA50 {ma50 or '未取得'} / MA20 {ma20 or '未取得'}。次の抵抗が近いなら、突破後の定着が必要です。"},
+            "action": {"visible": True, "label": "分岐点", "text": f"{upper_text}の上で終値。"},
             "risk": {"visible": False, "text": ""},
         }
     if card_type == "trade_plan" and role == "risk_control":
@@ -2635,11 +2955,16 @@ def ja_copy_for_card(card: dict) -> dict:
         }
     return {
         "eyebrow": "TRADE PLAN",
-        "headline": "今日は条件だけを残す",
-        "subheadline": "入る条件より、\n入らない条件を先に決める。",
-        "key_message": f"{support}付近の反応。\nまたは{resistance}回復後の浅い押し目。",
-        "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "触らない時間を決めることも、ポジション管理です。"},
-        "action": {"visible": True, "label": "行動基準", "text": "今は待つ。"},
+        "headline": "条件を先に固定する",
+        "subheadline": f"ENTRY  {resistance} above close\nWAIT   inside range\nINVALID {support} close break",
+        "key_message": "入る条件より、\n入らない条件を先に決める。",
+        "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"ENTRYは{resistance}回復後。WAITはレンジ内。INVALIDは{support}終値割れ。"},
+        "trade_plan": {
+            "entry": {"visible": True, "condition": f"{resistance} above close"},
+            "wait": {"visible": True, "condition": "inside range"},
+            "invalid": {"visible": True, "condition": f"{support} close break"},
+        },
+        "action": {"visible": True, "label": "行動基準", "text": "待つ条件まで決めておく。"},
         "risk": {"visible": False, "text": ""},
     }
 
@@ -2687,6 +3012,7 @@ def localize_cards(cards: list[dict], locale: str = DEFAULT_OUTPUT_LOCALE) -> li
                 "insight": copy.get("insight", {"visible": False, "label": "", "text": ""}),
                 "action": copy.get("action", {"visible": False, "label": "", "text": ""}),
                 "risk": copy.get("risk", {"visible": False, "text": ""}),
+                "trade_plan": copy.get("trade_plan", next_card.get("trade_plan", {})),
             }
         )
         localized.append(next_card)
@@ -2696,6 +3022,9 @@ def localize_cards(cards: list[dict], locale: str = DEFAULT_OUTPUT_LOCALE) -> li
 def brand_outro_settings(config: dict | None = None) -> dict:
     settings = dict(DEFAULT_BRAND_OUTRO)
     candidate = (config or {}).get("brand_outro") or {}
+    preset = str(candidate.get("cta_preset") or "").strip().upper()
+    if preset in BRAND_CTA_PRESETS:
+        settings["cta"] = BRAND_CTA_PRESETS[preset]
     for key in ["brand_name", "cta", "account"]:
         if candidate.get(key):
             settings[key] = str(candidate[key])
@@ -2727,6 +3056,14 @@ def make_brand_outro_card(
             "source": {"publisher": brand["brand_name"], "short_title": footer},
             "brand_outro": brand,
             "footer": footer,
+            "card_purpose": "brand_outro",
+            "new_information": "locked brand recall and follow CTA",
+            "semantic_summary": {
+                "subject": "brand",
+                "claim": "locked_brand_outro",
+                "evidence": [],
+                "semantic_key": "locked_brand_outro",
+            },
             "evidence_score": {
                 "evidence_strength": 1.0,
                 "novelty": 1.0,
@@ -2766,12 +3103,12 @@ def merge_stage_patch(cards: list[dict], result: dict, stage: str) -> list[dict]
         patch = patch_by_id.get(card.get("card_id")) or {}
         if stage == "card_copy":
             copy = patch.get("copy") or {}
-            for field in ["eyebrow", "headline", "subheadline", "key_message", "insight", "action", "risk"]:
+            for field in ["eyebrow", "headline", "subheadline", "key_message", "insight", "action", "risk", "trade_plan"]:
                 if field in copy:
                     next_card[field] = copy[field]
         elif stage == "ja_localization":
             localized = patch.get("localized_copy") or {}
-            for field in ["eyebrow", "headline", "subheadline", "key_message", "insight", "action", "risk"]:
+            for field in ["eyebrow", "headline", "subheadline", "key_message", "insight", "action", "risk", "trade_plan"]:
                 if field in localized:
                     next_card[field] = localized[field]
         elif stage == "visual_direction":
@@ -2809,7 +3146,7 @@ def reconcile_card_with_canonical(
 ) -> dict:
     next_card = dict(card)
     metric_ids = next_card.get("metric_ids") or [metric.get("id") for metric in next_card.get("metrics", []) if metric.get("id")]
-    next_card["metrics"] = metric_list(canonical_metrics, metric_ids, limit=4)
+    next_card["metrics"] = metric_list(canonical_metrics, metric_ids, limit=8)
     source = next_card.get("source") or {}
     source_id = source.get("source_id")
     if source_id and source_id in canonical_sources_map:
@@ -2820,12 +3157,16 @@ def reconcile_card_with_canonical(
             "short_title": canonical_source.get("title", ""),
             "url": canonical_source.get("url", ""),
             "source_quality": canonical_source.get("source_quality", {}),
+            "asset_relevance": canonical_source.get("asset_relevance", {}),
+            "display_headline_ja": canonical_source.get("display_headline_ja", ""),
+            "news_reaction": canonical_source.get("news_reaction") or {"available": False},
         }
     next_card["evidence"] = [
         ref
         for ref in next_card.get("evidence_refs", [])
         if ref in canonical_evidence.get("metrics", {}) or ref in canonical_evidence.get("claims", {}) or ref in canonical_evidence.get("sources", {})
     ]
+    next_card["provenance"] = provenance_for_card(next_card.get("card_type", ""), next_card.get("evidence_refs", []), next_card.get("source") or {})
     return next_card
 
 
@@ -3043,6 +3384,10 @@ def visible_card_text(card: dict) -> str:
         card.get("action", {}).get("text", ""),
         card.get("risk", {}).get("text", ""),
     ]
+    trade_plan = card.get("trade_plan") or {}
+    for key in ["entry", "wait", "invalid"]:
+        if isinstance(trade_plan.get(key), dict):
+            pieces.append(trade_plan[key].get("condition", ""))
     pieces.extend(metric.get("value", "") for metric in card.get("metrics", []) or [])
     return " ".join(str(piece) for piece in pieces if piece)
 
@@ -3052,6 +3397,7 @@ def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
     seen_risks: set[str] = set()
     seen_actions: set[str] = set()
     seen_messages: set[str] = set()
+    seen_semantic_keys: set[str] = set()
     visible_action_budget = max(2, min(4, len(cards) // 2 + 1))
     visible_action_count = 0
     previous_layout: str | None = None
@@ -3060,6 +3406,7 @@ def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
     for card in cards:
         card_type = card.get("card_type")
         card.setdefault("qa", {}).setdefault("renderable", True)
+        card["qa"].setdefault("warnings", [])
         if card_type not in CARD_TYPES:
             warnings.append(f"invalid card_type normalized: {card_type}")
             card["card_type"] = "market_conclusion"
@@ -3097,6 +3444,18 @@ def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
             card["key_message"] = sanitize_visible_text(card.get("insight", {}).get("text") or card.get("subheadline"))
             card["qa"]["warnings"].append("repeated_message_rewritten")
         seen_messages.add(normalize_sentence_key(card.get("key_message")))
+        if card_type != BRAND_OUTRO_TYPE:
+            if not clean_text(card.get("card_purpose")) or not clean_text(card.get("new_information")):
+                card["qa"]["warnings"].append("card_purpose_missing")
+                card["qa"]["renderable"] = False
+                warnings.append(f"BLOCKING: card purpose missing for {card_type}")
+            semantic_key = clean_text((card.get("semantic_summary") or {}).get("semantic_key"), 120)
+            if semantic_key and semantic_key in seen_semantic_keys:
+                card["qa"]["warnings"].append("semantic_duplicate_detected")
+                card["qa"]["renderable"] = False
+                warnings.append(f"BLOCKING: semantic duplicate detected: {semantic_key}")
+            if semantic_key:
+                seen_semantic_keys.add(semantic_key)
         for blocked in INTERNAL_VISIBLE_BLOCKLIST:
             if blocked in visible_card_text(card):
                 card["qa"]["warnings"].append(f"blocked_label_removed:{blocked}")
@@ -3116,6 +3475,19 @@ def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
                 card["qa"]["warnings"].append("empty_variable_pattern_detected")
                 card["qa"]["renderable"] = False
                 warnings.append("empty dynamic variable pattern detected")
+            if card_type == "news_context":
+                reaction = ((card.get("source") or {}).get("news_reaction") or {})
+                strong_reaction_terms = ["市場は反応していない", "価格はまだ答えていない", "反応しなかった"]
+                if not reaction.get("available") and any(term in visible_text for term in strong_reaction_terms):
+                    card["qa"]["warnings"].append("news_reaction_claim_without_data")
+                    card["qa"]["renderable"] = False
+                    warnings.append("BLOCKING: news reaction claim without reaction data")
+                relevance = ((card.get("source") or {}).get("asset_relevance") or {})
+                if relevance.get("primary_asset") not in {"BTC", "MARKET", "MACRO", ""} and to_float(relevance.get("btc_relevance")) is not None and to_float(relevance.get("btc_relevance")) < 0.45:
+                    if "BTC" in visible_text and any(term in visible_text for term in strong_reaction_terms):
+                        card["qa"]["warnings"].append("news_asset_mismatch_reaction_claim")
+                        card["qa"]["renderable"] = False
+                        warnings.append("BLOCKING: low BTC relevance news used as BTC reaction")
         if any(not metric.get("locked") for metric in card.get("metrics", []) or []):
             card["qa"]["warnings"].append("numeric_validation_unlocked_metric")
             card["qa"]["renderable"] = False

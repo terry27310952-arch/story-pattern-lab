@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / "apps" / "streamlit"))
 
 import reasoning_engine as engine  # noqa: E402
 from excel_exporter import build_excel_bytes, flatten_visual_direction_rows  # noqa: E402
-from market_data import summarize_market  # noqa: E402
+from market_data import nearest_levels, summarize_market  # noqa: E402
 from reasoning_engine import (  # noqa: E402
     BRAND_OUTRO_TYPE,
     CARD_TYPES,
@@ -145,19 +145,56 @@ class CardContractTest(unittest.TestCase):
         self.assertFalse([text for text, count in risk_counts.items() if text and count > 1])
 
     def test_numeric_values_are_preserved(self) -> None:
-        metrics_by_id = {
-            metric["id"]: metric
-            for card in self.cards
-            for metric in card.get("metrics", [])
-        }
+        metrics_by_id = self.metrics
         self.assertEqual(metrics_by_id["btc_price"]["raw_value"], 62971)
         self.assertEqual(metrics_by_id["btc_support"]["raw_value"], 62500)
         self.assertEqual(metrics_by_id["btc_resistance"]["raw_value"], 63417)
+        self.assertEqual(metrics_by_id["btc_primary_support"]["raw_value"], 62500)
+        self.assertEqual(metrics_by_id["btc_primary_resistance"]["raw_value"], 63417)
+        self.assertEqual(metrics_by_id["btc_resistance_cluster"]["raw_value"]["lower"], 63417)
+        self.assertEqual(metrics_by_id["btc_resistance_cluster"]["raw_value"]["upper"], 63516)
         self.assertEqual(metrics_by_id["mark_price"]["raw_value"], 63005)
         self.assertEqual(metrics_by_id["funding"]["raw_value"], 0.01)
         self.assertEqual(metrics_by_id["open_interest"]["raw_value"], 3393932)
+        self.assertEqual(metrics_by_id["oi_change_24h"]["raw_value"], 6.2)
         self.assertEqual(metrics_by_id["rsi14"]["raw_value"], 51.81)
         self.assertEqual(metrics_by_id["macd"]["raw_value"], "bearish")
+
+    def test_level_quality_micro_level_is_not_auto_primary(self) -> None:
+        levels = [
+            {
+                "direction": "support",
+                "level": 63046,
+                "distance_pct": -0.01,
+                "distance_atr": 0.027,
+                "level_type": "micro_level",
+                "level_quality_score": 0.09,
+                "reason": "round-number floor",
+            },
+            {
+                "direction": "support",
+                "level": 62500,
+                "distance_pct": -0.88,
+                "distance_atr": 1.65,
+                "level_type": "structural_level",
+                "level_quality_score": 0.84,
+                "reason": "swing low repeated touch",
+            },
+            {
+                "direction": "resistance",
+                "level": 63417,
+                "distance_pct": 0.57,
+                "distance_atr": 1.08,
+                "level_type": "structural_level",
+                "level_quality_score": 0.82,
+                "reason": "swing high",
+            },
+        ]
+        result = nearest_levels(levels, 63055, 335.93)
+        self.assertEqual(result["nearest_support"]["level"], 63046)
+        self.assertEqual(result["nearest_support"]["level_type"], "micro_level")
+        self.assertEqual(result["primary_support"]["level"], 62500)
+        self.assertGreater(result["primary_support"]["level_quality_score"], result["nearest_support"]["level_quality_score"])
 
     def test_canonical_data_mutation_is_ignored(self) -> None:
         parsed = {
@@ -210,21 +247,54 @@ class CardContractTest(unittest.TestCase):
         self.assertLess(profile["evidence_strength"], 0.6)
 
     def test_derivatives_and_rsi_semantics_follow_data_direction(self) -> None:
-        derivative_card = copy.deepcopy(next(card for card in self.cards if card["card_type"] == "derivatives"))
-        for metric in derivative_card["metrics"]:
-            if metric["id"] == "funding":
-                metric["raw_value"] = -0.02
-                metric["value"] = "-0.02%"
-            if metric["id"] == "rsi14":
-                metric["raw_value"] = 80
-                metric["value"] = "80"
+        derivative_card = self.derivative_card_for(-0.02, 6.2, -1.0, rsi=80)
         copy_result = ja_copy_for_card(derivative_card)
         text = " ".join(str(value) for value in copy_result.values())
         self.assertIn("ショート側", text)
         self.assertNotIn("ロング優勢", text)
         self.assertNotIn("ロング寄り", text)
-        self.assertIn("過熱圏", text)
+        self.assertIn("過熱", text)
         self.assertNotIn("まだ過熱ではない", text)
+
+    def derivative_card_for(self, funding: float, oi_change_24h: float | None, price_change_24h: float | None, rsi: float = 51.0) -> dict:
+        metrics = [
+            {"id": "mark_price", "label": "Mark", "value": "$63,005", "raw_value": 63005, "locked": True},
+            {"id": "funding", "label": "Funding", "value": f"{funding:+.2f}%", "raw_value": funding, "locked": True},
+            {"id": "open_interest", "label": "OI", "value": "3,393,932", "raw_value": 3393932, "locked": True},
+            {"id": "rsi14", "label": "RSI14", "value": str(rsi), "raw_value": rsi, "locked": True},
+        ]
+        if oi_change_24h is not None:
+            metrics.append({"id": "oi_change_24h", "label": "OI 24H", "value": f"{oi_change_24h:+.2f}%", "raw_value": oi_change_24h, "locked": True})
+        if price_change_24h is not None:
+            metrics.append({"id": "btc_price_change_24h", "label": "BTC 24H Futures", "value": f"{price_change_24h:+.2f}%", "raw_value": price_change_24h, "locked": True})
+        return {
+            "card_type": "derivatives",
+            "slide": 3,
+            "metrics": metrics,
+            "source": {},
+            "semantic": {"role": "positioning_read"},
+        }
+
+    def test_derivatives_copy_requires_delta_for_strong_positioning(self) -> None:
+        case_a = ja_copy_for_card(self.derivative_card_for(0.01, None, None))
+        text_a = json.dumps(case_a, ensure_ascii=False)
+        self.assertIn("OI変化がない", text_a)
+        self.assertNotIn("ロング側に傾いている", text_a)
+        self.assertNotIn("ロング優勢", text_a)
+
+        case_b = ja_copy_for_card(self.derivative_card_for(0.01, 8.2, 2.4))
+        text_b = json.dumps(case_b, ensure_ascii=False)
+        self.assertIn("新規ロング", text_b)
+
+        case_c = ja_copy_for_card(self.derivative_card_for(-0.01, 2.0, -1.0))
+        text_c = json.dumps(case_c, ensure_ascii=False)
+        self.assertIn("ショート側", text_c)
+        self.assertNotIn("ロング優勢", text_c)
+
+        case_d = ja_copy_for_card(self.derivative_card_for(0.0, 0.0, 0.0, rsi=76))
+        text_d = json.dumps(case_d, ensure_ascii=False)
+        self.assertIn("過熱", text_d)
+        self.assertNotIn("まだ過熱ではない", text_d)
 
     def test_source_binding_and_news_reaction_contract(self) -> None:
         news_card = next(card for card in self.cards if card["card_type"] == "news_context")
@@ -236,6 +306,31 @@ class CardContractTest(unittest.TestCase):
         text = visible_card_text(news_card)
         for forbidden in ["価格はまだ答えていない", "市場は答えていない", "反応しなかった"]:
             self.assertNotIn(forbidden, text)
+        self.assertEqual((news_card["source"].get("asset_relevance") or {}).get("primary_asset"), "BTC")
+        self.assertTrue(news_card["source"].get("display_headline_ja"))
+
+    def test_low_btc_relevance_news_is_not_bound_to_btc_reaction(self) -> None:
+        link_resources = [
+            {
+                "source": "U.Today",
+                "source_type": "media",
+                "title": "'Investors See Chainlink Powering It All,' Analyst Says",
+                "url": "https://example.com/link-chainlink",
+                "tags": "LINK,Chainlink",
+                "trader_score": 91,
+                "fetch_method": "article_body",
+                "material": ("Chainlink institutional data narrative returned to market discussion. ") * 20,
+            }
+        ]
+        brief = local_generate_brief(link_resources, self.snapshot, "daily", "professional")
+        package = generate_content_package(brief, link_resources, 6, {"provider": PROVIDER_LOCAL}, DEFAULT_OUTPUT_LOCALE)
+        news_cards = [card for card in package["cards"]["6장"] if card["card_type"] == "news_context"]
+        for card in news_cards:
+            relevance = card["source"].get("asset_relevance") or {}
+            self.assertNotEqual(relevance.get("primary_asset"), "BTC")
+            text = visible_card_text(card)
+            self.assertNotIn("BTCがこのニュースに反応していない", text)
+            self.assertNotIn("価格はまだ答えていない", text)
 
     def test_renderable_false_cards_are_removed_from_production(self) -> None:
         bad_card = copy.deepcopy(next(card for card in self.cards if card["card_type"] == "key_levels"))
@@ -261,6 +356,16 @@ class CardContractTest(unittest.TestCase):
         self.assertTrue(checked[-1]["qa"].get("renderable", True))
         self.assertFalse([warning for warning in warnings if "brand_outro missing configured CTA" in warning])
 
+        preset_cards, _ = derive_variant(
+            self.cards,
+            5,
+            "preset",
+            "ja-JP",
+            {"brand_outro": {"cta_preset": "C"}},
+            self.package["content_quality"]["editor_passes"]["6장"],
+        )
+        self.assertEqual(preset_cards[-1]["key_message"], engine.BRAND_CTA_PRESETS["C"])
+
     def test_character_and_layout_variation(self) -> None:
         shots = [card["visual_direction"]["character_shot"] for card in self.cards]
         layouts = [card["visual_direction"]["layout_variant"] for card in self.cards]
@@ -285,6 +390,34 @@ class CardContractTest(unittest.TestCase):
         self.assertGreaterEqual(len(visual_rows), 7)
         excel_bytes = build_excel_bytes(self.brief, self.package, self.resources, self.snapshot)
         self.assertGreater(len(excel_bytes), 20000)
+
+    def test_card_purpose_provenance_and_scenario_cluster(self) -> None:
+        opener = self.cards[0]
+        price_card = next(card for card in self.cards if card["card_type"] == "key_levels")
+        derivatives_card = next(card for card in self.cards if card["card_type"] == "derivatives")
+        scenario_card = next(card for card in self.cards if card["card_type"] == "scenarios")
+        trade_card = next(card for card in self.cards if card["card_type"] == "trade_plan")
+
+        self.assertEqual(opener["card_purpose"], "market_thesis")
+        self.assertEqual(price_card["card_purpose"], "price_map")
+        self.assertNotIn("$62,500", visible_card_text(opener))
+        self.assertIn("$62,500", visible_card_text(price_card))
+        self.assertIn("$63,417〜$63,516", visible_card_text(price_card))
+        self.assertIn("$63,417〜$63,516", visible_card_text(scenario_card))
+
+        self.assertFalse((price_card.get("provenance") or {}).get("editorial_sources"))
+        self.assertFalse((derivatives_card.get("provenance") or {}).get("editorial_sources"))
+        self.assertTrue((price_card.get("provenance") or {}).get("data_sources"))
+        self.assertTrue((derivatives_card.get("provenance") or {}).get("data_sources"))
+
+        self.assertIn("entry", trade_card.get("trade_plan") or {})
+        self.assertIn("wait", trade_card.get("trade_plan") or {})
+        self.assertIn("invalid", trade_card.get("trade_plan") or {})
+        semantic_keys = [
+            (card.get("semantic_summary") or {}).get("semantic_key")
+            for card in self.content_cards()
+        ]
+        self.assertEqual(len(semantic_keys), len(set(semantic_keys)))
 
     def test_master_carousel_variants_share_one_analysis_and_call_count(self) -> None:
         master_ids = {

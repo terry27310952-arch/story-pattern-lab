@@ -20,6 +20,7 @@ from market_data import (
     summarize_market,
 )
 from reasoning_engine import (
+    BRAND_CTA_PRESETS,
     DEFAULT_BRAND_OUTRO,
     DEFAULT_OUTPUT_LOCALE,
     PROVIDER_LOCAL,
@@ -994,7 +995,8 @@ with st.sidebar:
     with st.expander("브랜드 엔딩", expanded=False):
         st.caption("마지막 카드는 항상 고정 브랜드 발행 카드로 붙습니다.")
         brand_account = st.text_input("FOLLOW 계정 ID", value=env_value("BRAND_ACCOUNT", ""))
-        brand_cta = st.text_area("고정 CTA", value=DEFAULT_BRAND_OUTRO["cta"], height=72)
+        brand_cta_preset = st.selectbox("CTA 프리셋", list(BRAND_CTA_PRESETS.keys()), index=0)
+        brand_cta = st.text_area("고정 CTA", value=BRAND_CTA_PRESETS.get(brand_cta_preset, DEFAULT_BRAND_OUTRO["cta"]), height=72)
 
     st.divider()
     st.caption(f"버전: {APP_VERSION}")
@@ -1187,6 +1189,7 @@ with tabs[3]:
             config = provider_config(provider_label, temperature)
             config["brand_outro"] = {
                 "brand_name": DEFAULT_BRAND_OUTRO["brand_name"],
+                "cta_preset": brand_cta_preset,
                 "cta": brand_cta.strip() or DEFAULT_BRAND_OUTRO["cta"],
                 "account": brand_account.strip(),
             }

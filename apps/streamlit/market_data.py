@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 
 USER_AGENT = "Mozilla/5.0 StoryPatternLab/1.1; crypto-market-levels"
-MARKET_SCHEMA_VERSION = "price-level-depth-v6-global-context"
+MARKET_SCHEMA_VERSION = "price-level-depth-v7-level-quality-derivatives-news"
 
 
 TRADING_ASSETS = {
@@ -228,6 +228,170 @@ def dedupe_levels(levels: list[dict], current: float, tolerance_pct: float = 0.3
     return result
 
 
+def level_member_type(reason: str) -> str:
+    lowered = reason.lower()
+    if "ma" in lowered:
+        return reason.replace(" ", "_").lower()
+    if "bollinger" in lowered:
+        return "bollinger"
+    if "fib" in lowered:
+        return "fibonacci"
+    if "round" in lowered:
+        return "round_number"
+    if any(token in lowered for token in ["low", "high"]):
+        return "horizontal_level"
+    return "derived_level"
+
+
+def candle_touch_count(level: float, highs: list[float], lows: list[float], tolerance: float) -> int:
+    if tolerance <= 0:
+        return 0
+    touches = 0
+    for high, low in zip(highs[-90:], lows[-90:]):
+        if abs(high - level) <= tolerance or abs(low - level) <= tolerance or low <= level <= high:
+            touches += 1
+    return touches
+
+
+def reaction_strength_for_level(level: float, current: float, highs: list[float], lows: list[float], closes: list[float], tolerance: float) -> float:
+    if not closes or tolerance <= 0:
+        return 0.0
+    reactions: list[float] = []
+    for index in range(max(1, len(closes) - 90), len(closes)):
+        touched = abs(highs[index] - level) <= tolerance or abs(lows[index] - level) <= tolerance or lows[index] <= level <= highs[index]
+        if touched:
+            reactions.append(abs(closes[index] - level) / current)
+    return round(min(1.0, mean(reactions) * 35), 3) if reactions else 0.0
+
+
+def volume_confirmation_for_level(level: float, highs: list[float], lows: list[float], volumes: list[float], tolerance: float) -> float:
+    if len(volumes) < 20 or tolerance <= 0:
+        return 0.0
+    avg_volume = mean([value for value in volumes[-30:] if value is not None] or [0.0])
+    if avg_volume <= 0:
+        return 0.0
+    touch_volumes = [
+        volumes[index]
+        for index in range(max(0, len(volumes) - 90), len(volumes))
+        if index < len(highs)
+        and (abs(highs[index] - level) <= tolerance or abs(lows[index] - level) <= tolerance or lows[index] <= level <= highs[index])
+    ]
+    if not touch_volumes:
+        return 0.0
+    return round(min(1.0, mean(touch_volumes) / avg_volume - 0.75), 3)
+
+
+def structural_reason_score(reason: str) -> float:
+    reason_upper = reason.upper()
+    score = 0.18
+    if "90D" in reason_upper:
+        score += 0.22
+    if "30D" in reason_upper:
+        score += 0.16
+    if "7D" in reason_upper:
+        score += 0.08
+    if "MA200" in reason_upper:
+        score += 0.2
+    if "MA50" in reason_upper or "MA20" in reason_upper:
+        score += 0.14
+    if "FIB" in reason_upper:
+        score += 0.16
+    if "BOLLINGER" in reason_upper:
+        score += 0.1
+    if "ROUND" in reason_upper:
+        score += 0.08
+    return min(1.0, score)
+
+
+def enrich_level_quality(
+    level_row: dict,
+    current: float,
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    volumes: list[float],
+    atr14: float | None,
+) -> dict:
+    level = safe_float(level_row.get("level"))
+    if level is None:
+        return level_row
+    atr_value = atr14 if atr14 not in (None, 0) else None
+    tolerance = max((atr_value or current * 0.005) * 0.25, current * 0.001)
+    distance_atr = round(abs(level - current) / atr_value, 3) if atr_value else None
+    touch_count = candle_touch_count(level, highs, lows, tolerance)
+    reaction_strength = reaction_strength_for_level(level, current, highs, lows, closes, tolerance)
+    volume_confirmation = volume_confirmation_for_level(level, highs, lows, volumes, tolerance)
+    indicator_cluster = 1.0 if any(token in str(level_row.get("reason", "")).upper() for token in ["MA", "BOLLINGER", "FIB", "ROUND"]) else 0.0
+    swing_significance = structural_reason_score(str(level_row.get("reason", "")))
+    touch_score = min(1.0, touch_count / 4)
+    distance_score = 0.05
+    if distance_atr is not None:
+        if distance_atr < 0.1:
+            distance_score = 0.02
+        elif distance_atr <= 2.5:
+            distance_score = 0.16
+        elif distance_atr <= 6:
+            distance_score = 0.1
+    quality = (
+        swing_significance * 0.34
+        + touch_score * 0.18
+        + reaction_strength * 0.18
+        + max(0.0, volume_confirmation) * 0.1
+        + indicator_cluster * 0.12
+        + distance_score
+    )
+    structural_support = swing_significance + touch_score + reaction_strength + indicator_cluster
+    level_type = "micro_level" if distance_atr is not None and distance_atr < 0.1 and structural_support < 0.85 else "structural_level"
+    level_row.update(
+        {
+            "distance_atr": distance_atr,
+            "touch_count": touch_count,
+            "reaction_strength": reaction_strength,
+            "volume_confirmation": volume_confirmation,
+            "indicator_cluster": indicator_cluster,
+            "swing_significance": round(swing_significance, 3),
+            "level_quality_score": round(min(1.0, max(0.0, quality)), 3),
+            "level_type": level_type,
+            "member_type": level_member_type(str(level_row.get("reason", ""))),
+        }
+    )
+    return level_row
+
+
+def build_level_clusters(levels: list[dict], current: float, atr14: float | None) -> list[dict]:
+    clusters: list[dict] = []
+    tolerance = max((atr14 or current * 0.005) * 0.35, current * 0.0025)
+    for direction in ["support", "resistance"]:
+        candidates = sorted([row for row in levels if row.get("direction") == direction], key=lambda row: row.get("level") or 0)
+        current_cluster: list[dict] = []
+        for row in candidates:
+            if not current_cluster:
+                current_cluster = [row]
+                continue
+            if abs((row.get("level") or 0) - (current_cluster[-1].get("level") or 0)) <= tolerance:
+                current_cluster.append(row)
+            else:
+                if len(current_cluster) >= 2:
+                    clusters.append(make_level_cluster(direction, current_cluster))
+                current_cluster = [row]
+        if len(current_cluster) >= 2:
+            clusters.append(make_level_cluster(direction, current_cluster))
+    return sorted(clusters, key=lambda item: (-item.get("quality_score", 0), abs(((item.get("lower") or 0) + (item.get("upper") or 0)) / 2 - current)))
+
+
+def make_level_cluster(direction: str, members: list[dict]) -> dict:
+    levels = [safe_float(row.get("level")) for row in members if safe_float(row.get("level")) is not None]
+    scores = [safe_float(row.get("level_quality_score"), 0.0) or 0.0 for row in members]
+    return {
+        "cluster_type": direction,
+        "lower": round_price(min(levels)) if levels else None,
+        "upper": round_price(max(levels)) if levels else None,
+        "members": sorted({row.get("member_type") or level_member_type(str(row.get("reason", ""))) for row in members}),
+        "member_reasons": [row.get("reason") for row in members],
+        "quality_score": round(min(1.0, (mean(scores) if scores else 0.0) + min(0.18, len(members) * 0.04)), 3),
+    }
+
+
 def build_price_levels(
     asset: str,
     current: float,
@@ -237,6 +401,7 @@ def build_price_levels(
     indicators: dict,
     step: float,
     source_label: str = "Binance spot daily OHLC",
+    volumes: list[float] | None = None,
 ) -> list[dict]:
     candidates: list[tuple[str, float | None]] = [
         ("24H low", min(lows[-2:]) if len(lows) >= 2 else None),
@@ -267,12 +432,15 @@ def build_price_levels(
         candidates.extend([("round-number floor", lower_round), ("round-number ceiling", upper_round)])
 
     levels: list[dict] = []
+    volume_values = volumes or []
+    atr14 = safe_float(indicators.get("atr14"))
     for reason, level in candidates:
         if level is None or level <= 0:
             continue
         direction = "support" if level < current else "resistance" if level > current else "pivot"
         distance_pct = ((level - current) / current) * 100 if current else None
         levels.append(
+            enrich_level_quality(
             {
                 "asset": asset,
                 "direction": direction,
@@ -281,21 +449,49 @@ def build_price_levels(
                 "reason": reason,
                 "importance": level_importance(distance_pct, reason),
                 "source": f"{source_label} + derived indicator",
-            }
+            },
+                current,
+                highs,
+                lows,
+                closes,
+                volume_values,
+                atr14,
+            )
         )
     return dedupe_levels(levels, current)
 
 
-def nearest_levels(levels: list[dict]) -> dict:
+def nearest_levels(levels: list[dict], current: float | None = None, atr14: float | None = None) -> dict:
     supports = [row for row in levels if row["direction"] == "support"]
     resistances = [row for row in levels if row["direction"] == "resistance"]
     supports.sort(key=lambda row: abs(row.get("distance_pct") or 999))
     resistances.sort(key=lambda row: abs(row.get("distance_pct") or 999))
+    quality_supports = sorted(
+        [row for row in supports if row.get("level_type") != "micro_level"],
+        key=lambda row: (-(row.get("level_quality_score") or 0), abs(row.get("distance_pct") or 999)),
+    )
+    quality_resistances = sorted(
+        [row for row in resistances if row.get("level_type") != "micro_level"],
+        key=lambda row: (-(row.get("level_quality_score") or 0), abs(row.get("distance_pct") or 999)),
+    )
+    resolved_current = current
+    if resolved_current is None and (supports or resistances):
+        # Reconstruct current approximately from level and signed distance.
+        sample = (supports or resistances)[0]
+        distance = safe_float(sample.get("distance_pct"))
+        level = safe_float(sample.get("level"))
+        if distance is not None and level is not None:
+            resolved_current = level / (1 + distance / 100)
+    clusters = build_level_clusters(levels, resolved_current or 0.0, atr14) if resolved_current else []
     return {
         "nearest_support": supports[0] if supports else {},
+        "primary_support": quality_supports[0] if quality_supports else supports[0] if supports else {},
         "next_supports": supports[:4],
         "nearest_resistance": resistances[0] if resistances else {},
+        "primary_resistance": quality_resistances[0] if quality_resistances else resistances[0] if resistances else {},
         "next_resistances": resistances[:4],
+        "support_clusters": [item for item in clusters if item.get("cluster_type") == "support"][:3],
+        "resistance_clusters": [item for item in clusters if item.get("cluster_type") == "resistance"][:3],
     }
 
 
@@ -348,6 +544,59 @@ def funding_percent(value: object) -> float | None:
     if decimal_rate is None:
         return None
     return round(decimal_rate * 100, 4)
+
+
+def change_from_history(values: list[float], periods_back: int) -> float | None:
+    if len(values) <= periods_back:
+        return None
+    previous = values[-periods_back - 1]
+    current = values[-1]
+    return pct_change(previous, current)
+
+
+def fetch_binance_derivative_context(pair: str) -> tuple[dict, list[str]]:
+    context = {
+        "oi": {"current": None, "change_1h": None, "change_4h": None, "change_24h": None},
+        "funding": {"current": None, "average_24h": None, "percentile": None},
+        "price_change": {"change_1h": None, "change_4h": None, "change_24h": None},
+        "source": "Binance Futures public data",
+    }
+    errors: list[str] = []
+    oi_payload, oi_error = fetch_json(f"https://fapi.binance.com/futures/data/openInterestHist?symbol={pair}&period=1h&limit=30", timeout=12)
+    if isinstance(oi_payload, list):
+        oi_values = [safe_float(row.get("sumOpenInterest")) for row in oi_payload if isinstance(row, dict)]
+        oi_values = [value for value in oi_values if value is not None]
+        if oi_values:
+            context["oi"]["current"] = round_price(oi_values[-1])
+            context["oi"]["change_1h"] = change_from_history(oi_values, 1)
+            context["oi"]["change_4h"] = change_from_history(oi_values, 4)
+            context["oi"]["change_24h"] = change_from_history(oi_values, 24)
+    elif oi_error:
+        errors.append(f"Binance OI history: {oi_error}")
+
+    funding_payload, funding_error = fetch_json(f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={pair}&limit=30", timeout=12)
+    if isinstance(funding_payload, list):
+        rates = [funding_percent(row.get("fundingRate")) for row in funding_payload if isinstance(row, dict)]
+        rates = [value for value in rates if value is not None]
+        if rates:
+            context["funding"]["current"] = rates[-1]
+            context["funding"]["average_24h"] = round(mean(rates[-3:]), 4) if len(rates) >= 3 else rates[-1]
+            sorted_rates = sorted(rates)
+            rank = sum(1 for value in sorted_rates if value <= rates[-1])
+            context["funding"]["percentile"] = round(rank / len(sorted_rates), 3) if sorted_rates else None
+    elif funding_error:
+        errors.append(f"Binance funding history: {funding_error}")
+
+    price_payload, price_error = fetch_json(f"https://fapi.binance.com/fapi/v1/klines?symbol={pair}&interval=1h&limit=30", timeout=12)
+    candles = parse_binance_klines(price_payload)
+    closes = [row["close"] for row in candles]
+    if closes:
+        context["price_change"]["change_1h"] = change_from_history(closes, 1)
+        context["price_change"]["change_4h"] = change_from_history(closes, 4)
+        context["price_change"]["change_24h"] = change_from_history(closes, 24)
+    elif price_error:
+        errors.append(f"Binance futures 1H price candles: {price_error}")
+    return context, errors
 
 
 def fetch_binance_derivatives(pair: str) -> tuple[dict, list[str]]:
@@ -448,6 +697,15 @@ def fetch_derivatives(pair: str) -> dict:
             fill_derivative_field(row, field, provider_row.get(field), provider)
         if derivative_complete(row):
             break
+    derivative_context, context_errors = fetch_binance_derivative_context(pair)
+    row["derivative_context"] = derivative_context
+    if derivative_context.get("oi", {}).get("current") is not None and row.get("open_interest_contracts") is None:
+        row["open_interest_contracts"] = derivative_context["oi"]["current"]
+        row.setdefault("field_sources", {})["open_interest_contracts"] = derivative_context.get("source")
+    if derivative_context.get("funding", {}).get("current") is not None and row.get("last_funding_rate") is None:
+        row["last_funding_rate"] = derivative_context["funding"]["current"]
+        row.setdefault("field_sources", {})["last_funding_rate"] = derivative_context.get("source")
+    errors.extend(context_errors)
     used_sources = sorted(set(row.get("field_sources", {}).values()))
     row["source"] = " + ".join(used_sources) if used_sources else "Derivatives public API unavailable"
     if errors and not derivative_complete(row):
@@ -541,13 +799,14 @@ def fetch_crypto_assets() -> tuple[list[dict], dict, list[dict], list[dict], lis
         closes = [row["close"] for row in candles]
         highs = [row["high"] for row in candles]
         lows = [row["low"] for row in candles]
+        volumes = [row.get("volume", 0.0) for row in candles]
         indicators = calculate_indicators(candles) if candles else {}
         current = safe_float(ticker.get("lastPrice")) or indicators.get("current")
         if not current:
             cg_row = cg.get(meta["coingecko_id"], {})
             current = safe_float(cg_row.get("usd"))
-        levels = build_price_levels(name, float(current), highs, lows, closes, indicators, meta["step"], candle_source) if current and candles else []
-        level_summary = nearest_levels(levels)
+        levels = build_price_levels(name, float(current), highs, lows, closes, indicators, meta["step"], candle_source, volumes) if current and candles else []
+        level_summary = nearest_levels(levels, float(current) if current else None, indicators.get("atr14"))
         all_levels.extend(levels[:10])
         cg_row = cg.get(meta["coingecko_id"], {})
         change_24h = safe_float(ticker.get("priceChangePercent"))
@@ -568,6 +827,8 @@ def fetch_crypto_assets() -> tuple[list[dict], dict, list[dict], list[dict], lis
             "technical_bias": technical_bias(indicators, current),
             "nearest_support": level_summary.get("nearest_support", {}).get("level"),
             "nearest_resistance": level_summary.get("nearest_resistance", {}).get("level"),
+            "primary_support": level_summary.get("primary_support", {}).get("level"),
+            "primary_resistance": level_summary.get("primary_resistance", {}).get("level"),
             "rsi14": indicators.get("rsi14"),
             "macd_bias": indicators.get("macd", {}).get("bias"),
             "source": f"{candle_source} + CoinGecko public API",
@@ -780,6 +1041,7 @@ def summarize_market(snapshot: dict) -> dict:
     btc_indicators = btc_tech.get("indicators", {})
     btc_levels = btc_tech.get("levels", {})
     btc_derivative = find_derivative(snapshot, "BTCUSDT")
+    btc_derivative_context = btc_derivative.get("derivative_context") or {}
 
     risk_points = 0
     risk_points += 2 if (btc.get("change_7d") or 0) > 3 else -2 if (btc.get("change_7d") or 0) < -3 else 0
@@ -803,8 +1065,12 @@ def summarize_market(snapshot: dict) -> dict:
 
     nearest_support = btc_levels.get("nearest_support", {})
     nearest_resistance = btc_levels.get("nearest_resistance", {})
+    primary_support = btc_levels.get("primary_support", {}) or nearest_support
+    primary_resistance = btc_levels.get("primary_resistance", {}) or nearest_resistance
     btc_support_level = nearest_support.get("level") or btc.get("nearest_support")
     btc_resistance_level = nearest_resistance.get("level") or btc.get("nearest_resistance")
+    btc_primary_support_level = primary_support.get("level") or btc.get("primary_support") or btc_support_level
+    btc_primary_resistance_level = primary_resistance.get("level") or btc.get("primary_resistance") or btc_resistance_level
     btc_price = btc.get("price")
     support_distance = nearest_support.get("distance_pct")
     resistance_distance = nearest_resistance.get("distance_pct")
@@ -833,12 +1099,29 @@ def summarize_market(snapshot: dict) -> dict:
         "btc_atr14": btc_indicators.get("atr14"),
         "btc_atr14_pct": btc_indicators.get("atr14_pct"),
         "btc_nearest_support": btc_support_level,
+        "btc_primary_support": btc_primary_support_level,
+        "btc_primary_support_profile": primary_support,
         "btc_support_distance_pct": support_distance,
         "btc_nearest_resistance": btc_resistance_level,
+        "btc_primary_resistance": btc_primary_resistance_level,
+        "btc_primary_resistance_profile": primary_resistance,
         "btc_resistance_distance_pct": resistance_distance,
+        "btc_support_clusters": btc_levels.get("support_clusters", []),
+        "btc_resistance_clusters": btc_levels.get("resistance_clusters", []),
+        "btc_next_supports": btc_levels.get("next_supports", []),
+        "btc_next_resistances": btc_levels.get("next_resistances", []),
         "btc_mark_price": btc_derivative.get("mark_price"),
         "btc_funding_rate": btc_derivative.get("last_funding_rate"),
+        "btc_funding_average_24h": (btc_derivative_context.get("funding") or {}).get("average_24h"),
+        "btc_funding_percentile": (btc_derivative_context.get("funding") or {}).get("percentile"),
         "btc_open_interest_contracts": btc_derivative.get("open_interest_contracts"),
+        "btc_oi_change_1h": (btc_derivative_context.get("oi") or {}).get("change_1h"),
+        "btc_oi_change_4h": (btc_derivative_context.get("oi") or {}).get("change_4h"),
+        "btc_oi_change_24h": (btc_derivative_context.get("oi") or {}).get("change_24h"),
+        "btc_price_change_1h": (btc_derivative_context.get("price_change") or {}).get("change_1h"),
+        "btc_price_change_4h": (btc_derivative_context.get("price_change") or {}).get("change_4h"),
+        "btc_price_change_24h": (btc_derivative_context.get("price_change") or {}).get("change_24h"),
+        "btc_derivative_context": btc_derivative_context,
         "btc_open_interest_value_usd": btc_derivative.get("open_interest_value_usd"),
         "btc_open_interest_base": btc_derivative.get("open_interest_base"),
         "btc_derivatives_source": btc_derivative.get("source"),
@@ -922,4 +1205,24 @@ def flatten_indicator_rows(snapshot: dict) -> list[dict]:
 
 
 def flatten_derivatives_rows(snapshot: dict) -> list[dict]:
-    return snapshot.get("derivatives", []) or []
+    rows = []
+    for row in snapshot.get("derivatives", []) or []:
+        item = dict(row)
+        context = item.get("derivative_context") or {}
+        oi = context.get("oi") or {}
+        funding = context.get("funding") or {}
+        price_change = context.get("price_change") or {}
+        item.update(
+            {
+                "oi_change_1h": oi.get("change_1h"),
+                "oi_change_4h": oi.get("change_4h"),
+                "oi_change_24h": oi.get("change_24h"),
+                "funding_average_24h": funding.get("average_24h"),
+                "funding_percentile": funding.get("percentile"),
+                "futures_price_change_1h": price_change.get("change_1h"),
+                "futures_price_change_4h": price_change.get("change_4h"),
+                "futures_price_change_24h": price_change.get("change_24h"),
+            }
+        )
+        rows.append(item)
+    return rows
