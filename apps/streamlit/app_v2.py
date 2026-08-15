@@ -30,7 +30,7 @@ from story_content_pipeline import (
 from trader_pipeline import generate_trader_result
 
 
-APP_VERSION = "2026-08-16 dual-pipeline-v6.0"
+APP_VERSION = "2026-08-16 dual-pipeline-v10.2"
 DISPLAY_BRAND_LABEL = "キヨサキ"
 DEFAULT_CTA = "フォローして、勢力が入ったポイントを無料でチェック。"
 
@@ -193,9 +193,10 @@ def render_card_package(package: dict) -> None:
                             {
                                 "card_type": card.get("card_type"),
                                 "story_role": card.get("story_role"),
-                                "story_archetype": card.get("story_archetype"),
+                                "story_tag": card.get("story_archetype"),
                                 "evidence_refs": card.get("evidence_refs"),
                                 "layout": (card.get("visual_direction") or {}).get("layout_variant"),
+                                "scene_type": (card.get("visual_direction") or {}).get("scene_type"),
                                 "character_required": (card.get("visual_direction") or {}).get("character_required"),
                             }
                         )
@@ -231,24 +232,28 @@ def render_trader_brief(brief: dict) -> None:
 def render_story_summary(package: dict) -> None:
     context = package.get("story_context") or {}
     hero = context.get("hero_story") or {}
+    plan = context.get("story_plan") or {}
+    graph = context.get("fact_graph") or {}
+    quality = package.get("content_quality") or {}
     if not hero:
         return
     c1, c2, c3 = st.columns([2, 1, 1])
-    c1.markdown(f"### {hero.get('headline_ja', '')}")
-    c2.metric("Archetype", hero.get("archetype", "market_map"))
-    c3.metric("Story Score", hero.get("story_score", 0))
-    st.write(hero.get("why_now_ja", ""))
-    if hero.get("conflict_ja"):
-        st.caption(f"Conflict · {hero.get('conflict_ja')}")
+    c1.markdown(f"### {plan.get('headline_ja') or hero.get('headline_ja', '')}")
+    c2.metric("Story Tag", plan.get("archetype_tag", "story_event"))
+    c3.metric("Fact Nodes", len(graph.get("facts") or []))
+    if plan.get("thesis"):
+        st.write(plan.get("thesis"))
+    st.caption(f"Story Score · {hero.get('story_score', 0)} · Graph · {quality.get('graph_engine', 'N/A')}")
     candidates = context.get("candidates") or []
     if candidates:
         with st.expander("스토리 후보 랭킹", expanded=False):
             st.dataframe(
                 [
                     {
-                        "score": item.get("story_score"),
-                        "archetype": item.get("archetype"),
-                        "headline": item.get("headline_ja"),
+                        "story_score": item.get("story_score"),
+                        "hero_score": item.get("hero_story_score"),
+                        "topic": item.get("topic"),
+                        "headline": item.get("headline_seed"),
                         "sources": ", ".join(item.get("source_names") or []),
                     }
                     for item in candidates[:10]
@@ -356,7 +361,7 @@ if mode == MODE_TRADER:
     custom_card_count = st.sidebar.slider("자율제안 분석 카드 수", 5, 7, 6, 1, key="trader_custom_count")
 else:
     story_card_count = st.sidebar.slider("스토리 총 카드 수", 5, 8, 7, 1, key="story_card_count")
-    st.sidebar.caption("마지막 1장은 고정 브랜드 아웃트로입니다. 나머지 장수와 전개는 archetype에 따라 달라집니다.")
+    st.sidebar.caption("마지막 1장은 고정 브랜드 아웃트로입니다. 나머지 전개는 Fact Graph와 Story Plan이 근거에 맞춰 동적으로 결정합니다.")
 
 st.sidebar.divider()
 st.sidebar.caption(f"App · {APP_VERSION}")
@@ -405,11 +410,10 @@ with main_tabs[0]:
         f1, f2, f3 = st.columns([2, 1, 1])
         query = f1.text_input("검색", "", key=f"query_{mode}")
         min_score = f2.slider("최소 점수", 0, 100, 0, 5, key=f"min_score_{mode}")
+        archetype_filter: list[str] = []
         if mode == MODE_STORY:
-            archetypes = sorted({str(row.get("story_archetype_hint")) for row in resources if row.get("story_archetype_hint")})
-            archetype_filter = f3.multiselect("Archetype", archetypes, key="story_archetype_filter")
+            f3.caption("Story score 기준 · 구조는 생성 시 결정")
         else:
-            archetype_filter = []
             f3.caption("Trader score 기준")
 
         filtered: list[dict] = []
@@ -418,8 +422,6 @@ with main_tabs[0]:
             if query and query.lower() not in haystack:
                 continue
             if selection_score(mode, row) < min_score:
-                continue
-            if archetype_filter and row.get("story_archetype_hint") not in archetype_filter:
                 continue
             filtered.append(row)
 
@@ -431,9 +433,10 @@ with main_tabs[0]:
                     "id": row.get("id"),
                     "story": row.get("story_score"),
                     "trader": row.get("trader_score"),
-                    "archetype": row.get("story_archetype_hint"),
                     "hook": row.get("story_hook_score"),
-                    "conflict": row.get("conflict_score"),
+                    "change": row.get("change_score"),
+                    "scale": row.get("scale_score"),
+                    "evidence": row.get("evidence_story_score"),
                     "visual": row.get("visuality_score"),
                     "source": row.get("source"),
                     "title": row.get("title"),
@@ -441,7 +444,7 @@ with main_tabs[0]:
                 }
                 for row in filtered
             ]
-            disabled = ["id", "story", "trader", "archetype", "hook", "conflict", "visual", "source", "title", "url"]
+            disabled = ["id", "story", "trader", "hook", "change", "scale", "evidence", "visual", "source", "title", "url"]
         else:
             display_rows = [
                 {
@@ -491,11 +494,12 @@ with main_tabs[0]:
                     [
                         {
                             "story_score": row.get("story_score"),
-                            "archetype": row.get("story_archetype_hint"),
                             "hook": row.get("story_hook_score"),
                             "conflict": row.get("conflict_score"),
                             "change": row.get("change_score"),
                             "scale": row.get("scale_score"),
+                            "evidence": row.get("evidence_story_score"),
+                            "market_implication": row.get("market_implication_score"),
                             "visuality": row.get("visuality_score"),
                             "title": row.get("title"),
                         }
@@ -549,13 +553,13 @@ with main_tabs[1]:
         render_market_snapshot(st.session_state.market_snapshot)
     else:
         st.subheader("스토리텔링 콘텐츠 생성")
-        st.caption("이 경로는 트레이더 브리핑을 만들지 않습니다. 선택된 원문에서 바로 Hero Story와 Story Arc를 만듭니다.")
+        st.caption("이 경로는 트레이더 브리핑을 만들지 않습니다. 선택된 원문을 Fact Graph로 구조화한 뒤 Story Plan을 동적으로 만듭니다.")
         if st.button("Hero Story + 카드뉴스 생성", type="primary", use_container_width=True, key="run_story"):
             with st.spinner("스토리 후보 원문을 취합하는 중입니다."):
                 enriched, enrich_logs = enrich_material(selected, auto_fetch_body)
                 st.session_state.enriched_story = enriched
             config = provider_config(provider_label, temperature)
-            with st.spinner("스토리 점수 → 사건 클러스터 → Hero Story → Archetype → 카드 전개를 생성하는 중입니다."):
+            with st.spinner("스토리 점수 → 사건 클러스터 → Hero Story → Fact Graph → Story Plan → 카드 전개를 생성하는 중입니다."):
                 result = generate_story_package(
                     enriched,
                     total_card_count=story_card_count,
@@ -660,15 +664,18 @@ with main_tabs[3]:
 │
 └─ STORY
    ├─ story source preset + official policy sources
-   ├─ story_score ranking
-   ├─ full article enrichment
-   ├─ event clustering
+   ├─ generic story_score ranking
+   ├─ full article enrichment + structural cleaner
+   ├─ same-event clustering
    ├─ Hero Story selection
-   ├─ Archetype / Story Arc
-   ├─ build story cards directly
-   └─ story Excel + previews
+   ├─ Fact Graph (entity / relation / value / timeline)
+   ├─ dynamic Story Plan / Card Plan
+   ├─ archetype tag is assigned after planning
+   ├─ evidence-bound copy + semantic visual scenes
+   └─ story Excel + Story_Graph + Story_Plan + previews
 
 IMPORTANT: STORY DOES NOT CALL generate_trader_brief() OR generate_content_package().
+IMPORTANT: STORY PLAN IS NOT SELECTED BY A HARD-CODED ARTICLE OR ARCHETYPE TEMPLATE.
 """,
         language="text",
     )
