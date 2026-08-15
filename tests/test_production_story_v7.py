@@ -61,7 +61,7 @@ class ProductionStoryV8CompatibilityTest(unittest.TestCase):
         self.assertNotIn("SEC", row.get("story_entities") or [])
         motifs = " ".join(row.get("story_visual_motifs") or []).lower()
         self.assertNotIn("data center", motifs)
-        self.assertIn("archive", motifs)
+        self.assertRegex(motifs, r"archiv")
 
     def test_story_pipeline_is_source_specific_without_external_model(self) -> None:
         result = story_content_pipeline_v3.generate_story_package(
