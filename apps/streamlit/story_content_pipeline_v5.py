@@ -3,16 +3,15 @@ from __future__ import annotations
 import hashlib
 import re
 import time
-from dataclasses import dataclass
 
 import story_article_cleaner
 import story_content_pipeline_v3 as legacy
-import story_engine_v4 as source_engine
+import story_source_engine_v5 as source_engine
 import story_graph_engine
 import story_renderer_v5 as story_renderer
 
 
-STORY_CONTENT_PIPELINE_VERSION = "story-content-v10.0"
+STORY_CONTENT_PIPELINE_VERSION = "story-content-v10.1"
 DISPLAY_BRAND_LABEL = legacy.DISPLAY_BRAND_LABEL
 PROVIDER_LOCAL = legacy.PROVIDER_LOCAL
 PROVIDER_OLLAMA = legacy.PROVIDER_OLLAMA
@@ -232,7 +231,6 @@ def generate_story_package(
     if not hero_rows:
         return StoryGenerationResult({}, error="Hero Story has no isolated source resources.")
 
-    # Same-event cluster validation remains upstream of the graph.
     hero_resource = dict(hero.get("hero_resource") or hero_rows[0])
     cluster_scores: dict[str, float] = {}
     cluster_ok = True
@@ -250,7 +248,7 @@ def generate_story_package(
     if plan.get("error") or not plan.get("cards"):
         return StoryGenerationResult({}, error=str(plan.get("error") or "Story plan could not be built from evidence."))
 
-    # Archetype is now a descriptive tag AFTER the story structure exists.
+    # The tag is descriptive metadata. It does not select the card arc or copy template.
     hero["archetype"] = plan.get("archetype_tag")
     hero["headline_ja"] = plan.get("headline_ja")
     hero["story_plan_version"] = plan.get("version")
@@ -415,7 +413,7 @@ def generate_story_package(
             "model_provider": config.get("provider") or PROVIDER_LOCAL,
             "model_used": bool(model_by_role),
             "story_qa": story_qa,
-            "policy": "source ranking -> same-event hero -> generic fact graph -> dynamic story plan -> evidence-bound copy -> semantic scene renderer",
+            "policy": "generic source ranking -> same-event hero -> generic fact graph -> dynamic story plan -> evidence-bound copy -> semantic scene renderer",
         },
     }
     return StoryGenerationResult(package=package, model_warning=model_warning)
