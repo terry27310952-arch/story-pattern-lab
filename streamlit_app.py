@@ -10,4 +10,9 @@ APP_FILE = APP_DIR / "app.py"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+import reasoning_engine  # noqa: E402
+from brand_runtime import apply_brand_patch  # noqa: E402
+
+apply_brand_patch(reasoning_engine)
+
 runpy.run_path(str(APP_FILE), run_name="__main__")
