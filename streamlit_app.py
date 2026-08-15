@@ -10,7 +10,7 @@ import streamlit as st
 
 APP_DIR = Path(__file__).parent / "apps" / "streamlit"
 APP_FILE = APP_DIR / "app_v2.py"
-RUNTIME_TOKEN = "dual-pipeline-v10.0"
+RUNTIME_TOKEN = "dual-pipeline-v10.1"
 
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -25,9 +25,9 @@ def _drop_poisoned_legacy_alias(module_name: str, expected_filename: str) -> Non
         del sys.modules[module_name]
 
 
-# v10 still uses the proven v3/v4 source scoring and composition layers as libraries,
-# but the Story structure is built by a new fact-graph planner. Keep compatibility
-# modules pinned to their real files so Streamlit reruns cannot create self-alias loops.
+# Compatibility modules are pinned only for reusable provider/composition helpers.
+# Production Story selection/planning no longer uses the article-specific v3/v4
+# archetype source engine.
 for _module_name, _expected_filename in {
     "story_engine_v3": "story_engine_v3.py",
     "story_content_pipeline_v3": "story_content_pipeline_v3.py",
@@ -51,7 +51,7 @@ sys.modules["story_renderer_v3"] = story_renderer_legacy
 sys.modules["story_content_pipeline_v3"] = story_content_pipeline_legacy
 
 import story_article_cleaner  # noqa: E402
-import story_engine_v4  # noqa: E402
+import story_source_engine_v5  # noqa: E402
 import story_graph_engine  # noqa: E402
 import story_renderer_v4  # noqa: E402
 import story_renderer_v5  # noqa: E402
@@ -63,7 +63,7 @@ from brand_runtime import apply_brand_patch  # noqa: E402
 apply_brand_patch(reasoning_engine)
 
 importlib.reload(story_article_cleaner)
-importlib.reload(story_engine_v4)
+importlib.reload(story_source_engine_v5)
 importlib.reload(story_graph_engine)
 importlib.reload(story_renderer_v4)
 importlib.reload(story_renderer_v5)
@@ -71,16 +71,15 @@ importlib.reload(story_content_pipeline_v5)
 importlib.reload(mode_exporter_v5)
 importlib.reload(story_output_guard)
 
-# Fail fast on the historical Streamlit alias recursion class.
-if story_engine_v4.legacy is story_engine_v4:
-    raise RuntimeError("Story runtime boot failed: source engine legacy dependency points to itself")
+# Fail fast on the historical Streamlit alias recursion class that still matters for
+# the reusable v4 composition layer.
 if story_renderer_v4.legacy is story_renderer_v4:
     raise RuntimeError("Story runtime boot failed: renderer legacy dependency points to itself")
 
 story_output_guard.apply_generation_guard(story_content_pipeline_v5)
 
-# Generic production imports used by app_v2.
-sys.modules["story_engine"] = story_engine_v4
+# Generic production imports used by app_v2 and mode-aware helpers.
+sys.modules["story_engine"] = story_source_engine_v5
 sys.modules["story_content_pipeline"] = story_content_pipeline_v5
 sys.modules["mode_exporter"] = mode_exporter_v5
 
@@ -115,7 +114,7 @@ card_renderer._kiyosaki_runtime_router = RUNTIME_TOKEN
 st.sidebar.caption(f"Runtime · {RUNTIME_TOKEN}")
 st.sidebar.caption(f"Story · {story_content_pipeline_v5.STORY_CONTENT_PIPELINE_VERSION}")
 st.sidebar.caption(f"Cleaner · {story_article_cleaner.STORY_ARTICLE_CLEANER_VERSION}")
-st.sidebar.caption(f"Source Engine · {story_engine_v4.STORY_ENGINE_VERSION}")
+st.sidebar.caption(f"Source · {story_source_engine_v5.STORY_SOURCE_ENGINE_VERSION}")
 st.sidebar.caption(f"Graph · {story_graph_engine.STORY_GRAPH_ENGINE_VERSION}")
 st.sidebar.caption(f"Story Renderer · {story_renderer_v5.STORY_RENDERER_VERSION}")
 st.sidebar.caption(f"Excel · {mode_exporter_v5.MODE_EXPORTER_VERSION}")
