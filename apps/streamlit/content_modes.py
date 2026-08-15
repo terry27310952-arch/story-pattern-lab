@@ -74,7 +74,7 @@ MODE_POLICIES = {
         source_limit=30,
         fetch_full_body=True,
         needs_market_snapshot=False,
-        description="훅, 갈등, 변화, 인물·기관, 규모, 시각성, 근거 깊이가 강한 소재를 우선합니다.",
+        description="명확한 주체·사건·규모·변화·시각성이 있는 스토리 소재를 우선합니다.",
     ),
 }
 
@@ -101,9 +101,9 @@ def mode_policy(mode: str) -> ModePolicy:
 
 def rank_resources(mode: str, rows: list[dict]) -> list[dict]:
     if mode == MODE_STORY:
-        import story_engine_v2
+        import story_engine_v3
 
-        return story_engine_v2.annotate_resources([dict(row) for row in rows or []])
+        return story_engine_v3.annotate_resources([dict(row) for row in rows or []])
     return sorted(
         [dict(row) for row in rows or []],
         key=lambda row: (
