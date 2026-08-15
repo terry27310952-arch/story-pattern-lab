@@ -1,23 +1,28 @@
 from __future__ import annotations
 
+from html import unescape
 from typing import Iterable
+from urllib.parse import urljoin
+from urllib.request import Request, urlopen
 
 import story_engine
 from content_modes import MODE_STORY, MODE_TRADER, rank_resources
 from resource_collector import (
     PUBLIC_LIST_SOURCES,
     RSS_SOURCES,
+    LinkTextParser,
+    USER_AGENT,
+    clean_html,
     collect_resources as collect_core_resources,
-    collect_source,
+    decode_html,
+    make_resource,
 )
 
 
-MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v6.0"
+MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v6.1"
 
-# These are not mixed into the trader defaults. They exist specifically so story mode
-# can discover policy/regulatory narratives instead of being limited to crypto market
-# headlines. The generic public-list parser still filters links for crypto/digital-asset
-# relevance, so unrelated regulator press releases do not flood the candidate pool.
+# These are not mixed into trader defaults. Story mode gets official policy/regulatory
+# surfaces so its raw material can be fundamentally different from an intraday feed.
 STORY_EXTRA_PUBLIC_SOURCES = {
     "SEC Press Releases": {
         "url": "https://www.sec.gov/newsroom/press-releases",
@@ -42,6 +47,14 @@ STORY_EXTRA_PUBLIC_SOURCES = {
     },
 }
 
+STORY_LINK_KEYWORDS = [
+    "bitcoin", "btc", "ethereum", "crypto", "digital asset", "stablecoin", "token",
+    "blockchain", "etf", "exchange", "custody", "mining", "sec", "cftc",
+    "暗号資産", "仮想通貨", "ビットコイン", "イーサリアム", "ステーブルコイン",
+    "ブロックチェーン", "交換業", "電子決済", "資金決済", "規制", "金融庁",
+    "디지털자산", "가상자산", "비트코인", "암호화폐", "스테이블코인",
+]
+
 
 def story_public_registry() -> dict[str, dict]:
     return {**PUBLIC_LIST_SOURCES, **STORY_EXTRA_PUBLIC_SOURCES}
@@ -62,12 +75,58 @@ def _dedupe_rows(rows: Iterable[dict]) -> list[dict]:
         if previous is None:
             unique[key] = row
             continue
-        # Keep the deeper copy when two collection paths return the same URL/item.
         prev_depth = len(str(previous.get("excerpt") or previous.get("material") or ""))
         next_depth = len(str(row.get("excerpt") or row.get("material") or ""))
         if next_depth > prev_depth:
             unique[key] = row
     return list(unique.values())
+
+
+def _story_link_relevant(text: str) -> bool:
+    lower = unescape(str(text or "")).lower()
+    return any(keyword.lower() in lower for keyword in STORY_LINK_KEYWORDS)
+
+
+def _collect_story_public_source(source_name: str, meta: dict, limit: int) -> tuple[list[dict], str]:
+    request = Request(
+        meta["url"],
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.7,ko;q=0.6",
+            "Cache-Control": "no-cache",
+        },
+    )
+    try:
+        with urlopen(request, timeout=15) as response:
+            html = decode_html(response.read(), response.headers.get("Content-Type", ""))
+    except Exception as error:
+        return [], f"{source_name}: failed - {error}"
+
+    parser = LinkTextParser()
+    parser.feed(html)
+    seen: set[str] = set()
+    rows: list[dict] = []
+    for href, raw_text in parser.links:
+        text = clean_html(raw_text, limit=300)
+        if len(text) < 8 or not _story_link_relevant(text):
+            continue
+        url = urljoin(meta["url"], href)
+        if not url.startswith("http") or url in seen:
+            continue
+        seen.add(url)
+        item = make_resource(
+            source=source_name,
+            meta=meta,
+            title=text,
+            url=url,
+            excerpt="Official policy/regulatory source collected for story-mode evidence enrichment.",
+            posted_at=None,
+            rank=len(rows) + 1,
+        )
+        rows.append(item.to_row())
+        if len(rows) >= limit:
+            break
+    return rows, f"{source_name}: collected {len(rows)} story-relevant official links"
 
 
 def _collect_extra_public(names: list[str], limit: int) -> tuple[list[dict], list[str]]:
@@ -77,8 +136,8 @@ def _collect_extra_public(names: list[str], limit: int) -> tuple[list[dict], lis
         meta = STORY_EXTRA_PUBLIC_SOURCES.get(name)
         if not meta:
             continue
-        items, log = collect_source(name, meta, limit)
-        rows.extend(item.to_row() if hasattr(item, "to_row") else dict(item) for item in items)
+        source_rows, log = _collect_story_public_source(name, meta, limit)
+        rows.extend(source_rows)
         logs.append(log)
     return rows, logs
 
