@@ -35,19 +35,23 @@ jobs:
             apps/streamlit/content_modes.py \
             apps/streamlit/mode_resource_pipeline.py \
             apps/streamlit/trader_pipeline.py \
-            apps/streamlit/story_engine_v3.py \
-            apps/streamlit/story_content_pipeline_v3.py \
-            apps/streamlit/story_renderer_v3.py \
-            apps/streamlit/mode_exporter_v3.py \
+            apps/streamlit/story_engine_v4.py \
+            apps/streamlit/story_content_pipeline_v4.py \
+            apps/streamlit/story_renderer_v4.py \
+            apps/streamlit/mode_exporter_v4.py \
             apps/streamlit/story_output_guard.py \
             apps/streamlit/app_v2.py \
             streamlit_app.py \
             tests/run_regression_suite.py \
-            tests/test_story_v8.py
+            tests/test_story_v9.py
 
       - name: Compile compatibility modules
         run: |
           python -m py_compile \
+            apps/streamlit/story_engine_v3.py \
+            apps/streamlit/story_content_pipeline_v3.py \
+            apps/streamlit/story_renderer_v3.py \
+            apps/streamlit/mode_exporter_v3.py \
             apps/streamlit/story_engine_v2.py \
             apps/streamlit/story_content_pipeline_v2.py \
             apps/streamlit/story_renderer_v2.py \
