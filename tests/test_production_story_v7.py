@@ -72,7 +72,7 @@ class ProductionStoryV9CompatibilityTest(unittest.TestCase):
         )
         self.assertIsNone(result.error)
         self.assertEqual(result.package["mode"], "story")
-        self.assertEqual((result.package.get("content_quality") or {}).get("pipeline"), "story-content-v9.0")
+        self.assertEqual((result.package.get("content_quality") or {}).get("pipeline"), "story-content-v9.2")
         cards = result.package["cards"]["STORY"]
         self.assertEqual(len(cards), 7)
         visible = " ".join(str(card.get("headline") or "") + " " + str(card.get("key_message") or "") for card in cards[:-1])
