@@ -9,12 +9,28 @@ import card_renderer
 import story_renderer_v4 as legacy
 
 
-STORY_RENDERER_VERSION = "story-renderer-v10.0"
+STORY_RENDERER_VERSION = "story-renderer-v10.1"
 ORANGE = card_renderer.ORANGE
 
 
 def _scene_type(card: dict) -> str:
     return str((card.get("visual_direction") or {}).get("scene_type") or "documentary_editorial")
+
+
+def _base_scene(width: int, height: int) -> Image.Image:
+    """Neutral photographic canvas for v10 semantic scenes.
+
+    v10 must not fall through the old archetype renderer for unknown semantic scene
+    names. The old generic branch was both visually repetitive and had assumptions
+    about its legacy color tuple. This base is intentionally content-neutral.
+    """
+    image = Image.new("RGBA", (width, height), (3, 5, 6, 255))
+    d = ImageDraw.Draw(image, "RGBA")
+    d.rectangle((0, 0, width, int(height * .58)), fill=(5, 7, 8, 255))
+    d.rectangle((0, int(height * .42), width, int(height * .58)), fill=(18, 12, 7, 28))
+    d.ellipse((int(width*.68), int(height*.02), int(width*1.08), int(height*.42)), fill=ORANGE+(18,))
+    d.ellipse((int(width*-.16), int(height*.18), int(width*.32), int(height*.62)), fill=(90, 105, 110, 12))
+    return image
 
 
 def _semantic_overlay(image: Image.Image, card: dict) -> Image.Image:
@@ -26,10 +42,9 @@ def _semantic_overlay(image: Image.Image, card: dict) -> Image.Image:
     top_h = int(h * 0.58)
 
     if scene == "industrial_infrastructure":
-        d.rectangle((0, 0, w, top_h), fill=(5, 7, 8, 40))
-        d.rectangle((int(w*.07), int(h*.23), int(w*.93), int(h*.48)), fill=(7, 10, 11, 185), outline=ORANGE+(55,), width=lw)
+        d.rectangle((int(w*.07), int(h*.23), int(w*.93), int(h*.48)), fill=(7, 10, 11, 190), outline=ORANGE+(55,), width=lw)
         for x in [int(w*.18), int(w*.34), int(w*.72), int(w*.84)]:
-            d.rectangle((x, int(h*.12), x+int(w*.035), int(h*.48)), fill=(15, 18, 18, 200), outline=(180,180,170,45), width=lw)
+            d.rectangle((x, int(h*.12), x+int(w*.035), int(h*.48)), fill=(15, 18, 18, 205), outline=(180,180,170,45), width=lw)
         d.line((int(w*.05), int(h*.17), int(w*.95), int(h*.17)), fill=ORANGE+(70,), width=lw)
 
     elif scene == "policy_document":
@@ -116,8 +131,7 @@ def _semantic_overlay(image: Image.Image, card: dict) -> Image.Image:
             r=max(23,w//23)
             d.rounded_rectangle((cx-r,cy-r,cx+r,cy+r),radius=max(8,w//70),fill=(4,7,8,195),outline=ORANGE+((145 if i==1 else 70),),width=lw)
 
-    elif scene == "documentary_editorial":
-        # Neutral photographic fallback: layered light/shadow planes, not a chart.
+    else:
         d.rectangle((int(w*.06),int(h*.09),int(w*.94),int(h*.50)),fill=(7,8,8,120),outline=(180,180,175,28),width=lw)
         d.polygon([(int(w*.08),int(h*.48)),(int(w*.44),int(h*.13)),(int(w*.63),int(h*.13)),(int(w*.31),int(h*.48))],fill=ORANGE+(22,))
         d.ellipse((int(w*.70),int(h*.14),int(w*.91),int(h*.35)),fill=(225,210,180,12))
@@ -129,15 +143,13 @@ def render_scene_image(card: dict, width: int = 540, height: int = 500) -> Image
     external = card_renderer._load_visual_asset(card, width, height)
     if external is not None:
         return external.convert("RGBA")
-    base = legacy.render_scene_image(card, width, height)
-    return _semantic_overlay(base, card)
+    return _semantic_overlay(_base_scene(width, height), card)
 
 
 def render_story_card_image(card: dict, width: int = 1080, height: int = 1350) -> Image.Image:
     if card.get("card_type") == "brand_outro":
         return legacy.render_story_card_image(card, width, height).convert("RGB")
     scene = render_scene_image(card, width, height)
-    # Reuse the proven editorial typography/composition shell from v9.
     return legacy.legacy._compose(card, scene, width, height).convert("RGB")
 
 
