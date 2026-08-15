@@ -1,0 +1,85 @@
+{
+  "schema_version": "contract-fixture-v1",
+  "as_of": "2026-08-15T00:00:00+09:00",
+  "crypto": [
+    {
+      "name": "Bitcoin",
+      "symbol": "BTC",
+      "pair": "BTCUSDT",
+      "asset_class": "crypto",
+      "price": 62971,
+      "unit": "USD",
+      "change_24h": -0.42,
+      "change_7d": -2.14,
+      "change_30d": 3.28,
+      "technical_bias": "mixed",
+      "nearest_support": 62500,
+      "nearest_resistance": 63417,
+      "rsi14": 51.81,
+      "macd_bias": "bearish",
+      "source": "fixture"
+    },
+    {
+      "name": "Ethereum",
+      "symbol": "ETH",
+      "pair": "ETHUSDT",
+      "asset_class": "crypto",
+      "price": 1885,
+      "unit": "USD",
+      "change_7d": -1.5,
+      "technical_bias": "mixed",
+      "source": "fixture"
+    },
+    {
+      "name": "Solana",
+      "symbol": "SOL",
+      "pair": "SOLUSDT",
+      "asset_class": "crypto",
+      "price": 76.4,
+      "unit": "USD",
+      "change_7d": 1.2,
+      "technical_bias": "mixed",
+      "source": "fixture"
+    }
+  ],
+  "macro": [
+    {"name": "Nikkei 225", "symbol": "^N225", "asset_class": "equity_index", "price": 38100, "unit": "JPY", "change_7d": 0.8, "source": "fixture"},
+    {"name": "Gold Futures", "symbol": "GC=F", "asset_class": "commodity", "price": 2410, "unit": "USD", "change_7d": 0.4, "source": "fixture"},
+    {"name": "US Dollar Index", "symbol": "DX-Y.NYB", "asset_class": "fx", "price": 103.2, "unit": "index", "change_7d": 0.2, "source": "fixture"}
+  ],
+  "technicals": {
+    "Bitcoin": {
+      "indicators": {
+        "current": 62971,
+        "ma20": 63120,
+        "ma50": 64280,
+        "ma200": 60640,
+        "rsi14": 51.81,
+        "macd": {"bias": "bearish", "macd": -88.1, "signal": -52.4, "histogram": -35.7},
+        "atr14": 1180,
+        "atr14_pct": 1.87
+      },
+      "levels": {
+        "nearest_support": {"level": 62500, "distance_pct": -0.75, "reason": "fixture support"},
+        "nearest_resistance": {"level": 63417, "distance_pct": 0.71, "reason": "fixture resistance"}
+      }
+    }
+  },
+  "derivatives": [
+    {
+      "pair": "BTCUSDT",
+      "mark_price": 63005,
+      "index_price": 63001,
+      "last_funding_rate": 0.01,
+      "next_funding_time": "2026-08-15T08:00:00Z",
+      "open_interest_contracts": 3393932,
+      "source": "fixture derivatives"
+    }
+  ],
+  "fear_greed": {
+    "value": 51,
+    "classification": "Neutral",
+    "source": "fixture"
+  },
+  "errors": []
+}

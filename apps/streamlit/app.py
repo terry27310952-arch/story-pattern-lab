@@ -18,6 +18,7 @@ from market_data import (
     summarize_market,
 )
 from reasoning_engine import (
+    DEFAULT_OUTPUT_LOCALE,
     PROVIDER_LOCAL,
     PROVIDER_OLLAMA,
     PROVIDER_OPENAI_COMPATIBLE,
@@ -921,6 +922,7 @@ with st.sidebar:
     tone = st.selectbox("문장 톤", ["트레이더 브리핑", "카드뉴스용 압축", "Note용 분석"], index=0)
     auto_fetch_body = st.checkbox("선택 리소스 원문 전체 자동 취합", value=True)
     st.caption("커뮤니티 자료는 제목/반응량만 사용하고, 기사/미디어 자료는 선택된 항목 전부의 본문 취합을 시도합니다. 선택 수를 늘릴수록 전문성은 올라가지만 생성 시간도 늘어납니다.")
+    output_locale = st.selectbox("카드 출력 locale", ["ja-JP", "ko-KR"], index=0 if DEFAULT_OUTPUT_LOCALE == "ja-JP" else 1)
     custom_card_count = st.slider("자율제안 장수", 5, 9, 8, 1)
 
     st.divider()
@@ -1111,7 +1113,8 @@ with tabs[3]:
         make_content = st.button("카드뉴스/Note 생성", type="primary", use_container_width=True)
         if make_content:
             resources_for_content = st.session_state.enriched_resources or selected
-            st.session_state.content_package = generate_content_package(brief, resources_for_content, custom_card_count)
+            config = provider_config(provider_label, temperature)
+            st.session_state.content_package = generate_content_package(brief, resources_for_content, custom_card_count, config, output_locale)
             st.success("카드뉴스/Note 생성 완료")
         render_cards(st.session_state.content_package)
         if st.session_state.content_package:

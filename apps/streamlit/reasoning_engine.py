@@ -12,6 +12,7 @@ from market_data import summarize_market
 PROVIDER_LOCAL = "local"
 PROVIDER_OLLAMA = "ollama"
 PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
+DEFAULT_OUTPUT_LOCALE = "ja-JP"
 
 
 DISCLAIMER = "본 자료는 공개 데이터와 선택 리소스를 분석한 브리핑이며, 투자 권유나 매수/매도 지시가 아닙니다."
@@ -938,6 +939,164 @@ def call_ollama(prompt: str, config: dict) -> tuple[Optional[str], Optional[str]
         return None, str(parse_error)
 
 
+REASONING_SCHEMAS = {
+    "carousel_plan": {
+        "required": ["cards"],
+        "card_required": ["card_type", "angle"],
+    },
+    "card_copy": {
+        "required": ["cards"],
+        "card_required": ["card_type", "semantic", "metrics"],
+    },
+    "visual_direction": {
+        "required": ["cards"],
+        "card_required": ["visual_direction"],
+    },
+    "ja_localization": {
+        "required": ["cards"],
+        "card_required": ["headline", "subheadline", "key_message", "insight", "action", "risk"],
+    },
+}
+
+
+def local_reason(input_payload: dict, task_type: str, schema: dict) -> dict:
+    if task_type == "carousel_plan":
+        analysis = input_payload.get("analysis") or {}
+        count = int(input_payload.get("count") or 6)
+        return {"cards": editor_pass_carousel_plan(count, analysis)}
+    if task_type == "card_copy":
+        plan = input_payload.get("plan") or []
+        analysis = input_payload.get("analysis") or {}
+        label = input_payload.get("label") or "6장"
+        semantic = input_payload.get("semantic") or {}
+        return {"cards": build_semantic_cards(plan, analysis, label, semantic)}
+    if task_type == "visual_direction":
+        cards = input_payload.get("cards") or []
+        return {"cards": editor_pass_visual_system(cards)}
+    if task_type == "ja_localization":
+        cards = input_payload.get("cards") or []
+        locale = input_payload.get("locale") or DEFAULT_OUTPUT_LOCALE
+        return {"cards": localize_cards(cards, locale)}
+    return {}
+
+
+def validate_reasoning_result(result: dict, task_type: str, schema: dict, input_payload: dict | None = None) -> tuple[bool, list[str]]:
+    errors: list[str] = []
+    if not isinstance(result, dict):
+        return False, ["result is not an object"]
+    for field in schema.get("required", []):
+        if field not in result:
+            errors.append(f"missing field: {field}")
+    cards = result.get("cards")
+    if "cards" in schema.get("required", []) and not isinstance(cards, list):
+        errors.append("cards must be a list")
+    if isinstance(cards, list):
+        for index, card in enumerate(cards):
+            if not isinstance(card, dict):
+                errors.append(f"card {index} is not an object")
+                continue
+            for field in schema.get("card_required", []):
+                if field not in card:
+                    errors.append(f"card {index} missing {field}")
+            card_type = card.get("card_type")
+            if card_type and card_type not in CARD_TYPES:
+                errors.append(f"card {index} invalid card_type {card_type}")
+            if task_type == "ja_localization":
+                if not str(card.get("headline", "")).strip():
+                    errors.append(f"card {index} empty headline")
+                if input_payload and input_payload.get("locale") == "ja-JP":
+                    visible_text = " ".join(
+                        str(card.get(field, ""))
+                        for field in ["headline", "subheadline", "key_message"]
+                    )
+                    if re.search(r"[가-힣]", visible_text):
+                        errors.append(f"card {index} contains Korean text in ja-JP output")
+            if task_type == "visual_direction":
+                layout = (card.get("visual_direction") or card.get("layout") or {}).get("layout_variant") or (card.get("layout") or {}).get("variant")
+                if layout and layout not in LAYOUT_VARIANTS:
+                    errors.append(f"card {index} invalid layout {layout}")
+    return not errors, errors
+
+
+def reasoning_prompt(input_payload: dict, task_type: str, schema: dict, repair_context: str = "") -> str:
+    return json.dumps(
+        {
+            "task_type": task_type,
+            "instruction": (
+                "Return JSON only. Preserve all numeric values, sources, URLs, timestamps and locale exactly. "
+                "Do not invent card types. Do not produce pixel coordinates. "
+                "Use editorial reasoning for priority, copy, Japanese localization and visual hierarchy."
+            ),
+            "repair_context": repair_context,
+            "schema": schema,
+            "input": input_payload,
+        },
+        ensure_ascii=False,
+    )
+
+
+def call_reasoning_backend(prompt: str, config: dict) -> tuple[Optional[dict], Optional[str]]:
+    provider = config.get("provider", PROVIDER_LOCAL)
+    if provider == PROVIDER_OLLAMA:
+        raw, error = call_ollama(prompt, config)
+    elif provider == PROVIDER_OPENAI_COMPATIBLE:
+        raw, error = call_openai_compatible(prompt, config)
+    else:
+        return None, "local provider does not use external backend"
+    if error or not raw:
+        return None, error or "empty response"
+    parsed, parse_error = extract_json_object(raw)
+    if parse_error or not parsed:
+        return None, parse_error or "JSON parsing failed"
+    return parsed, None
+
+
+def reason(input_payload: dict, task_type: str, schema: dict | None = None, config: dict | None = None) -> dict:
+    """Provider-neutral reasoning adapter used by the card pipeline."""
+    active_schema = schema or REASONING_SCHEMAS.get(task_type, {})
+    active_config = config or {"provider": PROVIDER_LOCAL}
+    provider = active_config.get("provider", PROVIDER_LOCAL)
+    failures: list[str] = []
+
+    if provider != PROVIDER_LOCAL:
+        for phase in ["initial", "repair", "regenerate"]:
+            prompt = reasoning_prompt(input_payload, task_type, active_schema, " / ".join(failures) if phase == "repair" else "")
+            parsed, error = call_reasoning_backend(prompt, active_config)
+            if error or not parsed:
+                failures.append(f"{phase}: {error}")
+                continue
+            ok, validation_errors = validate_reasoning_result(parsed, task_type, active_schema, input_payload)
+            if ok:
+                parsed["_reasoning_meta"] = {"provider": provider, "phase": phase, "failures": failures}
+                return parsed
+            failures.append(f"{phase}: {'; '.join(validation_errors)}")
+
+    fallback = local_reason(input_payload, task_type, active_schema)
+    ok, validation_errors = validate_reasoning_result(fallback, task_type, active_schema, input_payload)
+    if not ok:
+        fallback = deterministic_safe_reason(input_payload, task_type)
+        failures.extend(validation_errors)
+    fallback["_reasoning_meta"] = {"provider": PROVIDER_LOCAL, "phase": "fallback", "failures": failures}
+    return fallback
+
+
+def deterministic_safe_reason(input_payload: dict, task_type: str) -> dict:
+    if task_type == "carousel_plan":
+        count = int(input_payload.get("count") or 6)
+        base = [
+            {"card_type": "market_conclusion", "angle": "decision"},
+            {"card_type": "key_levels", "angle": "price_boundary"},
+            {"card_type": "derivatives", "angle": "positioning_temperature"},
+            {"card_type": "news_context", "angle": "source_meaning"},
+            {"card_type": "scenarios", "angle": "path_split"},
+            {"card_type": "trade_plan", "angle": "execution"},
+        ]
+        return {"cards": base[:count]}
+    if task_type in {"card_copy", "visual_direction", "ja_localization"}:
+        return {"cards": input_payload.get("cards") or []}
+    return {}
+
+
 def brief_prompt(resources: list[dict], market_snapshot: dict, briefing_type: str, tone: str) -> str:
     return json.dumps(
         {
@@ -1096,6 +1255,40 @@ INSIGHT_LABELS = {
     "scenarios": ["세 가지 경로", "다음 분기점", "시나리오 지도"],
     "trade_plan": ["오늘 할 일", "행동 기준", "실제 매매 계획"],
 }
+JA_INSIGHT_LABELS = {
+    "market_conclusion": ["今日の判断", "いま見る軸", "結論"],
+    "key_levels": ["価格の境界", "ここで分かれる", "見るべき価格"],
+    "derivatives": ["ポジションの温度", "数字の裏側", "傾きの確認"],
+    "news_context": ["見出しより反応", "市場の読み方", "価格とつなげる"],
+    "scenarios": ["3つの経路", "次の分岐点", "シナリオ"],
+    "trade_plan": ["今日の行動", "実行条件", "待つ基準"],
+}
+METRIC_LABELS_BY_LOCALE = {
+    "ja-JP": {
+        "BTC": "BTC",
+        "지지": "SUPPORT",
+        "저항": "RESISTANCE",
+        "BTC 24H": "BTC 24H",
+        "BTC 7D": "BTC 7D",
+        "ETH 7D": "ETH 7D",
+        "니케이 7D": "NIKKEI 7D",
+        "골드 7D": "GOLD 7D",
+        "MA20": "MA20",
+        "MA50": "MA50",
+        "MA200": "MA200",
+        "RSI14": "RSI14",
+        "MACD": "MACD",
+        "ATR14": "ATR14",
+        "Funding": "FUNDING",
+        "Mark": "MARK",
+        "OI": "OI",
+        "Fear & Greed": "F&G",
+        "생성 시각": "AS OF",
+        "타임프레임": "TIMEFRAME",
+    },
+    "ko-KR": {},
+}
+SUPPORTED_OUTPUT_LOCALES = ["ja-JP", "ko-KR"]
 LAYOUT_VARIANTS = [
     "hero_character",
     "character_side",
@@ -1134,6 +1327,7 @@ OBSERVER_NEGATIVE_PROMPT = [
 ]
 OBSERVER_BRAND_SYSTEM = {
     "brand_role": "The Observer",
+    "reference_asset_path": "assets/brand/observer_reference.png",
     "color_system": {
         "background": "near-black",
         "primary_text": "off-white",
@@ -1308,6 +1502,93 @@ def selected_label(card_type: str, index: int = 0) -> str:
     return choices[index % len(choices)]
 
 
+def selected_editorial_label(card_type: str, locale: str, index: int = 0) -> str:
+    if locale == "ja-JP":
+        choices = JA_INSIGHT_LABELS.get(card_type, ["要点"])
+        return choices[index % len(choices)]
+    return selected_label(card_type, index)
+
+
+def localize_metric(metric: dict, locale: str) -> dict:
+    next_metric = dict(metric)
+    labels = METRIC_LABELS_BY_LOCALE.get(locale, {})
+    next_metric["label"] = labels.get(str(metric.get("label", "")), metric.get("label", ""))
+    return next_metric
+
+
+def localize_metrics(metrics: list[dict], locale: str) -> list[dict]:
+    return [localize_metric(metric, locale) for metric in metrics]
+
+
+def canonical_bias_code(brief: dict) -> str:
+    stance = brief.get("trader_stance") or {}
+    raw = str(stance.get("directional_bias") or brief.get("market_summary", {}).get("bias") or "").lower()
+    if any(word in raw for word in ["상방", "bull", "risk_on", "long"]):
+        return "conditional_bullish"
+    if any(word in raw for word in ["하방", "bear", "risk_off", "short"]):
+        return "defensive"
+    return "range_wait"
+
+
+def canonical_primary_signal(market: dict) -> str:
+    funding = to_float(market.get("btc_funding_rate"))
+    macd_bias = str(market.get("btc_macd_bias") or "")
+    rsi_value = to_float(market.get("btc_rsi14"))
+    if funding is not None and funding > 0 and "bear" in macd_bias:
+        return "positioning_warm_price_not_confirmed"
+    if rsi_value is not None and 45 <= rsi_value <= 58:
+        return "neutral_momentum_near_boundary"
+    if funding is not None and funding < 0:
+        return "short_pressure_watch_reversal"
+    return "price_boundary_first"
+
+
+def build_canonical_content_model(brief: dict, resources: list[dict], metrics: dict[str, dict]) -> dict:
+    market = brief.get("market_summary") or {}
+    findings = brief.get("source_findings") or []
+    primary_source = findings[0] if findings else resources[0] if resources else {}
+    support = market.get("btc_nearest_support")
+    resistance = market.get("btc_nearest_resistance")
+    return {
+        "locale": DEFAULT_OUTPUT_LOCALE,
+        "timeframe": brief.get("briefing_type") or "daily",
+        "generated_at": brief.get("generated_at"),
+        "market": {
+            "current_price": market.get("btc_price"),
+            "support": support,
+            "resistance": resistance,
+            "btc_24h": market.get("btc_24h"),
+            "btc_7d": market.get("btc_7d"),
+            "eth_7d": market.get("eth_7d"),
+            "nikkei_7d": market.get("nikkei_7d"),
+            "gold_7d": market.get("gold_7d"),
+            "ma20": market.get("btc_ma20"),
+            "ma50": market.get("btc_ma50"),
+            "ma200": market.get("btc_ma200"),
+            "rsi14": market.get("btc_rsi14"),
+            "macd": market.get("btc_macd_bias"),
+            "atr14": market.get("btc_atr14"),
+            "mark_price": market.get("btc_mark_price"),
+            "funding": market.get("btc_funding_rate"),
+            "open_interest": market.get("btc_open_interest_contracts"),
+            "fear_greed": market.get("fear_greed"),
+        },
+        "thesis": {
+            "market_bias": canonical_bias_code(brief),
+            "primary_signal": canonical_primary_signal(market),
+            "action_condition": {"type": "confirm_boundary", "level": resistance},
+            "risk_condition": {"type": "support_close_break", "level": support},
+            "primary_source_role": primary_source.get("role", ""),
+        },
+        "source": {
+            "publisher": primary_source.get("source") or primary_source.get("publisher") or "",
+            "title": primary_source.get("title") or primary_source.get("short_title") or "",
+            "url": primary_source.get("url", ""),
+        },
+        "locked_metric_ids": list(metrics.keys()),
+    }
+
+
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
@@ -1431,6 +1712,7 @@ def visual_direction_for_card(card: dict, previous_variant: str | None) -> dict:
 
 def editor_pass_visual_system(cards: list[dict]) -> list[dict]:
     previous_variant: str | None = None
+    previous_shot: str | None = None
     for card in cards:
         direction = visual_direction_for_card(card, previous_variant)
         if direction.get("layout_variant") == previous_variant:
@@ -1448,8 +1730,22 @@ def editor_pass_visual_system(cards: list[dict]) -> list[dict]:
                     "4:5": build_observer_image_prompt(card, direction, "4:5"),
                     "9:16": build_observer_image_prompt(card, direction, "9:16"),
                 }
+        if direction.get("character_shot") == previous_shot:
+            role = direction.get("visual_role", card.get("card_type", "market_conclusion"))
+            alternatives = [
+                shot
+                for shot in VISUAL_RULES.get(role, VISUAL_RULES["market_conclusion"]).get("shots", ["three_quarter"])
+                if shot != previous_shot
+            ]
+            if alternatives:
+                direction["character_shot"] = alternatives[0]
+                direction["image_prompts"] = {
+                    "4:5": build_observer_image_prompt(card, direction, "4:5"),
+                    "9:16": build_observer_image_prompt(card, direction, "9:16"),
+                }
         card["visual_direction"] = direction
         previous_variant = direction.get("layout_variant")
+        previous_shot = direction.get("character_shot")
     return cards
 
 
@@ -1545,6 +1841,229 @@ def top_findings_text(findings: list[dict], limit: int = 2) -> str:
             )
         )
     return " ".join(lines)
+
+
+def metric_value(card: dict, metric_id: str, default: str = "") -> str:
+    for metric in card.get("metrics") or []:
+        if metric.get("id") == metric_id:
+            return str(metric.get("value") or default)
+    return default
+
+
+def semantic_role(card_type: str, angle: str) -> str:
+    if card_type == "market_conclusion":
+        return "market_decision"
+    if card_type == "key_levels":
+        return "price_boundary"
+    if card_type == "derivatives":
+        return "positioning_temperature"
+    if card_type == "news_context" and angle == "asset_flow":
+        return "asset_flow_context"
+    if card_type == "news_context":
+        return "headline_reaction_context"
+    if card_type == "scenarios" and angle == "time_zone":
+        return "intraday_path"
+    if card_type == "scenarios":
+        return "scenario_split"
+    if card_type == "trade_plan" and angle == "risk_control":
+        return "risk_control"
+    return "execution_plan"
+
+
+def metric_ids_for_card(card_type: str, angle: str) -> list[str]:
+    if card_type == "market_conclusion":
+        return ["btc_price", "btc_7d", "fear_greed"]
+    if card_type == "key_levels":
+        return ["btc_price", "btc_support", "btc_resistance", "atr14"]
+    if card_type == "derivatives":
+        return ["mark_price", "funding", "open_interest", "rsi14", "macd"]
+    if card_type == "news_context" and angle == "asset_flow":
+        return ["eth_7d", "nikkei_7d", "gold_7d"]
+    if card_type == "news_context":
+        return ["btc_price", "btc_support", "btc_resistance"]
+    if card_type == "scenarios":
+        return ["btc_support", "btc_resistance", "ma20", "ma50"]
+    if card_type == "trade_plan":
+        return ["btc_price", "btc_support", "btc_resistance", "macd"]
+    return ["btc_price"]
+
+
+def build_semantic_cards(plan: list[dict], analysis: dict, label: str, semantic: dict) -> list[dict]:
+    metrics = analysis["metrics"]
+    resources = analysis.get("resources") or []
+    primary_source = analysis.get("primary_source") or {}
+    cards: list[dict] = []
+    for index, item in enumerate(plan, start=1):
+        card_type = item.get("card_type", "market_conclusion")
+        angle = item.get("angle", "")
+        source = resources[(index - 1) % len(resources)] if resources else primary_source
+        card = base_card(label, index, card_type, source)
+        card["metrics"] = metric_list(metrics, metric_ids_for_card(card_type, angle))
+        card["semantic"] = {
+            "role": semantic_role(card_type, angle),
+            "angle": angle,
+            "market_bias": semantic.get("thesis", {}).get("market_bias"),
+            "primary_signal": semantic.get("thesis", {}).get("primary_signal"),
+            "support": semantic.get("market", {}).get("support"),
+            "resistance": semantic.get("market", {}).get("resistance"),
+            "current_price": semantic.get("market", {}).get("current_price"),
+            "risk_condition": semantic.get("thesis", {}).get("risk_condition"),
+            "action_condition": semantic.get("thesis", {}).get("action_condition"),
+            "source_role": semantic.get("thesis", {}).get("primary_source_role"),
+        }
+        cards.append(card)
+    return cards
+
+
+def ja_copy_for_card(card: dict) -> dict:
+    card_type = card.get("card_type")
+    role = card.get("semantic", {}).get("role")
+    support = metric_value(card, "btc_support")
+    resistance = metric_value(card, "btc_resistance")
+    price = metric_value(card, "btc_price")
+    funding = metric_value(card, "funding")
+    oi = metric_value(card, "open_interest")
+    rsi_value = metric_value(card, "rsi14")
+    mark = metric_value(card, "mark_price")
+
+    if card_type == "market_conclusion":
+        return {
+            "eyebrow": "THE OBSERVER",
+            "headline": "まだ追わない。境界を見る。",
+            "subheadline": f"BTCは{support}と{resistance}の間で判断待ち。",
+            "key_message": "材料よりも、価格がどちらの境界を守るかが先です。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "強い結論を出す場面ではなく、反応を読む場面です。"},
+            "action": {"visible": False, "label": "", "text": ""},
+            "risk": {"visible": False, "text": ""},
+        }
+    if card_type == "key_levels":
+        return {
+            "eyebrow": "PRICE MAP",
+            "headline": "価格はこの2点で決まる",
+            "subheadline": f"SUPPORT {support} / RESISTANCE {resistance}",
+            "key_message": f"{support}は防衛、{resistance}は回復確認。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "中心では予測の精度が落ちます。反応を見る場所を絞ります。"},
+            "action": {"visible": True, "label": "次に見ること", "text": f"{support}の反応を先に確認。"},
+            "risk": {"visible": True, "text": f"{support}を終値で割るなら、強気解釈はいったん下げます。"},
+        }
+    if card_type == "derivatives":
+        return {
+            "eyebrow": "DERIVATIVES",
+            "headline": "ポジションは温まっている",
+            "subheadline": f"MARK {mark} / FUNDING {funding} / OI {oi}",
+            "key_message": "先物の傾きは方向ではなく、温度を示しています。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"RSI {rsi_value}で過熱感が薄いなら、価格確認を待つ余地があります。"},
+            "action": {"visible": False, "label": "", "text": ""},
+            "risk": {"visible": False, "text": ""},
+        }
+    if card_type == "news_context" and role == "asset_flow_context":
+        return {
+            "eyebrow": "ASSET FLOW",
+            "headline": "アルトはBTCの後でいい",
+            "subheadline": "先に見るのは、BTCの安定と相対強度。",
+            "key_message": "単独材料よりも、資金が広がる順番を見ます。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "BTCが基準を守るまでは、アルト材料は候補に留めます。"},
+            "action": {"visible": False, "label": "", "text": ""},
+            "risk": {"visible": False, "text": ""},
+        }
+    if card_type == "news_context":
+        return {
+            "eyebrow": "NEWS CONTEXT",
+            "headline": "見出しより、反応を見る",
+            "subheadline": "ニュースは材料。判定は価格。",
+            "key_message": "市場がどの価格帯でニュースを消化したかを優先します。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"いまの基準は{price}そのものより、{support}と{resistance}への反応です。"},
+            "action": {"visible": False, "label": "", "text": ""},
+            "risk": {"visible": False, "text": ""},
+        }
+    if card_type == "scenarios" and role == "intraday_path":
+        return {
+            "eyebrow": "TIME ZONES",
+            "headline": "時間帯ごとに見るものを変える",
+            "subheadline": "アジアは位置、欧州は変動、米国は終値。",
+            "key_message": "同じ材料でも、反応する時間で意味が変わります。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "焦点は予想ではなく、次の確認順です。"},
+            "action": {"visible": True, "label": "次の確認", "text": "いまは終値確認が先。"},
+            "risk": {"visible": False, "text": ""},
+        }
+    if card_type == "scenarios":
+        return {
+            "eyebrow": "SCENARIO",
+            "headline": "経路は3つ。基準は1つ。",
+            "subheadline": "Bull / Base / Bear を価格で分ける。",
+            "key_message": f"{support}を守るか、{resistance}を回復するかで次の読みを変えます。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "強気は回復定着、基本はレンジ消化、弱気は支持割れ後の戻り失敗です。"},
+            "action": {"visible": True, "label": "分岐点", "text": f"{resistance}回復までは待つ。"},
+            "risk": {"visible": False, "text": ""},
+        }
+    if card_type == "trade_plan" and role == "risk_control":
+        return {
+            "eyebrow": "RISK CONTROL",
+            "headline": "間違えたら、先に小さくする",
+            "subheadline": "無効化の価格がない見方は、計画ではありません。",
+            "key_message": f"{support}の下で戻れないなら、露出を落とします。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "良い材料より、撤退できる場所を先に決めます。"},
+            "action": {"visible": False, "label": "", "text": ""},
+            "risk": {"visible": True, "text": f"{support}下で回復失敗なら、ポジション縮小。"},
+        }
+    return {
+        "eyebrow": "TRADE PLAN",
+        "headline": "今日は条件だけを残す",
+        "subheadline": "入るより先に、待つ場所を決める。",
+        "key_message": f"{support}付近の反応、または{resistance}回復後の浅い押し目だけを見ます。",
+        "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": "触らない時間を決めることも、ポジション管理です。"},
+        "action": {"visible": True, "label": "行動基準", "text": "この区間では、観察もポジション。"},
+        "risk": {"visible": False, "text": ""},
+    }
+
+
+def ko_copy_for_card(card: dict) -> dict:
+    card_type = card.get("card_type")
+    support = metric_value(card, "btc_support")
+    resistance = metric_value(card, "btc_resistance")
+    if card_type == "key_levels":
+        return {
+            "eyebrow": "Price Map",
+            "headline": "가격은 이 두 곳에서 갈린다",
+            "subheadline": f"지지 {support} / 저항 {resistance}",
+            "key_message": f"{support}은 방어, {resistance}은 회복 확인입니다.",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ko-KR", card.get("slide", 1)), "text": "가운데에서는 예측보다 반응 확인이 우선입니다."},
+            "action": {"visible": True, "label": "확인", "text": f"{support} 반응부터 확인."},
+            "risk": {"visible": True, "text": f"{support} 아래 종가 이탈이면 강세 해석을 낮춥니다."},
+        }
+    ja = ja_copy_for_card(card)
+    # Fallback Korean mode keeps the existing data and uses compact Korean labels.
+    return {
+        "eyebrow": ja["eyebrow"],
+        "headline": "지금은 경계를 보는 구간",
+        "subheadline": f"BTC는 {support}와 {resistance} 사이에서 판단 대기 중입니다.",
+        "key_message": "가격이 어느 경계를 지키는지가 뉴스보다 먼저입니다.",
+        "insight": {"visible": True, "label": selected_editorial_label(card_type, "ko-KR", card.get("slide", 1)), "text": "무리한 예측보다 조건 확인이 우선입니다."},
+        "action": ja.get("action", {"visible": False, "label": "", "text": ""}),
+        "risk": ja.get("risk", {"visible": False, "text": ""}),
+    }
+
+
+def localize_cards(cards: list[dict], locale: str = DEFAULT_OUTPUT_LOCALE) -> list[dict]:
+    localized: list[dict] = []
+    for card in cards:
+        next_card = dict(card)
+        copy = ja_copy_for_card(next_card) if locale == "ja-JP" else ko_copy_for_card(next_card)
+        next_card.update(
+            {
+                "locale": locale,
+                "eyebrow": copy.get("eyebrow", ""),
+                "headline": copy.get("headline", ""),
+                "subheadline": copy.get("subheadline", ""),
+                "key_message": copy.get("key_message", ""),
+                "metrics": localize_metrics(next_card.get("metrics") or [], locale),
+                "insight": copy.get("insight", {"visible": False, "label": "", "text": ""}),
+                "action": copy.get("action", {"visible": False, "label": "", "text": ""}),
+                "risk": copy.get("risk", {"visible": False, "text": ""}),
+            }
+        )
+        localized.append(next_card)
+    return localized
 
 
 def base_card(label: str, slide: int, card_type: str, source: dict) -> dict:
@@ -1728,7 +2247,7 @@ def editor_pass_card_copy(plan: list[dict], analysis: dict, label: str) -> list[
                     "headline": "오늘 할 일은 조건을 줄이는 것",
                     "subheadline": "진입보다 먼저 기다릴 구간을 정합니다.",
                     "key_message": clean_text(stance.get("entry_plan"), 190),
-                    "metrics": metric_list(metrics, ["btc_price", "btc_support", "btc_resistance", "funding"]),
+                    "metrics": metric_list(metrics, ["btc_price", "btc_support", "btc_resistance", "macd"]),
                     "insight": {
                         "visible": True,
                         "label": selected_label(card_type, index),
@@ -1765,6 +2284,8 @@ def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
     seen_messages: set[str] = set()
     visible_action_budget = max(2, min(4, len(cards) // 2 + 1))
     visible_action_count = 0
+    previous_layout: str | None = None
+    previous_shot: str | None = None
 
     for card in cards:
         card_type = card.get("card_type")
@@ -1808,25 +2329,98 @@ def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
             if blocked in visible_card_text(card):
                 card["qa"]["warnings"].append(f"blocked_label_removed:{blocked}")
                 warnings.append(f"blocked visible token removed: {blocked}")
+        locale = card.get("locale") or DEFAULT_OUTPUT_LOCALE
+        if locale == "ja-JP" and re.search(r"[가-힣]", visible_card_text(card)):
+            card["qa"]["warnings"].append("ja_validation_hangul_detected")
+            warnings.append("ja-JP visible text contains Korean characters")
+        if any(not metric.get("locked") for metric in card.get("metrics", []) or []):
+            card["qa"]["warnings"].append("numeric_validation_unlocked_metric")
+            warnings.append("metric missing locked flag")
+        direction = card.get("visual_direction") or {}
+        layout = direction.get("layout_variant")
+        shot = direction.get("character_shot")
+        if layout == previous_layout:
+            card["qa"]["warnings"].append("carousel_validation_repeated_layout")
+            warnings.append(f"repeated adjacent layout: {layout}")
+        if shot == previous_shot:
+            card["qa"]["warnings"].append("carousel_validation_repeated_character_shot")
+            warnings.append(f"repeated adjacent character shot: {shot}")
+        previous_layout = layout
+        previous_shot = shot
+        visibility = to_float(direction.get("character_visibility"))
+        if card.get("card_type") == "key_levels" and visibility is not None and visibility > 0.2:
+            card["qa"]["warnings"].append("character_validation_price_card_overexposed")
+            warnings.append("key_levels character visibility exceeds 0.20")
+        if card.get("slide") == 1 and visibility is not None and visibility < 0.45:
+            card["qa"]["warnings"].append("character_validation_cover_underbranded")
+            warnings.append("cover character visibility below 0.45")
+        prompt = " ".join((direction.get("image_prompts") or {}).values())
+        required_identity = ["Faceless anonymous market observer", "black suit", "black shirt", "black tie", "black leather gloves", "orange rim light"]
+        if prompt and any(item not in prompt for item in required_identity):
+            card["qa"]["warnings"].append("character_validation_identity_prompt_missing")
+            warnings.append("character identity prompt missing immutable constraint")
     return cards, warnings
 
 
-def make_card_set(brief: dict, resources: list[dict], count: int, label: str) -> tuple[list[dict], dict]:
+def make_card_set(
+    brief: dict,
+    resources: list[dict],
+    count: int,
+    label: str,
+    config: dict | None = None,
+    locale: str = DEFAULT_OUTPUT_LOCALE,
+) -> tuple[list[dict], dict]:
     metrics = locked_market_metrics(brief)
+    semantic = build_canonical_content_model(brief, resources, metrics)
+    semantic["locale"] = locale
     analysis = editor_pass_market_analysis(brief, resources, metrics)
     analysis["scenarios"] = brief.get("scenarios") or []
-    plan = editor_pass_carousel_plan(count, analysis)
-    cards = editor_pass_card_copy(plan, analysis, label)
-    cards = editor_pass_visual_system(cards)
+    active_config = config or {"provider": PROVIDER_LOCAL}
+    plan_result = reason(
+        {"count": count, "analysis": analysis, "semantic": semantic},
+        "carousel_plan",
+        REASONING_SCHEMAS["carousel_plan"],
+        active_config,
+    )
+    plan = plan_result.get("cards") or deterministic_safe_reason({"count": count}, "carousel_plan").get("cards", [])
+    copy_result = reason(
+        {"plan": plan, "analysis": analysis, "label": label, "semantic": semantic},
+        "card_copy",
+        REASONING_SCHEMAS["card_copy"],
+        active_config,
+    )
+    cards = copy_result.get("cards") or build_semantic_cards(plan, analysis, label, semantic)
+    localization_result = reason(
+        {"cards": cards, "semantic": semantic, "locale": locale},
+        "ja_localization",
+        REASONING_SCHEMAS["ja_localization"],
+        active_config,
+    )
+    cards = localization_result.get("cards") or localize_cards(cards, locale)
+    visual_result = reason(
+        {"cards": cards, "semantic": semantic},
+        "visual_direction",
+        REASONING_SCHEMAS["visual_direction"],
+        active_config,
+    )
+    cards = visual_result.get("cards") or editor_pass_visual_system(cards)
     cards, qa_warnings = editor_pass_qa(cards)
     return cards, {
-        "passes": ["market_analysis", "carousel_plan", "card_copy", "observer_visual_system", "qa"],
+        "passes": ["market_analysis", "semantic_content_model", "carousel_plan", "card_copy", "ja_localization", "observer_visual_system", "qa"],
+        "locale": locale,
+        "semantic_model": semantic,
         "locked_metric_ids": list(metrics.keys()),
         "card_types": [card["card_type"] for card in cards],
         "layout_variants": [card.get("visual_direction", {}).get("layout_variant") for card in cards],
         "character_shots": [card.get("visual_direction", {}).get("character_shot") for card in cards],
         "aspect_ratios": ["4:5", "9:16"],
         "brand_role": OBSERVER_BRAND_SYSTEM["brand_role"],
+        "reasoning": {
+            "plan": plan_result.get("_reasoning_meta", {}),
+            "copy": copy_result.get("_reasoning_meta", {}),
+            "localization": localization_result.get("_reasoning_meta", {}),
+            "visual": visual_result.get("_reasoning_meta", {}),
+        },
         "qa_warnings": qa_warnings + [warning for card in cards for warning in card.get("qa", {}).get("warnings", [])],
     }
 
@@ -1969,12 +2563,19 @@ def build_note_markdown(brief: dict, resources: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def generate_content_package(brief: dict, resources: list[dict], custom_count: int = 8) -> dict:
+def generate_content_package(
+    brief: dict,
+    resources: list[dict],
+    custom_count: int = 8,
+    config: dict | None = None,
+    locale: str = DEFAULT_OUTPUT_LOCALE,
+) -> dict:
     suggested = max(5, min(9, custom_count or 8))
-    cards_5, meta_5 = make_card_set(brief, resources, 5, "5장")
-    cards_6, meta_6 = make_card_set(brief, resources, 6, "6장")
-    cards_7, meta_7 = make_card_set(brief, resources, 7, "7장")
-    cards_custom, meta_custom = make_card_set(brief, resources, suggested, "자율제안")
+    active_locale = locale if locale in SUPPORTED_OUTPUT_LOCALES else DEFAULT_OUTPUT_LOCALE
+    cards_5, meta_5 = make_card_set(brief, resources, 5, "5장", config, active_locale)
+    cards_6, meta_6 = make_card_set(brief, resources, 6, "6장", config, active_locale)
+    cards_7, meta_7 = make_card_set(brief, resources, 7, "7장", config, active_locale)
+    cards_custom, meta_custom = make_card_set(brief, resources, suggested, "자율제안", config, active_locale)
     cards = {
         "5장": cards_5,
         "6장": cards_6,
@@ -1989,6 +2590,7 @@ def generate_content_package(brief: dict, resources: list[dict], custom_count: i
         "content_quality": {
             "architecture": "DATA/RULES -> REASONING/EDITOR -> RENDERER",
             "brand_role": OBSERVER_BRAND_SYSTEM["brand_role"],
+            "production_locale": active_locale,
             "brand_system": OBSERVER_BRAND_SYSTEM,
             "supported_aspect_ratios": ["4:5", "9:16"],
             "layout_variants": LAYOUT_VARIANTS,
