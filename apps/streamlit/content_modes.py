@@ -11,9 +11,6 @@ MODE_LABELS = {
     MODE_STORY: "스토리텔링 콘텐츠",
 }
 
-# Trader mode deliberately favors fast market-impact sources. Story mode deliberately
-# favors deeper institutional/company/policy sources and does not select community
-# chatter by default.
 TRADER_RSS_DEFAULTS = [
     "NADA NEWS / CoinDesk Japan",
     "CoinDesk Global",
@@ -104,9 +101,9 @@ def mode_policy(mode: str) -> ModePolicy:
 
 def rank_resources(mode: str, rows: list[dict]) -> list[dict]:
     if mode == MODE_STORY:
-        import story_engine
+        import story_engine_v2
 
-        return story_engine.annotate_resources([dict(row) for row in rows or []])
+        return story_engine_v2.annotate_resources([dict(row) for row in rows or []])
     return sorted(
         [dict(row) for row in rows or []],
         key=lambda row: (
