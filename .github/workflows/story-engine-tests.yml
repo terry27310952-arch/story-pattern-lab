@@ -42,7 +42,8 @@ jobs:
             apps/streamlit/app_v2.py \
             apps/streamlit/visual_variation_runtime.py \
             apps/streamlit/story_render_runtime.py \
-            streamlit_app.py
+            streamlit_app.py \
+            tests/run_regression_suite.py
 
       - name: Compile legacy compatibility modules
         run: |
@@ -53,4 +54,4 @@ jobs:
             apps/streamlit/story_export_runtime.py
 
       - name: Run regression tests
-        run: python -m unittest discover -s tests -p 'test_*.py' -v
+        run: python tests/run_regression_suite.py
