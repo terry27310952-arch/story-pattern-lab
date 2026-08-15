@@ -6,6 +6,12 @@ import unittest
 
 OBSOLETE_TEST_IDS = {
     "test_card_contract.CardContractTest.test_observer_reference_asset_exists",
+    # v10 replaces the old production runtime aliases. Keep all v7-v9 content,
+    # evidence, cleaner and renderer regressions; only retire routing assertions
+    # that explicitly require the superseded v9.2 entrypoint.
+    "test_production_story_v7.ProductionStoryV9CompatibilityTest.test_production_entrypoint_routes_to_v9_modules",
+    "test_story_v8.StoryV8Test.test_runtime_routes_story_layers_to_v9",
+    "test_story_v9.StoryV9Test.test_runtime_routes_to_v92_without_poisoning_v3_aliases",
 }
 
 
