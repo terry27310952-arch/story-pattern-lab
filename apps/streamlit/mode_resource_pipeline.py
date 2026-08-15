@@ -5,7 +5,7 @@ from typing import Iterable
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-import story_engine_v2 as story_engine
+import story_engine_v3 as story_engine
 from content_modes import MODE_STORY, MODE_TRADER, rank_resources
 from resource_collector import (
     PUBLIC_LIST_SOURCES,
@@ -19,7 +19,7 @@ from resource_collector import (
 )
 
 
-MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v7.0"
+MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v8.0"
 
 STORY_EXTRA_PUBLIC_SOURCES = {
     "SEC Press Releases": {
@@ -47,9 +47,9 @@ STORY_EXTRA_PUBLIC_SOURCES = {
 
 STORY_LINK_KEYWORDS = [
     "bitcoin", "btc", "ethereum", "crypto", "digital asset", "stablecoin", "token",
-    "blockchain", "etf", "exchange", "custody", "mining", "sec", "cftc",
+    "blockchain", "etf", "exchange", "custody", "mining", "sec", "cftc", "data center", "ai infrastructure",
     "wall street", "valuation", "shiller", "cape", "institution", "treasury",
-    "暗号資産", "仮想通貨", "ビットコイン", "イーサリアム", "ステーブルコイン",
+    "暗号資産", "仮想通貨", "ビットコイン", "イーサリアム", "ステーブルコイン", "データセンター", "マイニング",
     "ブロックチェーン", "交換業", "電子決済", "資金決済", "規制", "金融庁",
 ]
 
@@ -144,11 +144,7 @@ def collect_for_mode(mode: str, rss_names: list[str], public_names: list[str], l
     core_public = [name for name in public_names if name in PUBLIC_LIST_SOURCES]
     extra_public = [name for name in public_names if name in STORY_EXTRA_PUBLIC_SOURCES]
 
-    rows, logs = collect_core_resources(
-        [name for name in rss_names if name in RSS_SOURCES],
-        core_public,
-        limit,
-    )
+    rows, logs = collect_core_resources([name for name in rss_names if name in RSS_SOURCES], core_public, limit)
     if mode == MODE_STORY and extra_public:
         extra_rows, extra_logs = _collect_extra_public(extra_public, limit)
         rows = [*rows, *extra_rows]
@@ -158,8 +154,8 @@ def collect_for_mode(mode: str, rss_names: list[str], public_names: list[str], l
     if mode == MODE_STORY:
         rows = story_engine.annotate_resources(rows)
         logs.append(
-            f"story mode: ranked {len(rows)} resources by evidence-first story_score; "
-            "community chatter is not a default source"
+            f"story mode: ranked {len(rows)} resources by {story_engine.STORY_ENGINE_VERSION}; "
+            "narrative specificity, transformation, evidence and visual potential are prioritized"
         )
     else:
         rows = rank_resources(MODE_TRADER, rows)
