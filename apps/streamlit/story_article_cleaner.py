@@ -1,43 +1,34 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 
-STORY_ARTICLE_CLEANER_VERSION = "story-article-cleaner-v1.1"
+STORY_ARTICLE_CLEANER_VERSION = "story-article-cleaner-v2.0"
 
+# The cleaner intentionally knows structural page roles, not publishers or article topics.
+# New sites should therefore not require code changes just because their brand/name changes.
 _CUTOFF_MARKERS = [
-    "関連記事",
-    "関連ニュース",
-    "あわせて読みたい",
-    "合わせて読みたい",
-    "おすすめ記事",
-    "おすすめのニュース",
-    "最新記事",
-    "もっと見る",
-    "著者情報",
-    "この記事を書いた人",
-    "About the author",
-    "Related Articles",
-    "Related News",
-    "More Stories",
+    "関連記事", "関連ニュース", "あわせて読みたい", "合わせて読みたい", "おすすめ記事",
+    "おすすめのニュース", "最新記事", "もっと見る", "著者情報", "この記事を書いた人",
+    "About the author", "Related Articles", "Related News", "Recommended", "More Stories",
+    "Read more", "You may also like",
 ]
 
-_DROP_PATTERNS = [
-    r"\bDisclaimer\b",
-    r"投資助言ではありません",
-    r"投資判断の前に",
-    r"専門家への相談",
+_STRUCTURAL_DROP_PATTERNS = [
+    r"^\s*(?:By|Author|Written by|Reporter|Editor|執筆|著者|編集|記者)\b",
+    r"\bUpdated\b.{0,100}\b(?:min|minute)s?\s+read\b",
+    r"\b(?:Disclaimer|Legal Notice|Terms of Use|Privacy Policy)\b",
+    r"(?:免責|投資助言ではありません|投資判断|専門家への相談|利用規約|プライバシー)",
+    r"(?:無断転載|転載禁止|著作権|copyright|all rights reserved)",
     r"Reproduction in whole or in part",
-    r"All rights reserved",
     r"The post .* appeared first on",
-    r"^\s*By\s+.+\bEditor\b",
-    r"\bUpdated\b.+\bmin read\b",
-    r"Coinspeaker参画",
-    r"メルマガやSNSで最新情報を発信",
-    r"Crypto\.comの評判",
-    r"\b1\s*BTC\s*=",
-    r"^\s*(?:next|previous)\s*$",
+    r"^\s*(?:next|previous|前の記事|次の記事)\s*$",
+    r"^(?:Share|Follow|Subscribe|Newsletter|シェア|フォロー|会員登録|ログイン)\b",
+]
+
+_AUTHOR_BIO_HINTS = [
+    "プロフィール", "経歴", "ライター", "編集者", "記者として", "参画", "joined", "contributor",
 ]
 
 
@@ -47,6 +38,7 @@ class CleaningDiagnostics:
     cleaned_chars: int
     removed_segments: int
     cutoff_marker: str
+    removal_reasons: dict[str, int]
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -66,30 +58,46 @@ def _split_segments(text: str) -> list[str]:
     return segments
 
 
-def _drop_segment(segment: str) -> bool:
+def _is_structural_noise(segment: str) -> tuple[bool, str]:
     if len(segment) < 4:
-        return True
-    return any(re.search(pattern, segment, flags=re.I) for pattern in _DROP_PATTERNS)
+        return True, "too_short"
+    for pattern in _STRUCTURAL_DROP_PATTERNS:
+        if re.search(pattern, segment, flags=re.I):
+            return True, "structural_pattern"
+    lower = segment.casefold()
+    # Author bios often survive flattened HTML without a heading. Detect the role,
+    # not the publisher/person name. Require a career/profile cue plus a year/date.
+    if any(hint.casefold() in lower for hint in _AUTHOR_BIO_HINTS) and re.search(r"(?:19|20)\d{2}", segment):
+        return True, "author_bio"
+    # Navigation/ad widgets are typically link-dense, sentence-poor fragments.
+    pipe_count = segment.count("|") + segment.count("›") + segment.count("→")
+    if pipe_count >= 3 and len(re.findall(r"[。！？.!?]", segment)) <= 1:
+        return True, "navigation_block"
+    return False, ""
 
 
 def clean_article_text(text: str, title: str = "") -> tuple[str, dict]:
     original = _clean_space(text)
     if not original:
-        return "", CleaningDiagnostics(0, 0, 0, "").to_dict()
+        return "", CleaningDiagnostics(0, 0, 0, "", {}).to_dict()
 
     segments = _split_segments(original)
     kept: list[str] = []
     removed_count = 0
     cutoff_marker = ""
+    reasons: dict[str, int] = {}
 
     for segment in segments:
         marker = next((m for m in _CUTOFF_MARKERS if m.casefold() in segment.casefold()), "")
         if marker:
             cutoff_marker = marker
             removed_count += 1
+            reasons["cutoff"] = reasons.get("cutoff", 0) + 1
             break
-        if _drop_segment(segment):
+        drop, reason = _is_structural_noise(segment)
+        if drop:
             removed_count += 1
+            reasons[reason] = reasons.get(reason, 0) + 1
             continue
         kept.append(segment)
 
@@ -103,6 +111,7 @@ def clean_article_text(text: str, title: str = "") -> tuple[str, dict]:
         cleaned_chars=len(cleaned),
         removed_segments=removed_count,
         cutoff_marker=cutoff_marker,
+        removal_reasons=reasons,
     ).to_dict()
     return cleaned, diagnostics
 
@@ -122,6 +131,7 @@ def clean_story_resource(row: dict) -> dict:
 
 def has_boilerplate(text: str) -> bool:
     value = str(text or "")
-    return any(re.search(pattern, value, flags=re.I) for pattern in _DROP_PATTERNS) or any(
-        marker.casefold() in value.casefold() for marker in _CUTOFF_MARKERS
-    )
+    if any(marker.casefold() in value.casefold() for marker in _CUTOFF_MARKERS):
+        return True
+    drop, _ = _is_structural_noise(value)
+    return drop
