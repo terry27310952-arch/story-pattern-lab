@@ -5,6 +5,8 @@ import runpy
 import sys
 from pathlib import Path
 
+import streamlit as st
+
 
 APP_DIR = Path(__file__).parent / "apps" / "streamlit"
 APP_FILE = APP_DIR / "app_v2.py"
@@ -75,5 +77,11 @@ def _render_card_png(card: dict, width: int = 1080, height: int = 1350) -> bytes
 card_renderer.render_card_image = _render_card_image
 card_renderer.render_card_png = _render_card_png
 card_renderer._kiyosaki_runtime_router = RUNTIME_TOKEN
+
+st.sidebar.caption(f"Runtime · {RUNTIME_TOKEN}")
+st.sidebar.caption(f"Story · {story_content_pipeline_v2.STORY_CONTENT_PIPELINE_VERSION}")
+st.sidebar.caption(f"Story Engine · {story_engine_v2.STORY_ENGINE_VERSION}")
+st.sidebar.caption(f"Story Renderer · {story_renderer_v2.STORY_RENDERER_VERSION}")
+st.sidebar.caption(f"Excel · {mode_exporter_v2.MODE_EXPORTER_VERSION}")
 
 runpy.run_path(str(APP_FILE), run_name="__main__")
