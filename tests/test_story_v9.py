@@ -11,8 +11,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "streamlit"))
 
 import mode_exporter_v4  # noqa: E402
+import story_content_pipeline_v3  # noqa: E402
 import story_content_pipeline_v4  # noqa: E402
+import story_engine_v3  # noqa: E402
 import story_engine_v4  # noqa: E402
+import story_renderer_v3  # noqa: E402
 import story_renderer_v4  # noqa: E402
 
 
@@ -134,13 +137,26 @@ class StoryV9Test(unittest.TestCase):
         self.assertIn("render_signature_count", qa_values)
         self.assertIn("cluster_coherence", qa_values)
 
-    def test_runtime_routes_to_v9(self) -> None:
+    def test_v9_legacy_dependencies_are_real_v3_modules(self) -> None:
+        self.assertIs(story_engine_v4.legacy, story_engine_v3)
+        self.assertIs(story_content_pipeline_v4.legacy, story_content_pipeline_v3)
+        self.assertIs(story_renderer_v4.legacy, story_renderer_v3)
+        self.assertIsNot(story_engine_v4.legacy, story_engine_v4)
+        self.assertIsNot(story_content_pipeline_v4.legacy, story_content_pipeline_v4)
+        self.assertIsNot(story_renderer_v4.legacy, story_renderer_v4)
+
+    def test_runtime_routes_to_v9_without_poisoning_v3_aliases(self) -> None:
         entry = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
-        self.assertIn('RUNTIME_TOKEN = "dual-pipeline-v9.0"', entry)
+        self.assertIn('RUNTIME_TOKEN = "dual-pipeline-v9.1"', entry)
         self.assertIn('sys.modules["story_engine"] = story_engine_v4', entry)
         self.assertIn('sys.modules["story_content_pipeline"] = story_content_pipeline_v4', entry)
         self.assertIn('sys.modules["mode_exporter"] = mode_exporter_v4', entry)
-        self.assertIn('sys.modules["story_engine_v3"] = story_engine_v4', entry)
+        self.assertIn('sys.modules["story_engine_v3"] = story_engine_legacy', entry)
+        self.assertIn('sys.modules["story_content_pipeline_v3"] = story_content_pipeline_legacy', entry)
+        self.assertIn('sys.modules["story_renderer_v3"] = story_renderer_legacy', entry)
+        self.assertNotIn('sys.modules["story_engine_v3"] = story_engine_v4', entry)
+        self.assertNotIn('sys.modules["story_content_pipeline_v3"] = story_content_pipeline_v4', entry)
+        self.assertNotIn('sys.modules["story_renderer_v3"] = story_renderer_v4', entry)
 
 
 if __name__ == "__main__":
