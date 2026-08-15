@@ -86,6 +86,11 @@ class CardContractTest(unittest.TestCase):
             for token in INTERNAL_VISIBLE_BLOCKLIST:
                 self.assertNotIn(token, text)
 
+    def test_observer_reference_asset_exists(self) -> None:
+        reference_asset = ROOT / "assets" / "brand" / "observer_reference.png"
+        self.assertTrue(reference_asset.exists())
+        self.assertGreater(reference_asset.stat().st_size, 100000)
+
     def test_card_roles_and_copy_are_not_repeated(self) -> None:
         card_types = [card["card_type"] for card in self.cards]
         self.assertTrue(set(card_types).issubset(CARD_TYPES))
