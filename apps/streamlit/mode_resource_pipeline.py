@@ -5,7 +5,7 @@ from typing import Iterable
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-import story_engine
+import story_engine_v2 as story_engine
 from content_modes import MODE_STORY, MODE_TRADER, rank_resources
 from resource_collector import (
     PUBLIC_LIST_SOURCES,
@@ -19,10 +19,8 @@ from resource_collector import (
 )
 
 
-MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v6.1"
+MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v7.0"
 
-# These are not mixed into trader defaults. Story mode gets official policy/regulatory
-# surfaces so its raw material can be fundamentally different from an intraday feed.
 STORY_EXTRA_PUBLIC_SOURCES = {
     "SEC Press Releases": {
         "url": "https://www.sec.gov/newsroom/press-releases",
@@ -50,9 +48,9 @@ STORY_EXTRA_PUBLIC_SOURCES = {
 STORY_LINK_KEYWORDS = [
     "bitcoin", "btc", "ethereum", "crypto", "digital asset", "stablecoin", "token",
     "blockchain", "etf", "exchange", "custody", "mining", "sec", "cftc",
+    "wall street", "valuation", "shiller", "cape", "institution", "treasury",
     "暗号資産", "仮想通貨", "ビットコイン", "イーサリアム", "ステーブルコイン",
     "ブロックチェーン", "交換業", "電子決済", "資金決済", "規制", "金融庁",
-    "디지털자산", "가상자산", "비트코인", "암호화폐", "스테이블코인",
 ]
 
 
@@ -142,12 +140,7 @@ def _collect_extra_public(names: list[str], limit: int) -> tuple[list[dict], lis
     return rows, logs
 
 
-def collect_for_mode(
-    mode: str,
-    rss_names: list[str],
-    public_names: list[str],
-    limit: int,
-) -> tuple[list[dict], list[str]]:
+def collect_for_mode(mode: str, rss_names: list[str], public_names: list[str], limit: int) -> tuple[list[dict], list[str]]:
     core_public = [name for name in public_names if name in PUBLIC_LIST_SOURCES]
     extra_public = [name for name in public_names if name in STORY_EXTRA_PUBLIC_SOURCES]
 
@@ -165,7 +158,7 @@ def collect_for_mode(
     if mode == MODE_STORY:
         rows = story_engine.annotate_resources(rows)
         logs.append(
-            f"story mode: ranked {len(rows)} resources by story_score/editorial_score; "
+            f"story mode: ranked {len(rows)} resources by evidence-first story_score; "
             "community chatter is not a default source"
         )
     else:
