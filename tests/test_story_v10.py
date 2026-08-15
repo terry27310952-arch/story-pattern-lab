@@ -14,6 +14,7 @@ import mode_exporter_v5  # noqa: E402
 import story_content_pipeline_v5  # noqa: E402
 import story_graph_engine  # noqa: E402
 import story_renderer_v5  # noqa: E402
+import story_source_engine_v5  # noqa: E402
 
 
 TRANSFORMATION = {
@@ -57,8 +58,35 @@ POLICY = {
     ),
 }
 
+SECOND_PUBLISHER_SAME_EVENT = {
+    **TRANSFORMATION,
+    "id": "generic-transform-2",
+    "source": "Another Editorial Desk",
+    "url": "https://example.net/neogrid-deal",
+    "title": "NeoGrid Holdings、420MWのAI計算基盤契約を締結",
+    "material": (
+        "NeoGrid Holdingsは大手クラウド企業とAI計算基盤の利用契約を締結した。 "
+        "対象は420MWで、契約価値は約1200億円。2028年から段階稼働する。"
+    ),
+}
+
 
 class StoryV10Test(unittest.TestCase):
+    def test_generic_source_engine_has_no_named_company_registry_or_archetype_classifier(self) -> None:
+        source = (ROOT / "apps" / "streamlit" / "story_source_engine_v5.py").read_text(encoding="utf-8")
+        for forbidden in ["Riot Platforms", "Anthropic", "BlackRock", "Coinspeaker", "KNOWN_ENTITIES", "classify_archetype"]:
+            self.assertNotIn(forbidden, source)
+        row = story_source_engine_v5.annotate_resource(TRANSFORMATION)
+        self.assertEqual(row["story_archetype_hint"], "dynamic")
+        self.assertGreater(row["story_score"], 0)
+        self.assertIn("NeoGrid Holdings", row["story_entities"])
+
+    def test_generic_event_cluster_uses_event_evidence_not_publisher(self) -> None:
+        a, b = story_source_engine_v5.annotate_resources([TRANSFORMATION, SECOND_PUBLISHER_SAME_EVENT])
+        self.assertGreaterEqual(story_source_engine_v5.event_similarity(a, b), 0.47)
+        clusters = story_source_engine_v5.cluster_story_candidates([TRANSFORMATION, SECOND_PUBLISHER_SAME_EVENT])
+        self.assertEqual(len(clusters), 1)
+
     def test_graph_extracts_relations_without_article_specific_code(self) -> None:
         hero = {"resource_ids": [TRANSFORMATION["id"]], "entities": ["NeoGrid Holdings"]}
         graph = story_graph_engine.extract_fact_graph(hero, [TRANSFORMATION])
@@ -107,7 +135,8 @@ class StoryV10Test(unittest.TestCase):
         )
         self.assertIsNone(result.error)
         package = result.package
-        self.assertEqual(package["content_quality"]["pipeline"], "story-content-v10.0")
+        self.assertEqual(package["content_quality"]["pipeline"], "story-content-v10.1")
+        self.assertEqual(package["content_quality"]["source_engine"], "story-source-v10.0")
         self.assertEqual(package["content_quality"]["graph_engine"], "story-graph-v10.0")
         cards = package["cards"]["STORY"][:-1]
         self.assertEqual(len(cards), 6)
@@ -124,9 +153,10 @@ class StoryV10Test(unittest.TestCase):
         self.assertIn("Story_Plan", wb.sheetnames)
         self.assertEqual(len(getattr(wb["Card_Previews"], "_images", [])), 7)
 
-    def test_runtime_routes_to_v10(self) -> None:
+    def test_runtime_routes_to_v10_generic_stack(self) -> None:
         entry = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
-        self.assertIn('RUNTIME_TOKEN = "dual-pipeline-v10.0"', entry)
+        self.assertIn('RUNTIME_TOKEN = "dual-pipeline-v10.1"', entry)
+        self.assertIn('sys.modules["story_engine"] = story_source_engine_v5', entry)
         self.assertIn('sys.modules["story_content_pipeline"] = story_content_pipeline_v5', entry)
         self.assertIn('sys.modules["mode_exporter"] = mode_exporter_v5', entry)
         self.assertIn("story_graph_engine", entry)
