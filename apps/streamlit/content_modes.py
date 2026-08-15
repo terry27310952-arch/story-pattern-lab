@@ -40,6 +40,9 @@ STORY_RSS_DEFAULTS = [
     "Coinspeaker JP",
 ]
 STORY_PUBLIC_DEFAULTS = [
+    "Japan FSA Crypto Policy",
+    "SEC Press Releases",
+    "CFTC Press Releases",
     "Yahoo Finance JP CoinPost",
     "Yahoo Finance JP CoinDesk Japan",
     "Yahoo Finance JP Crypto",
