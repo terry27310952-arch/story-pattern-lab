@@ -12,7 +12,9 @@ if str(APP_DIR) not in sys.path:
 
 import reasoning_engine  # noqa: E402
 from brand_runtime import apply_brand_patch  # noqa: E402
+from editorial_visual_runtime import apply_editorial_visual_patch  # noqa: E402
 
 apply_brand_patch(reasoning_engine)
+apply_editorial_visual_patch(reasoning_engine)
 
 runpy.run_path(str(APP_FILE), run_name="__main__")
