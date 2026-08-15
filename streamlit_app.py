@@ -9,25 +9,32 @@ import streamlit as st
 
 APP_DIR = Path(__file__).parent / "apps" / "streamlit"
 APP_FILE = APP_DIR / "app.py"
-RUNTIME_TOKEN = "documentary-editorial-v4.3"
+RUNTIME_TOKEN = "documentary-editorial-v4.4"
 
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 import reasoning_engine  # noqa: E402
 import card_renderer  # noqa: E402
-import preview_runtime  # noqa: E402
-import excel_exporter  # noqa: E402
-import excel_export_runtime  # noqa: E402
-import card_download_runtime  # noqa: E402
+import visual_variation_runtime  # noqa: E402
 from brand_runtime import apply_brand_patch  # noqa: E402
 from editorial_visual_runtime import apply_editorial_visual_patch  # noqa: E402
 
-# Streamlit hot-reloads the entry script but can keep imported modules and monkeypatch
-# flags alive in the same Python process. Reload runtime modules explicitly so a new
-# renderer/exporter/download commit cannot continue serving an older closure.
+# First reload the low-level renderer and install the variable composition engine.
+# Downstream preview/export modules import render_card_png by value, so they must be
+# imported/reloaded only after this patch is active.
 importlib.reload(card_renderer)
+importlib.reload(visual_variation_runtime)
+visual_variation_runtime.apply_renderer_patch(card_renderer)
+
+import preview_runtime  # noqa: E402
+import excel_preview_sheet  # noqa: E402
+import excel_exporter  # noqa: E402
+import excel_export_runtime  # noqa: E402
+import card_download_runtime  # noqa: E402
+
 importlib.reload(preview_runtime)
+importlib.reload(excel_preview_sheet)
 importlib.reload(excel_export_runtime)
 importlib.reload(card_download_runtime)
 
@@ -41,22 +48,28 @@ if getattr(st, "_kiyosaki_runtime_token", None) != RUNTIME_TOKEN:
         delattr(excel_exporter, "_kiyosaki_excel_export_runtime_version")
     if hasattr(st, "_kiyosaki_card_download_runtime_version"):
         delattr(st, "_kiyosaki_card_download_runtime_version")
+    if hasattr(reasoning_engine, "_kiyosaki_visual_variation_version"):
+        delattr(reasoning_engine, "_kiyosaki_visual_variation_version")
     st._kiyosaki_runtime_token = RUNTIME_TOKEN
 
+# Content pipeline order matters: brand and visual-story semantics first, cleanup QA
+# second, fresh briefing-level blueprint last. app.py then imports the already-patched
+# generate_content_package symbol.
 apply_brand_patch(reasoning_engine)
 apply_editorial_visual_patch(reasoning_engine)
 preview_runtime.apply_preview_runtime()
+visual_variation_runtime.apply_reasoning_patch(reasoning_engine)
 
 # app.py imports build_excel_bytes by value, so install the verified Excel wrapper
-# before runpy executes app.py. It embeds current card_renderer PNGs in Card_Previews.
+# before runpy executes app.py. Card_Previews uses the exact same v4.4 renderer.
 excel_export_runtime.apply_excel_export_patch()
 
-# Make the Excel export visible inside every 5/6/7/custom card tab, directly below
-# the Markdown download button. This removes the previous below-the-fold UX trap.
+# Make the Excel export visible inside every 5/6/7/custom card tab.
 card_download_runtime.apply_card_download_patch()
 
 # Visible diagnostics for deployment verification.
 st.sidebar.caption(f"Renderer · {RUNTIME_TOKEN}")
+st.sidebar.caption(f"Blueprint · {visual_variation_runtime.VISUAL_VARIATION_RUNTIME_VERSION}")
 st.sidebar.caption(f"Excel · {excel_export_runtime.EXCEL_PREVIEW_RUNTIME_VERSION}")
 st.sidebar.caption(f"Download · {card_download_runtime.RUNTIME_VERSION}")
 
