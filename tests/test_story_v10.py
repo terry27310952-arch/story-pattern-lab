@@ -104,7 +104,7 @@ class StoryV10Test(unittest.TestCase):
         hero = {"resource_ids": [TRANSFORMATION["id"]], "entities": ["NeoGrid Holdings"], "hero_resource": TRANSFORMATION}
         graph = story_graph_engine.extract_fact_graph(hero, [TRANSFORMATION])
         plan = story_graph_engine.build_story_plan(hero, graph, 6)
-        self.assertEqual(plan["planning_policy"], "facts first -> relation graph -> dynamic card roles -> archetype tag last")
+        self.assertEqual(plan["planning_policy"], "facts first -> multi-relation graph -> dynamic card roles -> archetype tag last")
         self.assertGreaterEqual(len(plan["cards"]), 6)
         roles = [item["role"] for item in plan["cards"]]
         self.assertEqual(roles[0], "hook")
@@ -136,8 +136,8 @@ class StoryV10Test(unittest.TestCase):
         self.assertIsNone(result.error)
         package = result.package
         self.assertEqual(package["content_quality"]["pipeline"], "story-content-v10.1")
-        self.assertEqual(package["content_quality"]["source_engine"], "story-source-v10.0")
-        self.assertEqual(package["content_quality"]["graph_engine"], "story-graph-v10.0")
+        self.assertEqual(package["content_quality"]["source_engine"], "story-source-v10.1")
+        self.assertEqual(package["content_quality"]["graph_engine"], "story-graph-v10.1")
         cards = package["cards"]["STORY"][:-1]
         self.assertEqual(len(cards), 6)
         self.assertTrue(all((c.get("qa") or {}).get("fact_bound") for c in cards))
