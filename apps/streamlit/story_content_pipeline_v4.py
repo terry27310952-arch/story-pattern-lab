@@ -24,8 +24,14 @@ _MONEY_PATTERNS = [
 ]
 _CAPACITY_PATTERN = r"\d[\d,.]*\s?(?:MW|GW|メガワット|ギガワット)"
 _PERCENT_PATTERN = r"\d+(?:\.\d+)?%"
-_YEAR_PATTERN = r"\b(?:19|20)\d{2}\b"
-_DURATION_PATTERNS = [r"\b\d{1,2}\s?(?:years?|年間)\b", r"(?:契約期間|期間|延長|最長)[^。！？]{0,35}?\d{1,2}\s?年"]
+# Unicode word boundaries do not work before Japanese 年 because 年 is itself a
+# Unicode word character. Digit lookarounds correctly match 2027年 / 2028年 while
+# still rejecting numbers embedded inside a longer digit string.
+_YEAR_PATTERN = r"(?<!\d)(?:19|20)\d{2}(?!\d)"
+_DURATION_PATTERNS = [
+    r"(?<!\d)\d{1,2}\s?(?:years?|年間)(?!\d)",
+    r"(?<!\d)\d{1,2}\s*年(?:間)?(?!\d)",
+]
 _GENERIC_COPY_PATTERNS = [
     "今回の動きを基準に確認する",
     "確認できる事実を見る",
@@ -69,11 +75,9 @@ def _duration_values(sentence: str) -> list[str]:
     values: list[str] = []
     for pattern in _DURATION_PATTERNS:
         for match in re.finditer(pattern, sentence, flags=re.I):
-            found = re.search(r"\d{1,2}\s?(?:years?|年間|年)", match.group(0), flags=re.I)
-            if found:
-                value = _clean(found.group(0), 40)
-                if value not in values:
-                    values.append(value)
+            value = _clean(match.group(0), 40)
+            if value and value not in values:
+                values.append(value)
     return values
 
 
@@ -104,7 +108,7 @@ def _extract_fact_pack(hero: dict, hero_resources: list[dict]) -> dict:
                 continue
             low = sentence.casefold()
             years = _matches(_YEAR_PATTERN, sentence)
-            money = []
+            money: list[str] = []
             for pattern in _MONEY_PATTERNS:
                 money.extend(_matches(pattern, sentence))
             capacities = _matches(_CAPACITY_PATTERN, sentence)
@@ -159,11 +163,10 @@ def _extract_fact_pack(hero: dict, hero_resources: list[dict]) -> dict:
         if value and value not in values:
             values.append(value)
 
-    milestone_years = [
+    milestone_years = list(dict.fromkeys(
         str(f.get("value")) for f in unique
-        if f.get("fact_type") == "milestone_date" and f.get("value") and str(f.get("value")) not in []
-    ]
-    milestone_years = list(dict.fromkeys(milestone_years))
+        if f.get("fact_type") == "milestone_date" and f.get("value")
+    ))
 
     return {
         "source_ids": sorted({_sid(row) for row in hero_resources if _sid(row)}),
@@ -292,7 +295,10 @@ def _story_copy(archetype: str, role: str, hero: dict, pack: dict) -> tuple[str,
         years = list(dict.fromkeys(str(f.get("value")) for f in milestones if f.get("value")))
         fact = milestones[0] if milestones else _find_fact(pack, "date")
         if years:
-            headline = "次の節目は" + "年と".join(years[:2]) + ("年" if len(years) <= 2 else "")
+            if len(years) == 1:
+                headline = f"次の節目は{years[0]}年"
+            else:
+                headline = f"次の節目は{years[0]}年と{years[1]}年"
             evidence = _clean((fact or {}).get("source_sentence"), 300)
             return headline, evidence or f"{subject}の稼働計画は{years[0]}年以降の進捗確認が重要になる。", fact
 
