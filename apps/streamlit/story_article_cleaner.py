@@ -25,6 +25,8 @@ _STRUCTURAL_DROP_PATTERNS = [
     r"The post .* appeared first on",
     r"^\s*(?:next|previous|前の記事|次の記事)\s*$",
     r"^(?:Share|Follow|Subscribe|Newsletter|シェア|フォロー|会員登録|ログイン)\b",
+    # Generic price/ticker widgets flattened into article text, independent of site/asset.
+    r"\b1\s*(?:BTC|ETH|SOL|XRP|USDT|USD|JPY)\s*=",
 ]
 
 _AUTHOR_BIO_HINTS = [
