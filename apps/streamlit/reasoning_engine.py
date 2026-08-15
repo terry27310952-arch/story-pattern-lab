@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from datetime import datetime
 from typing import Optional
@@ -58,6 +59,119 @@ def split_sentences(text: str, limit: int = 6) -> list[str]:
     if not sentences:
         sentences = [cleaned[:420]]
     return sentences[:limit]
+
+
+def stable_source_id(row: dict, index: int = 0) -> str:
+    existing = row.get("source_id") or row.get("id")
+    if existing:
+        return str(existing)
+    seed = "|".join(
+        [
+            str(row.get("url") or ""),
+            str(row.get("source") or row.get("publisher") or ""),
+            str(row.get("title") or row.get("short_title") or ""),
+            str(index),
+        ]
+    )
+    return "src_" + hashlib.sha1(seed.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+
+def source_quality(row: dict) -> dict:
+    material = str(row.get("material") or row.get("full_material") or row.get("excerpt") or "")
+    material_chars = len(material)
+    fetch_method = str(row.get("fetch_method") or "")
+    source_type = str(row.get("source_type") or "")
+    full_text = material_chars >= 800 and fetch_method not in {"excerpt_only", "excerpt_fallback", "community_subject_only"}
+    score = 0.2
+    if full_text:
+        score += 0.45
+    elif material_chars >= 800:
+        score += 0.25
+    elif material_chars >= 240:
+        score += 0.12
+    if source_type == "media":
+        score += 0.12
+    if fetch_method == "article_body":
+        score += 0.16
+    if row.get("url"):
+        score += 0.05
+    return {
+        "full_text": full_text,
+        "material_chars": material_chars,
+        "fetch_method": fetch_method,
+        "source_type": source_type,
+        "quality_score": round(max(0.0, min(1.0, score)), 2),
+    }
+
+
+def source_claims(row: dict, source_id: str) -> list[dict]:
+    material = str(row.get("material") or row.get("full_material") or row.get("excerpt") or "")
+    claims = []
+    for index, sentence in enumerate(split_sentences(material, limit=4), start=1):
+        claims.append(
+            {
+                "claim_id": f"{source_id}:claim{index:02d}",
+                "source_id": source_id,
+                "text": clean_text(sentence, 260),
+            }
+        )
+    if not claims and clean_text(row.get("title"), 120):
+        claims.append(
+            {
+                "claim_id": f"{source_id}:claim01",
+                "source_id": source_id,
+                "text": clean_text(row.get("title"), 180),
+            }
+        )
+    return claims
+
+
+def normalize_sources(resources: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for index, row in enumerate(resources, start=1):
+        item = dict(row)
+        source_id = stable_source_id(item, index)
+        item["source_id"] = source_id
+        item["source_quality"] = source_quality(item)
+        item["claims"] = source_claims(item, source_id)
+        item.setdefault("event_cluster_id", "cluster_" + hashlib.sha1(clean_text(item.get("title"), 180).lower().encode("utf-8", errors="ignore")).hexdigest()[:10])
+        item.setdefault("source_credibility", item["source_quality"]["quality_score"])
+        item.setdefault("article_depth", item["source_quality"]["material_chars"])
+        item.setdefault("originality_score", 0.5 if item.get("fetch_method") in {"excerpt_only", "excerpt_fallback"} else 0.75)
+        item.setdefault("duplicate_event_score", 0.0)
+        normalized.append(item)
+    return normalized
+
+
+def canonical_sources(resources: list[dict]) -> dict[str, dict]:
+    return {
+        row["source_id"]: {
+            "source_id": row["source_id"],
+            "publisher": clean_text(row.get("source") or row.get("publisher") or "", 60),
+            "title": clean_text(row.get("title") or row.get("short_title") or "", 120),
+            "url": clean_text(row.get("url") or "", 500),
+            "posted_at": row.get("posted_at"),
+            "collected_at": row.get("collected_at"),
+            "source_quality": row.get("source_quality") or source_quality(row),
+            "event_cluster_id": row.get("event_cluster_id"),
+            "claims": row.get("claims") or source_claims(row, row["source_id"]),
+        }
+        for row in normalize_sources(resources)
+    }
+
+
+def canonical_evidence_store(resources: list[dict], metrics: dict[str, dict]) -> dict:
+    sources = canonical_sources(resources)
+    claims = {
+        claim["claim_id"]: claim
+        for source in sources.values()
+        for claim in source.get("claims", [])
+    }
+    return {
+        "metrics": {f"metric:{metric_id}": metric for metric_id, metric in metrics.items()},
+        "sources": {f"source:{source_id}": source for source_id, source in sources.items()},
+        "claims": {f"source:{claim_id}": claim for claim_id, claim in claims.items()},
+    }
 
 
 def as_percent(value: object) -> str:
@@ -432,6 +546,7 @@ def build_source_findings(resources: list[dict], market_summary: dict) -> list[d
     level_context = btc_level_context(market_summary)
     indicator_context = btc_indicator_context(market_summary)
     for index, row in enumerate(resources, start=1):
+        source_id = row.get("source_id") or stable_source_id(row, index)
         material = row.get("material") or row.get("excerpt") or ""
         sentences = split_sentences(str(material), 4)
         tags = str(row.get("tags", ""))
@@ -468,11 +583,14 @@ def build_source_findings(resources: list[dict], market_summary: dict) -> list[d
         findings.append(
             {
                 "index": index,
+                "source_id": source_id,
                 "source": row.get("source", ""),
                 "title": title,
                 "role": role,
                 "material_chars": len(str(material)),
                 "evidence": evidence,
+                "evidence_refs": [f"source:{claim.get('claim_id')}" for claim in row.get("claims", [])[: max(1, min(3, len(evidence)))]],
+                "source_quality": row.get("source_quality") or source_quality(row),
                 "trader_read": trader_read,
                 "url": row.get("url", ""),
             }
@@ -876,7 +994,33 @@ def post_json(url: str, payload: dict, headers: dict, timeout: int = 240) -> tup
         return None, str(error)
 
 
-def call_openai_compatible(prompt: str, config: dict) -> tuple[Optional[str], Optional[str]]:
+def task_system_prompt(task_type: str) -> str:
+    prompts = {
+        "brief": (
+            "You are a crypto market research analyst. Return JSON only. "
+            "Never invent or modify market prices, URLs, timestamps or source IDs."
+        ),
+        "carousel_plan": (
+            "You are a crypto editorial director. Return JSON patches only. "
+            "Choose card roles, priority, evidence refs and justification. Do not write copy or metrics."
+        ),
+        "card_copy": (
+            "You are a financial editorial copy director. Return copy patches by card_id only. "
+            "Do not return metrics, sources, evidence objects or raw values."
+        ),
+        "ja_localization": (
+            "You are a native Japanese financial editor. Do not translate Korean syntax literally. "
+            "Write concise Japanese used by Japanese crypto and investment media. Preserve all locked data exactly."
+        ),
+        "visual_direction": (
+            "You are a premium financial art director. Return visual_direction patches by card_id only. "
+            "Do not return pixel coordinates, copy, sources or metrics."
+        ),
+    }
+    return prompts.get(task_type, prompts["brief"])
+
+
+def call_openai_compatible(prompt: str, config: dict, task_type: str = "brief") -> tuple[Optional[str], Optional[str]]:
     api_key = config.get("api_key")
     base_url = str(config.get("base_url") or "").rstrip("/")
     model = config.get("model")
@@ -887,11 +1031,7 @@ def call_openai_compatible(prompt: str, config: dict) -> tuple[Optional[str], Op
         "messages": [
             {
                 "role": "system",
-                "content": (
-                    "당신은 한국어로 쓰는 크립토 시장 리서치 애널리스트입니다. "
-                    "선택된 모든 원문을 읽고 BTC 기준축, 유동성, 알트 로테이션, 규제/ETF 이벤트, 무효화 조건을 분리합니다. "
-                    "내부 추론은 출력하지 말고 결론, 근거, 시나리오만 전문적인 JSON으로 출력합니다."
-                ),
+                "content": task_system_prompt(task_type),
             },
             {"role": "user", "content": prompt},
         ],
@@ -912,7 +1052,7 @@ def call_openai_compatible(prompt: str, config: dict) -> tuple[Optional[str], Op
         return None, str(parse_error)
 
 
-def call_ollama(prompt: str, config: dict) -> tuple[Optional[str], Optional[str]]:
+def call_ollama(prompt: str, config: dict, task_type: str = "brief") -> tuple[Optional[str], Optional[str]]:
     base_url = str(config.get("base_url") or "http://localhost:11434").rstrip("/")
     model = config.get("model") or "qwen3:4b"
     payload = {
@@ -921,10 +1061,7 @@ def call_ollama(prompt: str, config: dict) -> tuple[Optional[str], Optional[str]
         "messages": [
             {
                 "role": "system",
-                "content": (
-                    "한국어 크립토 시장 리서치 애널리스트로서 JSON만 출력합니다. "
-                    "모든 선택 원문을 읽고, 라이트 요약이 아니라 BTC 중심 전문 브리핑을 작성합니다."
-                ),
+                "content": task_system_prompt(task_type),
             },
             {"role": "user", "content": prompt},
         ],
@@ -943,20 +1080,33 @@ REASONING_SCHEMAS = {
     "carousel_plan": {
         "required": ["cards"],
         "card_required": ["card_type", "angle"],
+        "allowed_card_fields": ["card_id", "card_type", "angle", "priority", "evidence_refs", "justification"],
     },
     "card_copy": {
-        "required": ["cards"],
-        "card_required": ["card_type", "semantic", "metrics"],
+        "required": ["patches"],
+        "patch_required": ["card_id", "copy"],
     },
     "visual_direction": {
-        "required": ["cards"],
-        "card_required": ["visual_direction"],
+        "required": ["patches"],
+        "patch_required": ["card_id", "visual_direction"],
     },
     "ja_localization": {
-        "required": ["cards"],
-        "card_required": ["headline", "subheadline", "key_message", "insight", "action", "risk"],
+        "required": ["patches"],
+        "patch_required": ["card_id", "localized_copy"],
     },
 }
+
+
+def copy_fields_from_card(card: dict) -> dict:
+    return {
+        "eyebrow": card.get("eyebrow", ""),
+        "headline": card.get("headline", ""),
+        "subheadline": card.get("subheadline", ""),
+        "key_message": card.get("key_message", ""),
+        "insight": card.get("insight", {"visible": False, "label": "", "text": ""}),
+        "action": card.get("action", {"visible": False, "label": "", "text": ""}),
+        "risk": card.get("risk", {"visible": False, "text": ""}),
+    }
 
 
 def local_reason(input_payload: dict, task_type: str, schema: dict) -> dict:
@@ -965,18 +1115,17 @@ def local_reason(input_payload: dict, task_type: str, schema: dict) -> dict:
         count = int(input_payload.get("count") or 6)
         return {"cards": editor_pass_carousel_plan(count, analysis)}
     if task_type == "card_copy":
-        plan = input_payload.get("plan") or []
-        analysis = input_payload.get("analysis") or {}
-        label = input_payload.get("label") or "6장"
-        semantic = input_payload.get("semantic") or {}
-        return {"cards": build_semantic_cards(plan, analysis, label, semantic)}
+        cards = input_payload.get("cards") or []
+        return {"patches": [{"card_id": card.get("card_id"), "copy": copy_fields_from_card(card)} for card in cards if card.get("card_id")]}
     if task_type == "visual_direction":
         cards = input_payload.get("cards") or []
-        return {"cards": editor_pass_visual_system(cards)}
+        directed = editor_pass_visual_system([dict(card) for card in cards])
+        return {"patches": [{"card_id": card.get("card_id"), "visual_direction": card.get("visual_direction")} for card in directed if card.get("card_id")]}
     if task_type == "ja_localization":
         cards = input_payload.get("cards") or []
         locale = input_payload.get("locale") or DEFAULT_OUTPUT_LOCALE
-        return {"cards": localize_cards(cards, locale)}
+        localized = localize_cards([dict(card) for card in cards], locale)
+        return {"patches": [{"card_id": card.get("card_id"), "localized_copy": copy_fields_from_card(card)} for card in localized if card.get("card_id")]}
     return {}
 
 
@@ -1015,6 +1164,23 @@ def validate_reasoning_result(result: dict, task_type: str, schema: dict, input_
                 layout = (card.get("visual_direction") or card.get("layout") or {}).get("layout_variant") or (card.get("layout") or {}).get("variant")
                 if layout and layout not in LAYOUT_VARIANTS:
                     errors.append(f"card {index} invalid layout {layout}")
+    patches = result.get("patches")
+    if "patches" in schema.get("required", []) and not isinstance(patches, list):
+        errors.append("patches must be a list")
+    if isinstance(patches, list):
+        for index, patch in enumerate(patches):
+            if not isinstance(patch, dict):
+                errors.append(f"patch {index} is not an object")
+                continue
+            for field in schema.get("patch_required", []):
+                if field not in patch:
+                    errors.append(f"patch {index} missing {field}")
+            if not str(patch.get("card_id", "")).strip():
+                errors.append(f"patch {index} empty card_id")
+            if task_type == "visual_direction":
+                layout = (patch.get("visual_direction") or {}).get("layout_variant")
+                if layout and layout not in LAYOUT_VARIANTS:
+                    errors.append(f"patch {index} invalid layout {layout}")
     return not errors, errors
 
 
@@ -1035,12 +1201,12 @@ def reasoning_prompt(input_payload: dict, task_type: str, schema: dict, repair_c
     )
 
 
-def call_reasoning_backend(prompt: str, config: dict) -> tuple[Optional[dict], Optional[str]]:
+def call_reasoning_backend(prompt: str, config: dict, task_type: str) -> tuple[Optional[dict], Optional[str]]:
     provider = config.get("provider", PROVIDER_LOCAL)
     if provider == PROVIDER_OLLAMA:
-        raw, error = call_ollama(prompt, config)
+        raw, error = call_ollama(prompt, config, task_type)
     elif provider == PROVIDER_OPENAI_COMPATIBLE:
-        raw, error = call_openai_compatible(prompt, config)
+        raw, error = call_openai_compatible(prompt, config, task_type)
     else:
         return None, "local provider does not use external backend"
     if error or not raw:
@@ -1061,7 +1227,7 @@ def reason(input_payload: dict, task_type: str, schema: dict | None = None, conf
     if provider != PROVIDER_LOCAL:
         for phase in ["initial", "repair", "regenerate"]:
             prompt = reasoning_prompt(input_payload, task_type, active_schema, " / ".join(failures) if phase == "repair" else "")
-            parsed, error = call_reasoning_backend(prompt, active_config)
+            parsed, error = call_reasoning_backend(prompt, active_config, task_type)
             if error or not parsed:
                 failures.append(f"{phase}: {error}")
                 continue
@@ -1092,8 +1258,12 @@ def deterministic_safe_reason(input_payload: dict, task_type: str) -> dict:
             {"card_type": "trade_plan", "angle": "execution"},
         ]
         return {"cards": base[:count]}
-    if task_type in {"card_copy", "visual_direction", "ja_localization"}:
-        return {"cards": input_payload.get("cards") or []}
+    if task_type == "card_copy":
+        return {"patches": [{"card_id": card.get("card_id"), "copy": copy_fields_from_card(card)} for card in input_payload.get("cards") or [] if card.get("card_id")]}
+    if task_type == "ja_localization":
+        return {"patches": [{"card_id": card.get("card_id"), "localized_copy": copy_fields_from_card(card)} for card in input_payload.get("cards") or [] if card.get("card_id")]}
+    if task_type == "visual_direction":
+        return {"patches": [{"card_id": card.get("card_id"), "visual_direction": card.get("visual_direction") or {}} for card in input_payload.get("cards") or [] if card.get("card_id")]}
     return {}
 
 
@@ -1196,16 +1366,40 @@ def brief_prompt(resources: list[dict], market_snapshot: dict, briefing_type: st
     )
 
 
+def reconcile_external_findings(external_findings: list[dict], canonical_findings: list[dict]) -> list[dict]:
+    reconciled: list[dict] = []
+    canonical_by_url = {item.get("url"): item for item in canonical_findings if item.get("url")}
+    canonical_by_title = {clean_text(item.get("title"), 120).lower(): item for item in canonical_findings if item.get("title")}
+    for index, fallback in enumerate(canonical_findings, start=0):
+        external = external_findings[index] if index < len(external_findings) and isinstance(external_findings[index], dict) else {}
+        match = canonical_by_url.get(external.get("url")) or canonical_by_title.get(clean_text(external.get("title"), 120).lower()) or fallback
+        item = dict(match)
+        if external.get("trader_read"):
+            item["trader_read"] = clean_text(external.get("trader_read"), 900)
+        if external.get("role"):
+            item["role"] = clean_text(external.get("role"), 80)
+        item["source_id"] = match.get("source_id")
+        item["source"] = match.get("source")
+        item["title"] = match.get("title")
+        item["url"] = match.get("url")
+        item["source_quality"] = match.get("source_quality")
+        item["evidence_refs"] = match.get("evidence_refs", [])
+        reconciled.append(item)
+    return reconciled
+
+
 def normalize_external_brief(parsed: dict, local: dict, provider: str) -> dict:
     parsed.setdefault("provider", provider)
     parsed.setdefault("reference_perspective", BITCOIN_ILLUMINATI_VIEWPOINT)
     parsed.setdefault("material_coverage", local["material_coverage"])
-    parsed.setdefault("market_summary", local["market_summary"])
+    parsed["market_summary"] = local["market_summary"]
+    parsed["generated_at"] = local.get("generated_at")
+    parsed["briefing_type"] = local.get("briefing_type")
     parsed.setdefault("trader_stance", local["trader_stance"])
     parsed.setdefault("market_structure", local["market_structure"])
-    parsed.setdefault("source_findings", local["source_findings"])
-    parsed.setdefault("source_digest", local["source_digest"])
-    parsed.setdefault("source_lines", local["source_lines"])
+    parsed["source_findings"] = reconcile_external_findings(parsed.get("source_findings") or local["source_findings"], local["source_findings"])
+    parsed["source_digest"] = local["source_digest"]
+    parsed["source_lines"] = local["source_lines"]
     parsed.setdefault("risk_notes", local["risk_notes"])
     parsed.setdefault("scenarios", local["scenarios"])
     parsed.setdefault("invalidation_points", local["invalidation_points"])
@@ -1214,16 +1408,20 @@ def normalize_external_brief(parsed: dict, local: dict, provider: str) -> dict:
 
 
 def generate_trader_brief(resources: list[dict], market_snapshot: dict, briefing_type: str, tone: str, config: dict) -> tuple[dict, Optional[str]]:
-    local = local_generate_brief(resources, market_snapshot, briefing_type, tone)
+    normalized_resources = normalize_sources(resources)
+    canonical_market_summary = summarize_market(market_snapshot)
+    local = local_generate_brief(normalized_resources, market_snapshot, briefing_type, tone)
+    local["market_summary"] = canonical_market_summary
+    local["canonical_market_summary"] = canonical_market_summary
     provider = config.get("provider", PROVIDER_LOCAL)
     if provider == PROVIDER_LOCAL:
         return local, None
 
-    prompt = brief_prompt(resources, market_snapshot, briefing_type, tone)
+    prompt = brief_prompt(normalized_resources, market_snapshot, briefing_type, tone)
     if provider == PROVIDER_OLLAMA:
-        raw, error = call_ollama(prompt, config)
+        raw, error = call_ollama(prompt, config, "brief")
     else:
-        raw, error = call_openai_compatible(prompt, config)
+        raw, error = call_openai_compatible(prompt, config, "brief")
     if error or not raw:
         local["_provider_warning"] = f"외부 추론 실패로 로컬 전문 분석 엔진을 사용했습니다: {error}"
         return local, None
@@ -1274,14 +1472,24 @@ JA_TRANSLATIONESE_PATTERNS = [
     "市場動向を確認する必要があります",
 ]
 JA_EMPTY_VARIABLE_PATTERNS = [
-    r"との間",
-    r"はです",
-    r"は。",
-    r"が。",
     r"undefined",
     r"\bnull\b",
     r"\bNaN\b",
+    r"\{\}",
+    r"\$\{[^}]*\}",
     r"\$[\s。/]*($|\n)",
+]
+QA_SEVERITY_RANK = {"INFO": 0, "WARNING": 1, "BLOCKING": 2}
+QA_BLOCKING_TOKENS = [
+    "BLOCKING",
+    "empty_variable",
+    "ja_validation_hangul_detected",
+    "numeric_validation_unlocked_metric",
+    "missing_required_metrics",
+    "evidence_gate_failed",
+    "brand_cta_missing",
+    "fake_source",
+    "canonical_numeric_mismatch",
 ]
 INSIGHT_LABELS = {
     "market_conclusion": ["오늘의 판단", "한 줄 결론", "내가 보는 핵심"],
@@ -1483,8 +1691,11 @@ VISUAL_RULES = {
 
 def short_source(row: dict) -> dict:
     return {
+        "source_id": clean_text(row.get("source_id") or "", 80),
         "publisher": clean_text(row.get("source") or row.get("publisher") or "", 40),
         "short_title": clean_text(row.get("title") or row.get("short_title") or "", 72),
+        "url": clean_text(row.get("url") or "", 500),
+        "source_quality": row.get("source_quality") or {},
     }
 
 
@@ -1506,8 +1717,18 @@ def locked_metric(metric_id: str, label: str, raw_value: object, formatted: str,
     return {"id": metric_id, "label": label, "value": formatted, "raw_value": raw_value, "unit": unit, "locked": True}
 
 
-def locked_market_metrics(brief: dict) -> dict[str, dict]:
-    market = brief.get("market_summary") or {}
+def locked_market_metrics(
+    canonical_market_summary: dict,
+    generated_at: object | None = None,
+    timeframe: object | None = None,
+) -> dict[str, dict]:
+    if "market_summary" in canonical_market_summary:
+        brief = canonical_market_summary
+        market = brief.get("market_summary") or {}
+        generated_at = generated_at if generated_at is not None else brief.get("generated_at")
+        timeframe = timeframe if timeframe is not None else brief.get("briefing_type")
+    else:
+        market = canonical_market_summary or {}
     items = [
         locked_metric("btc_price", "BTC", market.get("btc_price"), as_price(market.get("btc_price")), "USD"),
         locked_metric("btc_support", "지지", market.get("btc_nearest_support"), as_price(market.get("btc_nearest_support")), "USD"),
@@ -1531,8 +1752,8 @@ def locked_market_metrics(brief: dict) -> dict[str, dict]:
         locked_metric("eth_btc", "ETH/BTC", market.get("eth_btc"), as_plain_number(market.get("eth_btc"))),
         locked_metric("total2", "TOTAL2", market.get("total2_market_cap"), as_price(market.get("total2_market_cap")), "USD"),
         locked_metric("total3", "TOTAL3", market.get("total3_market_cap"), as_price(market.get("total3_market_cap")), "USD"),
-        locked_metric("generated_at", "생성 시각", brief.get("generated_at"), str(brief.get("generated_at") or "")),
-        locked_metric("timeframe", "타임프레임", brief.get("briefing_type"), "주간" if brief.get("briefing_type") == "weekly" else "일간"),
+        locked_metric("generated_at", "생성 시각", generated_at, str(generated_at or "")),
+        locked_metric("timeframe", "타임프레임", timeframe, "주간" if timeframe == "weekly" else "일간"),
     ]
     return {item["id"]: item for item in items if item}
 
@@ -1552,6 +1773,25 @@ def normalize_sentence_key(text: object) -> str:
 
 def has_ja_empty_variable(text: str) -> bool:
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in JA_EMPTY_VARIABLE_PATTERNS)
+
+
+def qa_warning_severity(warning: str) -> str:
+    if any(token in warning for token in QA_BLOCKING_TOKENS):
+        return "BLOCKING"
+    if warning:
+        return "WARNING"
+    return "INFO"
+
+
+def highest_qa_severity(warnings: list[str], renderable: bool = True) -> str:
+    severity = "INFO"
+    if not renderable:
+        severity = "BLOCKING"
+    for warning in warnings:
+        candidate = qa_warning_severity(str(warning))
+        if QA_SEVERITY_RANK[candidate] > QA_SEVERITY_RANK[severity]:
+            severity = candidate
+    return severity
 
 
 def sanitize_visible_text(value: object) -> str:
@@ -1896,16 +2136,21 @@ def evidence_profile(card_type: str, angle: str, analysis: dict) -> dict:
     findings = analysis.get("findings") or []
     resources = analysis.get("resources") or []
     evidence: list[dict] = []
+    evidence_refs: list[str] = []
 
     def add_metric(metric_id: str) -> None:
         if metric_available(metrics, metric_id):
             metric = metrics[metric_id]
             evidence.append({"type": "metric", "id": metric_id, "value": metric.get("raw_value")})
+            evidence_refs.append(f"metric:{metric_id}")
 
     if card_type == "market_conclusion":
-        for metric_id in ["btc_price", "btc_support", "btc_resistance", "fear_greed"]:
+        for metric_id in ["btc_price", "btc_support", "btc_resistance", "rsi14", "macd", "funding", "open_interest", "fear_greed"]:
             add_metric(metric_id)
-        strength = 0.72 + min(0.2, len(evidence) * 0.04)
+        has_price = count_available(metrics, ["btc_price"]) == 1
+        has_boundary = count_available(metrics, ["btc_support", "btc_resistance"]) >= 1
+        has_context = count_available(metrics, ["rsi14", "macd", "funding", "open_interest", "fear_greed"]) >= 1
+        strength = 0.78 if has_price and has_boundary and has_context else 0.35
         novelty = 0.9
         relevance = 0.95
         actionability = 0.72
@@ -1940,17 +2185,23 @@ def evidence_profile(card_type: str, angle: str, analysis: dict) -> dict:
     elif card_type == "news_context":
         for metric_id in ["btc_price", "btc_support", "btc_resistance", "btc_24h"]:
             add_metric(metric_id)
-        source = findings[0] if findings else resources[0] if resources else {}
+        source = next((item for item in findings if (item.get("source_quality") or {}).get("quality_score", 0) >= 0.55), findings[0] if findings else resources[0] if resources else {})
         if source:
+            source_id = source.get("source_id") or stable_source_id(source, 1)
+            source_ref = (source.get("evidence_refs") or [f"source:{source_id}:claim01"])[0]
             evidence.append(
                 {
                     "type": "source",
+                    "source_id": source_id,
+                    "claim_id": source_ref.split("source:", 1)[-1],
                     "publisher": source.get("source") or source.get("publisher"),
                     "title": source.get("title") or source.get("short_title"),
                     "url": source.get("url"),
                 }
             )
-        strength = 0.72 if source and count_available(metrics, ["btc_price", "btc_support", "btc_resistance"]) >= 2 else 0.45
+            evidence_refs.append(source_ref)
+        source_quality_score = (source.get("source_quality") or {}).get("quality_score", 0) if source else 0
+        strength = 0.72 if source and source_quality_score >= 0.55 and count_available(metrics, ["btc_price", "btc_support", "btc_resistance"]) >= 2 else 0.45
         novelty = 0.72
         relevance = 0.76
         actionability = 0.55
@@ -2003,12 +2254,19 @@ def evidence_profile(card_type: str, angle: str, analysis: dict) -> dict:
         "actionability": round(actionability, 2),
         "overlap": round(overlap, 2),
         "evidence": evidence,
+        "evidence_refs": evidence_refs,
+        "semantic_summary": {
+            "subject": "BTC",
+            "claim": f"{card_type}:{angle}",
+            "evidence": evidence_refs,
+        },
     }
 
 
 def gate_carousel_plan(plan: list[dict], analysis: dict, desired_count: int) -> list[dict]:
     gated: list[dict] = []
     seen_roles: set[tuple[str, str]] = set()
+    seen_claims: set[str] = set()
     for item in plan:
         card_type = item.get("card_type")
         angle = item.get("angle", "")
@@ -2020,7 +2278,9 @@ def gate_carousel_plan(plan: list[dict], analysis: dict, desired_count: int) -> 
             continue
         if scores["novelty"] < 0.5 and role_key in seen_roles:
             continue
-        if scores["overlap"] > 0.7:
+        semantic_summary = scores.get("semantic_summary") or {}
+        claim = semantic_summary.get("claim", "")
+        if claim in seen_claims:
             continue
         next_item = dict(item)
         next_item["evidence_score"] = {
@@ -2031,8 +2291,12 @@ def gate_carousel_plan(plan: list[dict], analysis: dict, desired_count: int) -> 
             "overlap": scores["overlap"],
         }
         next_item["evidence"] = scores["evidence"]
+        next_item["evidence_refs"] = scores["evidence_refs"]
+        next_item["semantic_summary"] = scores["semantic_summary"]
         gated.append(next_item)
         seen_roles.add(role_key)
+        if claim:
+            seen_claims.add(claim)
         if len(gated) >= desired_count:
             break
     if not any(item.get("card_type") == "trade_plan" and item.get("angle") == "execution" for item in gated):
@@ -2049,6 +2313,8 @@ def gate_carousel_plan(plan: list[dict], analysis: dict, desired_count: int) -> 
                     "overlap": execution_scores["overlap"],
                 },
                 "evidence": execution_scores["evidence"],
+                "evidence_refs": execution_scores["evidence_refs"],
+                "semantic_summary": execution_scores["semantic_summary"],
             }
             if len(gated) >= desired_count and gated:
                 gated[-1] = execution_item
@@ -2058,7 +2324,7 @@ def gate_carousel_plan(plan: list[dict], analysis: dict, desired_count: int) -> 
 
 
 def editor_pass_carousel_plan(count: int, analysis: dict) -> list[dict]:
-    desired_count = max(MIN_CONTENT_CARDS, min(MAX_CONTENT_CARDS, count or PREFERRED_CONTENT_CARDS))
+    desired_count = max(1, min(MAX_CONTENT_CARDS, count or PREFERRED_CONTENT_CARDS))
     plan = [
         {"card_type": "market_conclusion", "angle": "decision"},
         {"card_type": "key_levels", "angle": "price_boundary"},
@@ -2140,16 +2406,65 @@ def metric_ids_for_card(card_type: str, angle: str) -> list[str]:
     return ["btc_price"]
 
 
+def required_metric_ids_for_card(card_type: str, angle: str = "") -> list[str]:
+    if card_type == "market_conclusion":
+        return ["btc_price"]
+    if card_type == "key_levels":
+        return ["btc_price", "btc_support", "btc_resistance"]
+    if card_type == "derivatives":
+        return ["funding", "open_interest"]
+    if card_type == "news_context":
+        return ["btc_price"]
+    if card_type == "scenarios":
+        return ["btc_support", "btc_resistance"]
+    if card_type == "trade_plan":
+        return ["btc_support", "btc_resistance"]
+    return []
+
+
+def make_card_id(index: int, card_type: str) -> str:
+    return f"card_{index:03d}_{card_type}"
+
+
+def source_from_evidence_refs(evidence_refs: list[str], sources: dict[str, dict], fallback: dict) -> dict:
+    for ref in evidence_refs:
+        if ref.startswith("source:"):
+            remainder = ref.split("source:", 1)[1]
+            source_id = remainder.split(":claim", 1)[0]
+            source = sources.get(source_id)
+            if source:
+                return {
+                    "source_id": source_id,
+                    "publisher": source.get("publisher", ""),
+                    "short_title": source.get("title", ""),
+                    "url": source.get("url", ""),
+                    "source_quality": source.get("source_quality", {}),
+                }
+    if fallback:
+        source_id = fallback.get("source_id") or stable_source_id(fallback, 1)
+        return {
+            "source_id": source_id,
+            "publisher": fallback.get("source") or fallback.get("publisher") or "",
+            "short_title": fallback.get("title") or fallback.get("short_title") or "",
+            "url": fallback.get("url", ""),
+            "source_quality": fallback.get("source_quality") or source_quality(fallback),
+        }
+    return {"source_id": "market_snapshot", "publisher": "Market Data", "short_title": "Canonical snapshot", "url": "", "source_quality": {"quality_score": 1.0}}
+
+
 def build_semantic_cards(plan: list[dict], analysis: dict, label: str, semantic: dict) -> list[dict]:
     metrics = analysis["metrics"]
-    resources = analysis.get("resources") or []
+    resources = normalize_sources(analysis.get("resources") or [])
+    source_map = canonical_sources(resources)
     primary_source = analysis.get("primary_source") or {}
     cards: list[dict] = []
     for index, item in enumerate(plan, start=1):
         card_type = item.get("card_type", "market_conclusion")
         angle = item.get("angle", "")
-        source = resources[(index - 1) % len(resources)] if resources else primary_source
+        source = source_from_evidence_refs(item.get("evidence_refs") or [], source_map, primary_source if card_type == "news_context" else {})
         card = base_card(label, index, card_type, source)
+        card["card_id"] = item.get("card_id") or make_card_id(index, card_type)
+        card["metric_ids"] = metric_ids_for_card(card_type, angle)
         card["metrics"] = metric_list(metrics, metric_ids_for_card(card_type, angle))
         card["evidence_score"] = item.get("evidence_score") or evidence_profile(card_type, angle, analysis).get("evidence_score", {})
         if not card["evidence_score"]:
@@ -2162,6 +2477,8 @@ def build_semantic_cards(plan: list[dict], analysis: dict, label: str, semantic:
                 "overlap": profile["overlap"],
             }
         card["evidence"] = item.get("evidence") or evidence_profile(card_type, angle, analysis).get("evidence", [])
+        card["evidence_refs"] = item.get("evidence_refs") or evidence_profile(card_type, angle, analysis).get("evidence_refs", [])
+        card["semantic_summary"] = item.get("semantic_summary") or evidence_profile(card_type, angle, analysis).get("semantic_summary", {})
         card["semantic"] = {
             "role": semantic_role(card_type, angle),
             "angle": angle,
@@ -2196,6 +2513,33 @@ def ja_copy_for_card(card: dict) -> dict:
     eth_btc = metric_value(card, "eth_btc")
     btc_dominance = metric_value(card, "btc_dominance")
     source_title = clean_text(source.get("short_title") or "選択ニュース", 42)
+    funding_raw = None
+    rsi_raw = None
+    for metric in card.get("metrics") or []:
+        if metric.get("id") == "funding":
+            funding_raw = to_float(metric.get("raw_value"))
+        if metric.get("id") == "rsi14":
+            rsi_raw = to_float(metric.get("raw_value"))
+    if funding_raw is None:
+        derivative_message = "先物は方向より、温度を見る。"
+    elif funding_raw > 0.03:
+        derivative_message = "ロング寄り。\n過熱の手前まで温度が上がる。"
+    elif funding_raw > 0:
+        derivative_message = "ロング寄り。\nただし、まだ一方向ではない。"
+    elif funding_raw < -0.01:
+        derivative_message = "ショート側に傾く。\n反発時の巻き戻しも見る。"
+    else:
+        derivative_message = "偏りは小さい。\n価格の確認を優先する。"
+    if rsi_raw is None:
+        rsi_message = "RSIは未確認。価格の反応を優先。"
+    elif rsi_raw >= 75:
+        rsi_message = f"RSI {rsi_value}。過熱圏。追うより冷ます場面。"
+    elif rsi_raw >= 60:
+        rsi_message = f"RSI {rsi_value}。勢いはあるが、飛び乗りは避ける。"
+    elif rsi_raw >= 45:
+        rsi_message = f"RSI {rsi_value}。中立圏。次の価格確認が先。"
+    else:
+        rsi_message = f"RSI {rsi_value}。弱さが残る。戻りの質を見る。"
 
     if card_type == BRAND_OUTRO_TYPE:
         brand = card.get("brand_outro") or DEFAULT_BRAND_OUTRO
@@ -2234,8 +2578,8 @@ def ja_copy_for_card(card: dict) -> dict:
             "eyebrow": "DERIVATIVES",
             "headline": "ポジションは温まっている",
             "subheadline": f"MARK {mark} / FUNDING {funding} / OI {oi}",
-            "key_message": "ロング優勢。\nただし、まだ過熱ではない。",
-            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"RSI {rsi_value}。温度は上がったが、価格の確認はまだ残る。"},
+            "key_message": derivative_message,
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": rsi_message},
             "action": {"visible": False, "label": "", "text": ""},
             "risk": {"visible": False, "text": ""},
         }
@@ -2252,10 +2596,10 @@ def ja_copy_for_card(card: dict) -> dict:
     if card_type == "news_context":
         return {
             "eyebrow": "NEWS CONTEXT",
-            "headline": "見出しより、反応を見る",
-            "subheadline": f"{source_title}\nBTC {btc_24h} / {resistance}未回復",
-            "key_message": "材料はある。\n価格はまだ答えていない。",
-            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"{price}で止まっているだけでは足りない。見るのは{resistance}の上。"},
+            "headline": "見出しと価格を並べる",
+            "subheadline": f"{source_title}\nBTC {btc_24h} / 現在 {price}",
+            "key_message": "この材料と、\n現在の価格位置を並べて見る。",
+            "insight": {"visible": True, "label": selected_editorial_label(card_type, "ja-JP", card.get("slide", 1)), "text": f"反応を断定せず、{support}と{resistance}のどちらに近いかを見る。"},
             "action": {"visible": False, "label": "", "text": ""},
             "risk": {"visible": False, "text": ""},
         }
@@ -2411,6 +2755,85 @@ def renumber_cards(cards: list[dict]) -> list[dict]:
     for index, card in enumerate(cards, start=1):
         card["slide"] = index
     return cards
+
+
+def merge_stage_patch(cards: list[dict], result: dict, stage: str) -> list[dict]:
+    patches = result.get("patches") or []
+    patch_by_id = {patch.get("card_id"): patch for patch in patches if isinstance(patch, dict) and patch.get("card_id")}
+    merged: list[dict] = []
+    for card in cards:
+        next_card = dict(card)
+        patch = patch_by_id.get(card.get("card_id")) or {}
+        if stage == "card_copy":
+            copy = patch.get("copy") or {}
+            for field in ["eyebrow", "headline", "subheadline", "key_message", "insight", "action", "risk"]:
+                if field in copy:
+                    next_card[field] = copy[field]
+        elif stage == "ja_localization":
+            localized = patch.get("localized_copy") or {}
+            for field in ["eyebrow", "headline", "subheadline", "key_message", "insight", "action", "risk"]:
+                if field in localized:
+                    next_card[field] = localized[field]
+        elif stage == "visual_direction":
+            direction = patch.get("visual_direction")
+            if isinstance(direction, dict):
+                allowed = {
+                    "brand_role",
+                    "visual_role",
+                    "layout_variant",
+                    "aspect_ratios",
+                    "safe_area",
+                    "color_system",
+                    "character_visibility",
+                    "character_shot",
+                    "character_pose",
+                    "character_position",
+                    "camera_angle",
+                    "lighting_intensity",
+                    "visual_focus",
+                    "negative_space",
+                    "text_rules",
+                    "image_prompts",
+                    "negative_prompt",
+                }
+                next_card["visual_direction"] = {key: value for key, value in direction.items() if key in allowed}
+        merged.append(next_card)
+    return merged
+
+
+def reconcile_card_with_canonical(
+    card: dict,
+    canonical_metrics: dict[str, dict],
+    canonical_sources_map: dict[str, dict],
+    canonical_evidence: dict,
+) -> dict:
+    next_card = dict(card)
+    metric_ids = next_card.get("metric_ids") or [metric.get("id") for metric in next_card.get("metrics", []) if metric.get("id")]
+    next_card["metrics"] = metric_list(canonical_metrics, metric_ids, limit=4)
+    source = next_card.get("source") or {}
+    source_id = source.get("source_id")
+    if source_id and source_id in canonical_sources_map:
+        canonical_source = canonical_sources_map[source_id]
+        next_card["source"] = {
+            "source_id": source_id,
+            "publisher": canonical_source.get("publisher", ""),
+            "short_title": canonical_source.get("title", ""),
+            "url": canonical_source.get("url", ""),
+            "source_quality": canonical_source.get("source_quality", {}),
+        }
+    next_card["evidence"] = [
+        ref
+        for ref in next_card.get("evidence_refs", [])
+        if ref in canonical_evidence.get("metrics", {}) or ref in canonical_evidence.get("claims", {}) or ref in canonical_evidence.get("sources", {})
+    ]
+    return next_card
+
+
+def reconcile_cards_with_canonical(cards: list[dict], metrics: dict[str, dict], resources: list[dict]) -> list[dict]:
+    normalized = normalize_sources(resources)
+    source_map = canonical_sources(normalized)
+    evidence = canonical_evidence_store(normalized, metrics)
+    return [reconcile_card_with_canonical(card, metrics, source_map, evidence) for card in cards]
 
 
 def base_card(label: str, slide: int, card_type: str, source: dict) -> dict:
@@ -2695,7 +3118,19 @@ def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
                 warnings.append("empty dynamic variable pattern detected")
         if any(not metric.get("locked") for metric in card.get("metrics", []) or []):
             card["qa"]["warnings"].append("numeric_validation_unlocked_metric")
+            card["qa"]["renderable"] = False
             warnings.append("metric missing locked flag")
+        if card_type != BRAND_OUTRO_TYPE:
+            present_metric_ids = {metric.get("id") for metric in card.get("metrics", []) or []}
+            missing_required = [
+                metric_id
+                for metric_id in required_metric_ids_for_card(card_type, (card.get("semantic") or {}).get("angle", ""))
+                if metric_id not in present_metric_ids
+            ]
+            if missing_required:
+                card["qa"]["warnings"].append(f"missing_required_metrics:{','.join(missing_required)}")
+                card["qa"]["renderable"] = False
+                warnings.append(f"BLOCKING: missing required metrics for {card_type}: {','.join(missing_required)}")
         evidence_strength = to_float((card.get("evidence_score") or {}).get("evidence_strength"))
         if card_type != BRAND_OUTRO_TYPE and (evidence_strength is None or evidence_strength < 0.6):
             card["qa"]["warnings"].append("evidence_gate_failed")
@@ -2727,6 +3162,10 @@ def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
         if prompt and any(item not in prompt for item in required_identity):
             card["qa"]["warnings"].append("character_validation_identity_prompt_missing")
             warnings.append("character identity prompt missing immutable constraint")
+        card["qa"]["severity"] = highest_qa_severity(
+            card.get("qa", {}).get("warnings", []),
+            bool(card.get("qa", {}).get("renderable", True)),
+        )
     if not cards or cards[-1].get("card_type") != BRAND_OUTRO_TYPE:
         warnings.append("final card is not brand_outro")
     else:
@@ -2735,10 +3174,53 @@ def editor_pass_qa(cards: list[dict]) -> tuple[list[dict], list[str]]:
         if brand.get("brand_name") not in final_text.replace("\n", " "):
             cards[-1]["qa"]["warnings"].append("brand_name_missing")
             warnings.append("brand_outro missing fixed brand name")
-        if "勢力が入ったポイントを無料でチェック" not in final_text:
+        expected_cta = brand.get("cta") or DEFAULT_BRAND_OUTRO["cta"]
+        if expected_cta not in final_text:
             cards[-1]["qa"]["warnings"].append("brand_cta_missing")
-            warnings.append("brand_outro missing fixed CTA")
+            cards[-1]["qa"]["renderable"] = False
+            cards[-1]["qa"]["severity"] = highest_qa_severity(cards[-1]["qa"].get("warnings", []), False)
+            warnings.append("BLOCKING: brand_outro missing configured CTA")
     return cards, warnings
+
+
+def finalize_card_set(
+    cards: list[dict],
+    label: str,
+    locale: str,
+    config: dict | None,
+    metrics: dict[str, dict],
+    resources: list[dict],
+) -> tuple[list[dict], list[str]]:
+    reconciled = reconcile_cards_with_canonical(cards, metrics, resources)
+    checked, warnings = editor_pass_qa(reconciled)
+    production_cards = [
+        card
+        for card in checked
+        if card.get("card_type") == BRAND_OUTRO_TYPE or card.get("qa", {}).get("renderable", True)
+    ]
+    removed = len(checked) - len(production_cards)
+    if removed:
+        warnings.append(f"BLOCKING: removed {removed} non-renderable analysis card(s)")
+    production_cards = [card for card in production_cards if card.get("card_type") != BRAND_OUTRO_TYPE]
+    production_cards = renumber_cards(production_cards)
+    production_cards = enforce_brand_outro(production_cards, label, locale, config)
+    production_cards = editor_pass_visual_system(production_cards)
+    production_cards = renumber_cards(production_cards)
+    production_cards, second_warnings = editor_pass_qa(production_cards)
+    warnings.extend(second_warnings)
+    second_pass_cards = [
+        card
+        for card in production_cards
+        if card.get("card_type") == BRAND_OUTRO_TYPE or card.get("qa", {}).get("renderable", True)
+    ]
+    second_removed = len(production_cards) - len(second_pass_cards)
+    if second_removed:
+        warnings.append(f"BLOCKING: removed {second_removed} non-renderable analysis card(s) after visual QA")
+    production_cards = renumber_cards(second_pass_cards)
+    if not production_cards or production_cards[-1].get("card_type") != BRAND_OUTRO_TYPE:
+        production_cards = enforce_brand_outro(production_cards, label, locale, config)
+        production_cards = renumber_cards(production_cards)
+    return production_cards, warnings
 
 
 def make_card_set(
@@ -2749,11 +3231,13 @@ def make_card_set(
     config: dict | None = None,
     locale: str = DEFAULT_OUTPUT_LOCALE,
 ) -> tuple[list[dict], dict]:
-    content_count = max(MIN_CONTENT_CARDS, min(MAX_CONTENT_CARDS, count or PREFERRED_CONTENT_CARDS))
-    metrics = locked_market_metrics(brief)
-    semantic = build_canonical_content_model(brief, resources, metrics)
+    content_count = max(1, min(MAX_CONTENT_CARDS, count or PREFERRED_CONTENT_CARDS))
+    normalized_resources = normalize_sources(resources)
+    canonical_market = brief.get("canonical_market_summary") or brief.get("market_summary") or {}
+    metrics = locked_market_metrics(canonical_market, brief.get("generated_at"), brief.get("briefing_type"))
+    semantic = build_canonical_content_model({**brief, "market_summary": canonical_market}, normalized_resources, metrics)
     semantic["locale"] = locale
-    analysis = editor_pass_market_analysis(brief, resources, metrics)
+    analysis = editor_pass_market_analysis({**brief, "market_summary": canonical_market}, normalized_resources, metrics)
     analysis["scenarios"] = brief.get("scenarios") or []
     active_config = config or {"provider": PROVIDER_LOCAL}
     plan_result = reason(
@@ -2765,20 +3249,26 @@ def make_card_set(
     plan = gate_carousel_plan(plan_result.get("cards") or [], analysis, content_count)
     if not plan:
         plan = editor_pass_carousel_plan(content_count, analysis)
+    cards = build_semantic_cards(plan, analysis, label, semantic)
+    cards = reconcile_cards_with_canonical(cards, metrics, normalized_resources)
     copy_result = reason(
-        {"plan": plan, "analysis": analysis, "label": label, "semantic": semantic},
+        {"cards": cards, "analysis": analysis, "label": label, "semantic": semantic},
         "card_copy",
         REASONING_SCHEMAS["card_copy"],
         active_config,
     )
-    cards = copy_result.get("cards") or build_semantic_cards(plan, analysis, label, semantic)
+    cards = merge_stage_patch(cards, copy_result, "card_copy")
+    cards = reconcile_cards_with_canonical(cards, metrics, normalized_resources)
     localization_result = reason(
         {"cards": cards, "semantic": semantic, "locale": locale},
         "ja_localization",
         REASONING_SCHEMAS["ja_localization"],
         active_config,
     )
-    cards = localization_result.get("cards") or localize_cards(cards, locale)
+    cards = merge_stage_patch(cards, localization_result, "ja_localization")
+    for card in cards:
+        card["locale"] = locale
+    cards = reconcile_cards_with_canonical(cards, metrics, normalized_resources)
     cards = enforce_brand_outro(cards, label, locale, active_config)
     visual_result = reason(
         {"cards": cards, "semantic": semantic},
@@ -2786,10 +3276,11 @@ def make_card_set(
         REASONING_SCHEMAS["visual_direction"],
         active_config,
     )
-    cards = visual_result.get("cards") or editor_pass_visual_system(cards)
+    cards = merge_stage_patch(cards, visual_result, "visual_direction")
+    cards = reconcile_cards_with_canonical(cards, metrics, normalized_resources)
     cards = enforce_brand_outro(cards, label, locale, active_config)
     cards = renumber_cards(cards)
-    cards, qa_warnings = editor_pass_qa(cards)
+    cards, qa_warnings = finalize_card_set(cards, label, locale, active_config, metrics, normalized_resources)
     return cards, {
         "passes": ["market_analysis", "semantic_content_model", "carousel_plan", "evidence_gate", "card_copy", "ja_localization", "observer_visual_system", "brand_outro_lock", "qa"],
         "locale": locale,
@@ -2953,6 +3444,49 @@ def build_note_markdown(brief: dict, resources: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def derive_variant(
+    master_cards: list[dict],
+    content_count: int,
+    label: str,
+    locale: str,
+    config: dict | None,
+    master_meta: dict,
+) -> tuple[list[dict], dict]:
+    content_cards = [dict(card) for card in master_cards if card.get("card_type") != BRAND_OUTRO_TYPE]
+    target = max(1, min(MAX_CONTENT_CARDS, content_count))
+    if len(content_cards) > target:
+        trade_cards = [card for card in content_cards if card.get("card_type") == "trade_plan"]
+        trade_card = trade_cards[-1] if trade_cards else content_cards[-1]
+        front_pool = [card for card in content_cards if card.get("card_id") != trade_card.get("card_id")]
+        selected = front_pool[: max(0, target - 1)] + [trade_card]
+    else:
+        selected = content_cards
+    for card in selected:
+        card["set"] = label
+    selected = renumber_cards(selected)
+    selected = enforce_brand_outro(selected, label, locale, config)
+    selected = editor_pass_visual_system(selected)
+    selected = renumber_cards(selected)
+    selected, qa_warnings = editor_pass_qa(selected)
+    content_shortage_reason = ""
+    if len([card for card in selected if card.get("card_type") != BRAND_OUTRO_TYPE]) < MIN_CONTENT_CARDS:
+        content_shortage_reason = "evidence-qualified cards below target range; no weak filler cards added"
+    meta = {
+        **master_meta,
+        "derived_from_master": True,
+        "variant_label": label,
+        "requested_content_cards": target,
+        "content_card_count": sum(1 for card in selected if card.get("card_type") != BRAND_OUTRO_TYPE),
+        "final_card_count": len(selected),
+        "card_types": [card["card_type"] for card in selected],
+        "layout_variants": [card.get("visual_direction", {}).get("layout_variant") for card in selected],
+        "character_shots": [card.get("visual_direction", {}).get("character_shot") for card in selected],
+        "content_shortage_reason": content_shortage_reason,
+        "qa_warnings": qa_warnings + [warning for card in selected for warning in card.get("qa", {}).get("warnings", [])],
+    }
+    return selected, meta
+
+
 def generate_content_package(
     brief: dict,
     resources: list[dict],
@@ -2962,10 +3496,23 @@ def generate_content_package(
 ) -> dict:
     suggested = max(MIN_CONTENT_CARDS, min(MAX_CONTENT_CARDS, custom_count or PREFERRED_CONTENT_CARDS))
     active_locale = locale if locale in SUPPORTED_OUTPUT_LOCALES else DEFAULT_OUTPUT_LOCALE
-    cards_5, meta_5 = make_card_set(brief, resources, 5, "5장", config, active_locale)
-    cards_6, meta_6 = make_card_set(brief, resources, 6, "6장", config, active_locale)
-    cards_7, meta_7 = make_card_set(brief, resources, 7, "7장", config, active_locale)
-    cards_custom, meta_custom = make_card_set(brief, resources, suggested, "자율제안", config, active_locale)
+    master_count = max(MAX_CONTENT_CARDS, suggested)
+    master_cards, master_meta = make_card_set(brief, resources, master_count, "master", config, active_locale)
+    master_meta["master_analysis_id"] = "master_" + hashlib.sha1(
+        json.dumps(
+            {
+                "generated_at": brief.get("generated_at"),
+                "market": brief.get("market_summary"),
+                "sources": [row.get("source_id") or row.get("id") or row.get("url") for row in normalize_sources(resources)],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8", errors="ignore")
+    ).hexdigest()[:12]
+    cards_5, meta_5 = derive_variant(master_cards, 5, "5장", active_locale, config, master_meta)
+    cards_6, meta_6 = derive_variant(master_cards, 6, "6장", active_locale, config, master_meta)
+    cards_7, meta_7 = derive_variant(master_cards, 7, "7장", active_locale, config, master_meta)
+    cards_custom, meta_custom = derive_variant(master_cards, suggested, "자율제안", active_locale, config, master_meta)
     cards = {
         "5장": cards_5,
         "6장": cards_6,

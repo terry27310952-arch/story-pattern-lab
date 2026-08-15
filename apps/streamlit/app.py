@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import html
+import base64
 from datetime import datetime
+from pathlib import Path
 
 import streamlit as st
 
@@ -34,7 +36,7 @@ except Exception:
     fetch_article_body = None
 
 
-APP_VERSION = "2026-08-15 kiyosaki-editorial-carousel-v12"
+APP_VERSION = "2026-08-16 kiyosaki-editorial-carousel-v13"
 
 
 MARKET_STRUCTURE_LABELS = {
@@ -180,27 +182,14 @@ st.markdown(
         filter: drop-shadow(-10px 0 18px rgba(241,112,36,0.22));
         opacity: 0.92;
     }
-    .observer-figure::before {
-        content: "";
-        position: absolute;
-        left: 36%;
-        top: 0;
-        width: 28%;
-        height: 24%;
-        border-radius: 50% 50% 46% 46%;
-        background: #010101;
-        box-shadow: -4px 0 0 rgba(241,112,36,0.44), 0 0 22px rgba(241,112,36,0.16);
-    }
-    .observer-figure::after {
-        content: "";
-        position: absolute;
-        left: 18%;
-        bottom: 0;
-        width: 64%;
-        height: 78%;
-        border-radius: 44% 44% 8% 8%;
-        background: linear-gradient(90deg, #020202, #14110f 50%, #030303);
-        border-left: 1px solid rgba(241,112,36,0.32);
+    .observer-figure img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: center top;
+        border-radius: 4px;
+        mix-blend-mode: screen;
+        opacity: 0.92;
     }
     .observer-preview.chart_primary .observer-figure,
     .observer-preview.scenario_primary .observer-figure { width: 18%; height: 28%; opacity: 0.64; }
@@ -255,6 +244,15 @@ def env_value(name: str, default: str = "") -> str:
     except Exception:
         pass
     return os.environ.get(name, default)
+
+
+@st.cache_data(show_spinner=False)
+def observer_reference_data_uri() -> str:
+    path = Path(__file__).resolve().parents[2] / "assets" / "brand" / "observer_reference.png"
+    if not path.exists():
+        return ""
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 def init_state() -> None:
@@ -467,7 +465,7 @@ def markdown_brief(brief: dict) -> str:
 
 def cards_to_markdown(cards: list[dict]) -> str:
     lines: list[str] = []
-    for card in cards:
+    for card in [item for item in cards if item.get("qa", {}).get("renderable", True)]:
         lines.append(f"## {card.get('slide')}. {card.get('headline', '')}")
         if card.get("eyebrow"):
             lines.append(f"*{card.get('eyebrow')}*")
@@ -556,6 +554,8 @@ def observer_card_preview_html(card: dict) -> str:
     source = card.get("source") or {}
     source_text = " · ".join([value for value in [source.get("publisher", ""), source.get("short_title", "")] if value])
     footer_text = card.get("footer") or f"The Observer · {source_text}"
+    reference_src = observer_reference_data_uri()
+    figure_inner = f"<img src='{html.escape(reference_src)}' alt='Observer reference preview'>" if reference_src else ""
     metric_html = []
     for metric in (card.get("metrics") or [])[:4]:
         variant = metric_variant(metric.get("label", ""))
@@ -574,7 +574,7 @@ def observer_card_preview_html(card: dict) -> str:
         <div class="observer-sub">{subheadline}</div>
         <div class="observer-message">{message}</div>
       </div>
-      <div class="observer-figure" style="width:{figure_width:.1f}%"></div>
+      <div class="observer-figure" style="width:{figure_width:.1f}%">{figure}</div>
       <div class="observer-metrics">{metrics}</div>
       <div class="observer-source">{footer}</div>
     </div>
@@ -585,6 +585,7 @@ def observer_card_preview_html(card: dict) -> str:
         subheadline=html.escape(str(card.get("subheadline", ""))),
         message=html.escape(str(card.get("key_message", ""))),
         figure_width=figure_width,
+        figure=figure_inner,
         metrics="".join(metric_html),
         footer=html.escape(footer_text),
     )
@@ -812,9 +813,16 @@ def render_cards(content_package: dict) -> None:
     tabs = st.tabs(["5장", "6장", "7장", "자율제안", "브랜드 연출", "Note", "JSON"])
     for label, tab in zip(["5장", "6장", "7장", "자율제안"], tabs[:4]):
         with tab:
-            card_set = cards.get(label, [])
+            set_meta = ((content_package.get("content_quality") or {}).get("editor_passes") or {}).get(label, {})
+            reasoning_meta = set_meta.get("reasoning") or {}
+            card_set = [
+                card
+                for card in cards.get(label, [])
+                if card.get("qa", {}).get("renderable", True)
+            ]
             for card in card_set:
                 with st.expander(f"{card.get('slide')}. {card.get('headline')}", expanded=card.get("slide") == 1):
+                    st.caption("Editorial Preview · production render spec is listed under 브랜드 연출")
                     st.markdown(observer_card_preview_html(card), unsafe_allow_html=True)
                     if card.get("eyebrow"):
                         st.caption(card.get("eyebrow"))
@@ -843,6 +851,29 @@ def render_cards(content_package: dict) -> None:
                     source_text = " · ".join([value for value in [source.get("publisher", ""), source.get("short_title", "")] if value])
                     if source_text:
                         st.caption(source_text)
+                    with st.expander("QA / DEBUG", expanded=False):
+                        direction = card.get("visual_direction") or {}
+                        st.json(
+                            {
+                                "card_id": card.get("card_id"),
+                                "card_role": card.get("card_type"),
+                                "semantic": card.get("semantic"),
+                                "evidence_score": card.get("evidence_score"),
+                                "evidence_refs": card.get("evidence_refs"),
+                                "source_quality": (card.get("source") or {}).get("source_quality"),
+                                "qa": card.get("qa"),
+                                "renderable": card.get("qa", {}).get("renderable", True),
+                                "reasoning": reasoning_meta,
+                                "fallback_used": any(
+                                    (stage_meta or {}).get("provider") == PROVIDER_LOCAL
+                                    and (stage_meta or {}).get("phase") == "fallback"
+                                    for stage_meta in reasoning_meta.values()
+                                    if isinstance(stage_meta, dict)
+                                ),
+                                "character_shot": direction.get("character_shot"),
+                                "layout_variant": direction.get("layout_variant"),
+                            }
+                        )
             st.download_button(
                 f"{label} Markdown 다운로드",
                 cards_to_markdown(card_set),
@@ -938,9 +969,9 @@ with st.sidebar:
     provider_label = st.selectbox(
         "AI 엔진",
         [
-            "무료 로컬 전문 분석 엔진",
-            "Ollama 무료 로컬 모델",
-            "OpenAI-compatible 무료 API",
+            "내장 규칙 기반 분석 엔진 · 빠름 · 무료 · deterministic fallback",
+            "Ollama 로컬 추론 모델 · 로컬 LLM",
+            "OpenAI-compatible API · 외부 추론 모델",
         ],
     )
     temperature = st.slider("추론 온도", 0.1, 0.9, 0.35, 0.05)

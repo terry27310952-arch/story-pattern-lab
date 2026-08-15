@@ -81,5 +81,24 @@
     "classification": "Neutral",
     "source": "fixture"
   },
+  "global_context": {
+    "btc_dominance": 50.8333,
+    "eth_btc": 0.02993473,
+    "total_market_cap": 2400000000000,
+    "total2_market_cap": 1140000000000,
+    "total3_market_cap": 915000000000,
+    "as_of": "2026-08-15T00:00:00Z",
+    "field_sources": {
+      "btc_dominance": "fixture global market_cap_percentage.btc",
+      "eth_btc": "calculated: ETH spot price / BTC spot price",
+      "total_market_cap": "fixture total crypto market cap",
+      "total2_market_cap": "fixture total crypto market cap - BTC market cap",
+      "total3_market_cap": "fixture total crypto market cap - BTC market cap - ETH market cap"
+    },
+    "provenance": {
+      "total2_market_cap": "total crypto market cap - BTC market cap",
+      "total3_market_cap": "total crypto market cap - BTC market cap - ETH market cap"
+    }
+  },
   "errors": []
 }

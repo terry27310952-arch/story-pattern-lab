@@ -664,6 +664,67 @@ def fetch_fear_greed() -> tuple[dict, Optional[str]]:
         return {}, str(parse_error)
 
 
+def fetch_global_context(crypto_rows: list[dict]) -> tuple[dict, Optional[str]]:
+    """Collect crypto-wide context without inventing missing values.
+
+    TOTAL2 is total crypto market cap minus BTC market cap.
+    TOTAL3 is total crypto market cap minus BTC and ETH market caps.
+    BTC dominance comes from CoinGecko global public data when available.
+    ETH/BTC is calculated deterministically from canonical BTC and ETH spot
+    prices collected in the same market snapshot.
+    """
+    by_symbol = {row.get("symbol"): row for row in crypto_rows}
+    btc = by_symbol.get("BTC", {})
+    eth = by_symbol.get("ETH", {})
+    btc_price = safe_float(btc.get("price"))
+    eth_price = safe_float(eth.get("price"))
+    btc_market_cap = safe_float(btc.get("market_cap"))
+    eth_market_cap = safe_float(eth.get("market_cap"))
+    eth_btc = round(eth_price / btc_price, 8) if eth_price is not None and btc_price not in (None, 0) else None
+
+    context = {
+        "btc_dominance": None,
+        "eth_btc": eth_btc,
+        "total_market_cap": None,
+        "total2_market_cap": None,
+        "total3_market_cap": None,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "field_sources": {
+            "eth_btc": "calculated: ETH spot price / BTC spot price" if eth_btc is not None else None,
+        },
+        "provenance": {
+            "total2_market_cap": "total crypto market cap - BTC market cap",
+            "total3_market_cap": "total crypto market cap - BTC market cap - ETH market cap",
+        },
+    }
+
+    payload, error = fetch_json("https://api.coingecko.com/api/v3/global", timeout=18)
+    if error or not isinstance(payload, dict):
+        return context, error or "CoinGecko global response is empty."
+    data = payload.get("data", {}) if isinstance(payload.get("data"), dict) else {}
+    total_market_cap = safe_float((data.get("total_market_cap") or {}).get("usd"))
+    btc_dominance = safe_float((data.get("market_cap_percentage") or {}).get("btc"))
+    context["btc_dominance"] = round(btc_dominance, 4) if btc_dominance is not None else None
+    context["total_market_cap"] = round_price(total_market_cap)
+    if total_market_cap is not None and btc_market_cap is not None:
+        context["total2_market_cap"] = round_price(total_market_cap - btc_market_cap)
+    if total_market_cap is not None and btc_market_cap is not None and eth_market_cap is not None:
+        context["total3_market_cap"] = round_price(total_market_cap - btc_market_cap - eth_market_cap)
+    context["field_sources"].update(
+        {
+            "btc_dominance": "CoinGecko global market_cap_percentage.btc" if context["btc_dominance"] is not None else None,
+            "total_market_cap": "CoinGecko global total_market_cap.usd" if context["total_market_cap"] is not None else None,
+            "total2_market_cap": "CoinGecko global total_market_cap.usd - CoinGecko BTC market cap"
+            if context["total2_market_cap"] is not None
+            else None,
+            "total3_market_cap": "CoinGecko global total_market_cap.usd - CoinGecko BTC market cap - CoinGecko ETH market cap"
+            if context["total3_market_cap"] is not None
+            else None,
+        }
+    )
+    return context, None
+
+
 def collect_market_snapshot() -> dict:
     errors: list[str] = []
     crypto_rows, technicals, levels, derivatives, crypto_errors = fetch_crypto_assets()
@@ -673,6 +734,9 @@ def collect_market_snapshot() -> dict:
     fear_greed, fear_error = fetch_fear_greed()
     if fear_error:
         errors.append(f"Fear & Greed: {fear_error}")
+    global_context, global_error = fetch_global_context(crypto_rows)
+    if global_error:
+        errors.append(f"Global context: {global_error}")
 
     return {
         "schema_version": MARKET_SCHEMA_VERSION,
@@ -683,6 +747,7 @@ def collect_market_snapshot() -> dict:
         "price_levels": levels,
         "derivatives": derivatives,
         "fear_greed": fear_greed,
+        "global_context": global_context,
         "errors": errors,
     }
 
@@ -788,6 +853,8 @@ def summarize_market(snapshot: dict) -> dict:
         "btc_dominance": global_context.get("btc_dominance"),
         "total2_market_cap": global_context.get("total2_market_cap"),
         "total3_market_cap": global_context.get("total3_market_cap"),
+        "global_context_sources": global_context.get("field_sources", {}),
+        "global_context_provenance": global_context.get("provenance", {}),
         "fear_greed": fear.get("value"),
         "fear_greed_label": fear.get("classification"),
     }

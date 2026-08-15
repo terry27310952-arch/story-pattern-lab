@@ -80,10 +80,10 @@ editorial brand `勢力ハンター キヨサキ`.
 
 ## Free Reasoning Options
 
-The app works without a paid API key by using its built-in local reasoning
-engine. That default engine is deterministic and always available, but the
-deepest reasoning quality comes from connecting a local Ollama model or a free
-OpenAI-compatible inference endpoint.
+The app works without a paid API key by using its built-in deterministic rule
+engine. That default path is fast, free, and always available as a safe
+fallback. Deeper editorial reasoning can be connected through a local Ollama
+model or an OpenAI-compatible inference endpoint.
 
 Optional external reasoning backends:
 
@@ -95,7 +95,14 @@ Optional external reasoning backends:
   - `FREE_AI_MODEL=free-reasoning-model`
   - `FREE_AI_API_KEY=...`
 
-If an external backend fails, the app falls back to the local reasoning engine.
+If an external backend fails, the app falls back to the deterministic rule
+engine without crashing the production card/export flow.
+
+## Architecture Notes
+
+See `docs/crypto-trader-briefing-architecture.md` for the v13 canonical data,
+reasoning patch, evidence gate, Japanese localization, Observer visual, QA, and
+legacy isolation contracts.
 
 ## Local Streamlit Test
 
