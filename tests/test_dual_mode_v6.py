@@ -162,7 +162,7 @@ class DualModeV6Test(unittest.TestCase):
         self.assertNotIn("story_pipeline_runtime.apply_reasoning_patch", entry)
         self.assertNotIn("story_deck_runtime.apply_reasoning_patch", entry)
         self.assertNotIn("visual_variation_runtime.apply_reasoning_patch", entry)
-        self.assertNotIn("apply_brand_patch(reasoning_engine)", entry)
+        self.assertIn("apply_brand_patch(reasoning_engine)", entry)
         self.assertIn("story_output_guard.apply_generation_guard", entry)
 
     def test_removed_reference_asset_stays_removed(self) -> None:
