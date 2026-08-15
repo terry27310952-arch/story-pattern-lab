@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 import story_article_cleaner
 
 
-STORY_GRAPH_ENGINE_VERSION = "story-graph-v10.0"
+STORY_GRAPH_ENGINE_VERSION = "story-graph-v10.1"
 
 _YEAR_RE = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
 _NUMBER_PATTERNS = [
@@ -17,42 +17,33 @@ _NUMBER_PATTERNS = [
     ("duration", re.compile(r"(?<!\d)\d{1,3}\s*(?:年間|年|years?|months?|か月|ヶ月)(?!\d)", re.I)),
 ]
 
+# These are semantic relation cues, not article/site templates. A sentence may emit
+# several relation nodes, e.g. a regulation sentence can be both `policy` and `future`.
 _RELATION_RULES = [
     ("before_state", ["これまで", "従来", "以前", "主力", "formerly", "previously", "historically", "used to"]),
     ("change", ["転換", "移行", "多角化", "参入", "拡大", "転用", "再編", "変える", "変わる", "shift", "transition", "pivot", "diversif", "expand", "move into", "convert"]),
     ("deal", ["契約", "提携", "買収", "出資", "取得", "締結", "lease", "deal", "contract", "agreement", "acquire", "investment", "partnership"]),
     ("flow", ["流入", "流出", "資金", "買い越", "売り越", "inflow", "outflow", "allocation", "fund flow"]),
-    ("policy", ["規制", "法案", "法律", "承認", "施行", "当局", "金融庁", "規則", "regulation", "regulator", "approval", "law", "rule", "policy"]),
+    ("policy", ["規制", "法案", "法律", "承認", "施行", "当局", "金融庁", "規則", "ルール", "regulation", "regulator", "approval", "law", "rule", "policy"]),
     ("risk", ["破綻", "流出", "攻撃", "ハッキング", "盗難", "清算", "危機", "損失", "hack", "breach", "collapse", "liquidation", "risk", "fraud"]),
     ("cause", ["ため", "背景", "受け", "により", "理由", "because", "due to", "driven by", "amid", "as demand"]),
     ("contrast", ["一方", "しかし", "だが", "ただし", "にもかかわらず", "while", "but", "however", "despite", "whereas"]),
     ("impact", ["影響", "意味", "評価", "示す", "可能性", "見方", "impact", "implication", "valuation", "could", "may", "signals"]),
-    ("future", ["予定", "計画", "見込み", "までに", "今後", "開始する", "稼働", "will", "plan", "expected", "scheduled", "target", "launch"]),
+    ("future", ["予定", "計画", "見込み", "までに", "今後", "開始する", "稼働", "施行", "適用", "発効", "will", "plan", "expected", "scheduled", "target", "launch", "effective"]),
     ("history", ["過去", "歴史", "当時", "以来", "1929", "2000", "historical", "history", "previous cycle", "dot-com"]),
 ]
 
 _VISUAL_KEYWORDS = [
     ("industrial_infrastructure", ["工場", "発電", "電力", "データセンター", "採掘", "マイニング", "server", "data center", "mining", "power", "infrastructure"]),
-    ("policy_document", ["規制", "当局", "法案", "法律", "承認", "policy", "regulation", "regulator", "law", "approval"]),
+    ("policy_document", ["規制", "当局", "法案", "法律", "承認", "ルール", "policy", "regulation", "regulator", "law", "approval", "rule"]),
     ("capital_flow", ["流入", "流出", "資金", "ETF", "inflow", "outflow", "fund", "allocation"]),
     ("archive_context", ["1929", "2000", "過去", "歴史", "historical", "archive", "dot-com"]),
     ("security_forensics", ["ハッキング", "盗難", "攻撃", "FBI", "hack", "fraud", "breach", "theft"]),
 ]
 
 _ROLE_ORDER = {
-    "hook": 0,
-    "context": 10,
-    "actor": 15,
-    "before": 20,
-    "change": 30,
-    "deal": 35,
-    "scale": 40,
-    "cause": 50,
-    "contrast": 55,
-    "evidence": 60,
-    "impact": 70,
-    "timeline": 80,
-    "watch": 90,
+    "hook": 0, "context": 10, "actor": 15, "before": 20, "change": 30, "deal": 35,
+    "scale": 40, "cause": 50, "contrast": 55, "evidence": 60, "impact": 70, "timeline": 80, "watch": 90,
 }
 
 
@@ -112,22 +103,18 @@ def _values(sentence: str) -> tuple[list[str], list[str]]:
     for year in years:
         if year not in values:
             values.append(year)
-    return values[:8], years[:6]
+    return values[:10], years[:8]
 
 
-def _relation(sentence: str) -> str:
+def _relations(sentence: str) -> list[str]:
     lower = sentence.casefold()
-    hits: list[tuple[int, str]] = []
+    matched: list[str] = []
     for relation, terms in _RELATION_RULES:
-        count = sum(1 for term in terms if term.casefold() in lower)
-        if count:
-            hits.append((count, relation))
-    if not hits:
-        return "evidence" if re.search(r"\d", sentence) else "context"
-    # Prefer structural transitions over generic impact/future words when tied.
-    priority = {"change": 10, "deal": 9, "policy": 9, "risk": 9, "flow": 8, "before_state": 8, "contrast": 7, "cause": 6, "future": 5, "history": 5, "impact": 4}
-    hits.sort(key=lambda item: (item[0], priority.get(item[1], 0)), reverse=True)
-    return hits[0][1]
+        if any(term.casefold() in lower for term in terms):
+            matched.append(relation)
+    if matched:
+        return matched
+    return ["evidence" if re.search(r"\d", sentence) else "context"]
 
 
 def _subject(sentence: str, entities: list[str]) -> str:
@@ -139,9 +126,7 @@ def _subject(sentence: str, entities: list[str]) -> str:
 
 
 def _fact_score(sentence: str, relation: str, values: list[str], subject: str) -> float:
-    score = 0.25
-    score += min(0.25, len(sentence) / 900)
-    score += min(0.22, len(values) * 0.07)
+    score = 0.25 + min(0.25, len(sentence) / 900) + min(0.22, len(values) * 0.07)
     if subject:
         score += 0.12
     if relation in {"change", "deal", "policy", "risk", "flow", "before_state", "future", "contrast"}:
@@ -162,29 +147,28 @@ def extract_fact_graph(hero: dict, resources: list[dict]) -> dict:
         title = _clean(row.get("title"), 400)
         for sentence in _sentences(f"{title}。 {material}"):
             values, years = _values(sentence)
-            relation = _relation(sentence)
             subject = _subject(sentence, entities)
-            payload = f"{source_id}|{sentence_index}|{sentence}"
-            node = FactNode(
-                id="fact_" + hashlib.sha1(payload.encode("utf-8", errors="ignore")).hexdigest()[:12],
-                source_id=source_id,
-                sentence=sentence,
-                subject=subject,
-                relation=relation,
-                values=values,
-                years=years,
-                score=_fact_score(sentence, relation, values, subject),
-                index=sentence_index,
-            )
-            nodes.append(node)
+            for relation in _relations(sentence):
+                payload = f"{source_id}|{sentence_index}|{relation}|{sentence}"
+                nodes.append(FactNode(
+                    id="fact_" + hashlib.sha1(payload.encode("utf-8", errors="ignore")).hexdigest()[:12],
+                    source_id=source_id,
+                    sentence=sentence,
+                    subject=subject,
+                    relation=relation,
+                    values=values,
+                    years=years,
+                    score=_fact_score(sentence, relation, values, subject),
+                    index=sentence_index,
+                ))
             sentence_index += 1
 
-    # Deduplicate near-identical source sentences without knowing the publisher/topic.
     unique: list[FactNode] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for node in sorted(nodes, key=lambda n: (n.index, -n.score)):
-        key = re.sub(r"[^0-9a-zぁ-んァ-ヶ一-龥]+", "", node.sentence.casefold())[:220]
-        if not key or key in seen:
+        sentence_key = re.sub(r"[^0-9a-zぁ-んァ-ヶ一-龥]+", "", node.sentence.casefold())[:220]
+        key = (node.relation, sentence_key)
+        if not sentence_key or key in seen:
             continue
         seen.add(key)
         unique.append(node)
@@ -197,7 +181,7 @@ def extract_fact_graph(hero: dict, resources: list[dict]) -> dict:
         "version": STORY_GRAPH_ENGINE_VERSION,
         "source_ids": sorted({_sid(r) for r in resources if _sid(r) and (not allowed or _sid(r) in allowed)}),
         "entities": entities,
-        "facts": [node.to_dict() for node in unique[:120]],
+        "facts": [node.to_dict() for node in unique[:160]],
         "relations": by_relation,
     }
 
@@ -206,9 +190,10 @@ def _facts(graph: dict) -> list[dict]:
     return [dict(item) for item in graph.get("facts") or []]
 
 
-def _best(graph: dict, relations: list[str], require_values: bool = False, exclude: set[str] | None = None) -> dict | None:
+def _best(graph: dict, relations: list[str], require_values: bool = False, exclude: set[str] | None = None, exclude_sentences: set[int] | None = None) -> dict | None:
     exclude = exclude or set()
-    candidates = [f for f in _facts(graph) if f.get("relation") in relations and f.get("id") not in exclude]
+    exclude_sentences = exclude_sentences or set()
+    candidates = [f for f in _facts(graph) if f.get("relation") in relations and f.get("id") not in exclude and int(f.get("index") or 0) not in exclude_sentences]
     if require_values:
         candidates = [f for f in candidates if f.get("values")]
     if not candidates:
@@ -268,16 +253,22 @@ def _role_candidates(graph: dict) -> list[tuple[str, dict]]:
         ("impact", ["impact"]),
         ("timeline", ["future"]),
         ("evidence", ["evidence", "history"]),
-        ("context", ["context"]),
+        ("context", ["context", "policy", "risk", "flow"]),
     ]
-    used: set[str] = set()
+    used_ids: set[str] = set()
+    used_sentences: set[int] = set()
     for role, relations in mapping:
-        fact = _best(graph, relations, require_values=(role == "scale"), exclude=used)
+        # Prefer distinct source sentences for visual/narrative variety. If no distinct
+        # sentence exists, allow another semantic relation from the same sentence.
+        fact = _best(graph, relations, require_values=(role == "scale"), exclude=used_ids, exclude_sentences=used_sentences)
+        if not fact:
+            fact = _best(graph, relations, require_values=(role == "scale"), exclude=used_ids)
         if not fact and role == "scale":
-            fact = _best(graph, ["deal", "flow", "future", "evidence", "context"], require_values=True, exclude=used)
+            fact = _best(graph, ["deal", "flow", "future", "evidence", "policy", "context"], require_values=True, exclude=used_ids)
         if fact:
             selected.append((role, fact))
-            used.add(str(fact.get("id")))
+            used_ids.add(str(fact.get("id")))
+            used_sentences.add(int(fact.get("index") or 0))
     return selected
 
 
@@ -287,37 +278,32 @@ def build_story_plan(hero: dict, graph: dict, content_card_count: int) -> dict:
     if not facts:
         return {"version": STORY_GRAPH_ENGINE_VERSION, "error": "No structured facts available.", "cards": []}
 
-    used: set[str] = set()
-    hook = _best(graph, ["change", "deal", "policy", "risk", "flow", "contrast", "future", "history", "evidence", "context"], exclude=used) or facts[0]
-    used.add(str(hook.get("id")))
+    used_ids: set[str] = set()
+    hook = _best(graph, ["change", "deal", "policy", "risk", "flow", "contrast", "future", "history", "evidence", "context"], exclude=used_ids) or facts[0]
+    used_ids.add(str(hook.get("id")))
 
-    role_facts = _role_candidates(graph)
-    # Keep only roles with distinct evidence and order them by narrative progression.
     middle: list[tuple[str, dict]] = []
-    for role, fact in sorted(role_facts, key=lambda item: _ROLE_ORDER.get(item[0], 50)):
-        if str(fact.get("id")) in used:
+    for role, fact in sorted(_role_candidates(graph), key=lambda item: _ROLE_ORDER.get(item[0], 50)):
+        if str(fact.get("id")) in used_ids:
             continue
         middle.append((role, fact))
-        used.add(str(fact.get("id")))
+        used_ids.add(str(fact.get("id")))
 
     final = _best(graph, ["future"], exclude=set())
     final_role = "watch" if final else "impact"
     if final is None:
-        final = _best(graph, ["impact", "contrast", "evidence", "context"], exclude=set()) or hook
+        final = _best(graph, ["impact", "contrast", "evidence", "policy", "risk", "flow", "context"], exclude=set()) or hook
 
-    # Reserve first hook and last watch/impact. Fill the center with actual available facts.
     slots = max(0, content_card_count - 2)
     chosen_middle = middle[:slots]
-    cards: list[CardPlanItem] = [
-        CardPlanItem("hook", [str(hook.get("id"))], _scene_for("hook", [hook]), "strongest event/evidence hook")
-    ]
+    cards: list[CardPlanItem] = [CardPlanItem("hook", [str(hook.get("id"))], _scene_for("hook", [hook]), "strongest event/evidence hook")]
     for role, fact in chosen_middle:
         cards.append(CardPlanItem(role, [str(fact.get("id"))], _scene_for(role, [fact]), f"available {fact.get('relation')} evidence"))
     cards.append(CardPlanItem(final_role, [str(final.get("id"))], _scene_for(final_role, [final]), "future milestone or strongest implication"))
 
-    # If the source is thin, add remaining high-score facts rather than inventing slots.
     if len(cards) < content_card_count:
-        leftovers = [f for f in sorted(facts, key=lambda x: float(x.get("score") or 0), reverse=True) if str(f.get("id")) not in {fid for c in cards for fid in c.fact_ids}]
+        used_plan_ids = {fid for c in cards for fid in c.fact_ids}
+        leftovers = [f for f in sorted(facts, key=lambda x: float(x.get("score") or 0), reverse=True) if str(f.get("id")) not in used_plan_ids]
         insert_at = max(1, len(cards) - 1)
         for fact in leftovers:
             if len(cards) >= content_card_count:
@@ -325,15 +311,10 @@ def build_story_plan(hero: dict, graph: dict, content_card_count: int) -> dict:
             cards.insert(insert_at, CardPlanItem("evidence", [str(fact.get("id"))], _scene_for("evidence", [fact]), "additional high-confidence evidence"))
             insert_at += 1
 
-    fact_map = {str(f.get("id")): f for f in facts}
     subject = next((str(e) for e in graph.get("entities") or [] if e), "")
-    thesis_fact = hook
-    thesis = _clean(thesis_fact.get("sentence"), 220)
+    thesis = _clean(hook.get("sentence"), 220)
     headline_seed = _clean((hero.get("hero_resource") or {}).get("title") or hero.get("headline_seed") or thesis, 160)
-    if re.search(r"[ぁ-んァ-ヶ一-龥]", headline_seed):
-        headline_ja = headline_seed
-    else:
-        headline_ja = _clean(hero.get("headline_ja") or thesis, 160)
+    headline_ja = headline_seed if re.search(r"[ぁ-んァ-ヶ一-龥]", headline_seed) else _clean(hero.get("headline_ja") or thesis, 160)
 
     return {
         "version": STORY_GRAPH_ENGINE_VERSION,
@@ -342,8 +323,8 @@ def build_story_plan(hero: dict, graph: dict, content_card_count: int) -> dict:
         "headline_ja": headline_ja,
         "thesis": thesis,
         "cards": [item.to_dict() for item in cards[:content_card_count]],
-        "fact_ids": list(fact_map.keys()),
-        "planning_policy": "facts first -> relation graph -> dynamic card roles -> archetype tag last",
+        "fact_ids": [str(f.get("id")) for f in facts],
+        "planning_policy": "facts first -> multi-relation graph -> dynamic card roles -> archetype tag last",
     }
 
 
