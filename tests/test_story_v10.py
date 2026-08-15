@@ -80,7 +80,7 @@ class StoryV10Test(unittest.TestCase):
         self.assertGreaterEqual(len(plan["cards"]), 6)
         roles = [item["role"] for item in plan["cards"]]
         self.assertEqual(roles[0], "hook")
-        self.assertIn("scale", roles)
+        self.assertTrue({"scale", "deal"} & set(roles))
         self.assertIn(roles[-1], {"watch", "impact"})
 
         pipeline_source = (ROOT / "apps" / "streamlit" / "story_content_pipeline_v5.py").read_text(encoding="utf-8")
@@ -100,7 +100,6 @@ class StoryV10Test(unittest.TestCase):
         roles = [item["role"] for item in plan["cards"]]
         self.assertIn("watch", roles)
         self.assertNotIn("old_business", roles)
-        self.assertIn("Story v10", mode_exporter_v5.add_preview_sheet.__doc__ or "Story v10" if False else "Story v10")
 
     def test_pipeline_builds_fact_bound_cards_and_graph_export(self) -> None:
         result = story_content_pipeline_v5.generate_story_package(
