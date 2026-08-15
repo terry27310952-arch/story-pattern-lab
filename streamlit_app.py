@@ -9,7 +9,7 @@ import streamlit as st
 
 APP_DIR = Path(__file__).parent / "apps" / "streamlit"
 APP_FILE = APP_DIR / "app.py"
-RUNTIME_TOKEN = "story-first-editorial-v5.1"
+RUNTIME_TOKEN = "story-first-editorial-v5.2"
 
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -21,6 +21,7 @@ import visual_variation_runtime  # noqa: E402
 import story_engine  # noqa: E402
 import story_pipeline_runtime  # noqa: E402
 import story_source_runtime  # noqa: E402
+import story_deck_runtime  # noqa: E402
 import story_render_runtime  # noqa: E402
 from brand_runtime import apply_brand_patch  # noqa: E402
 from editorial_visual_runtime import apply_editorial_visual_patch  # noqa: E402
@@ -33,6 +34,7 @@ importlib.reload(visual_variation_runtime)
 importlib.reload(story_engine)
 importlib.reload(story_pipeline_runtime)
 importlib.reload(story_source_runtime)
+importlib.reload(story_deck_runtime)
 importlib.reload(story_render_runtime)
 visual_variation_runtime.apply_renderer_patch(card_renderer)
 story_render_runtime.apply_renderer_patch(card_renderer)
@@ -66,6 +68,8 @@ if getattr(st, "_kiyosaki_runtime_token", None) != RUNTIME_TOKEN:
         delattr(reasoning_engine, "_kiyosaki_visual_variation_version")
     if hasattr(reasoning_engine, "_kiyosaki_story_pipeline_version"):
         delattr(reasoning_engine, "_kiyosaki_story_pipeline_version")
+    if hasattr(reasoning_engine, "_kiyosaki_story_deck_version"):
+        delattr(reasoning_engine, "_kiyosaki_story_deck_version")
     if hasattr(resource_collector, "_kiyosaki_story_resource_version"):
         delattr(resource_collector, "_kiyosaki_story_resource_version")
     if hasattr(resource_collector, "_kiyosaki_story_source_version"):
@@ -74,14 +78,15 @@ if getattr(st, "_kiyosaki_runtime_token", None) != RUNTIME_TOKEN:
 
 # Content pipeline order:
 # canonical brand/QA semantics -> story annotation -> story-rich source expansion and
-# ranking -> briefing visual family -> story candidate/archetype rewrite. app.py imports
-# the patched functions only after this setup is complete.
+# ranking -> briefing visual family -> story candidate/archetype copy -> archetype card
+# ordering. app.py imports the patched functions only after this setup is complete.
 apply_brand_patch(reasoning_engine)
 apply_editorial_visual_patch(reasoning_engine)
 story_pipeline_runtime.apply_resource_patch(resource_collector)
 story_source_runtime.apply_source_patch(resource_collector)
 visual_variation_runtime.apply_reasoning_patch(reasoning_engine)
 story_pipeline_runtime.apply_reasoning_patch(reasoning_engine)
+story_deck_runtime.apply_reasoning_patch(reasoning_engine)
 preview_runtime.apply_preview_runtime()
 
 # Excel keeps the existing embedded PNG gallery, then receives story context/candidate
@@ -94,6 +99,7 @@ card_download_runtime.apply_card_download_patch()
 st.sidebar.caption(f"Runtime · {RUNTIME_TOKEN}")
 st.sidebar.caption(f"Source · {story_source_runtime.STORY_SOURCE_RUNTIME_VERSION}")
 st.sidebar.caption(f"Story · {story_engine.STORY_ENGINE_VERSION}")
+st.sidebar.caption(f"Deck · {story_deck_runtime.STORY_DECK_RUNTIME_VERSION}")
 st.sidebar.caption(f"Renderer · {story_render_runtime.STORY_RENDER_RUNTIME_VERSION}")
 st.sidebar.caption(f"Blueprint · {visual_variation_runtime.VISUAL_VARIATION_RUNTIME_VERSION}")
 st.sidebar.caption(f"Excel · {story_export_runtime.STORY_EXPORT_RUNTIME_VERSION}")
@@ -116,6 +122,6 @@ try:
     if blueprint.get("family"):
         st.sidebar.caption(f"Deck seed · {blueprint.get('family')} · {blueprint.get('id')}")
     elif story_meta.get("hero_story", {}).get("archetype"):
-        st.sidebar.caption(f"Deck · story_{story_meta['hero_story'].get('archetype')}")
+        st.sidebar.caption(f"Deck family · story_{story_meta['hero_story'].get('archetype')}")
 except Exception:
     pass
