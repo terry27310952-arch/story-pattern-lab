@@ -74,3 +74,12 @@ st.sidebar.caption(f"Excel · {excel_export_runtime.EXCEL_PREVIEW_RUNTIME_VERSIO
 st.sidebar.caption(f"Download · {card_download_runtime.RUNTIME_VERSION}")
 
 runpy.run_path(str(APP_FILE), run_name="__main__")
+
+# Show the actual selected briefing family/signature, not only the runtime version.
+try:
+    package = st.session_state.get("content_package") or {}
+    blueprint = (package.get("content_quality") or {}).get("visual_blueprint") or {}
+    if blueprint.get("family"):
+        st.sidebar.caption(f"Deck · {blueprint.get('family')} · {blueprint.get('id')}")
+except Exception:
+    pass
