@@ -134,7 +134,7 @@ class StoryV8Test(unittest.TestCase):
 
     def test_runtime_routes_story_layers_to_v9(self) -> None:
         entry = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
-        self.assertIn('RUNTIME_TOKEN = "dual-pipeline-v9.1"', entry)
+        self.assertIn('RUNTIME_TOKEN = "dual-pipeline-v9.2"', entry)
         self.assertIn('sys.modules["story_engine"] = story_engine_v4', entry)
         self.assertIn('sys.modules["story_content_pipeline"] = story_content_pipeline_v4', entry)
         self.assertIn('sys.modules["mode_exporter"] = mode_exporter_v4', entry)
