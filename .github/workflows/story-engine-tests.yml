@@ -1,0 +1,43 @@
+name: Story Engine Tests
+
+on:
+  push:
+    branches:
+      - main
+      - 'chatgpt/**'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: apps/streamlit/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r apps/streamlit/requirements.txt
+
+      - name: Compile story runtime
+        run: |
+          python -m py_compile \
+            apps/streamlit/story_engine.py \
+            apps/streamlit/story_pipeline_runtime.py \
+            apps/streamlit/story_source_runtime.py \
+            apps/streamlit/story_render_runtime.py \
+            apps/streamlit/story_export_runtime.py \
+            streamlit_app.py
+
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
