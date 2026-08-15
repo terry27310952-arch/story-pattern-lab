@@ -5,7 +5,7 @@ from typing import Iterable
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-import story_engine_v3 as story_engine
+import story_source_engine_v5 as story_engine
 from content_modes import MODE_STORY, MODE_TRADER, rank_resources
 from resource_collector import (
     PUBLIC_LIST_SOURCES,
@@ -19,7 +19,7 @@ from resource_collector import (
 )
 
 
-MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v8.0"
+MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v10.0"
 
 STORY_EXTRA_PUBLIC_SOURCES = {
     "SEC Press Releases": {
@@ -155,7 +155,7 @@ def collect_for_mode(mode: str, rss_names: list[str], public_names: list[str], l
         rows = story_engine.annotate_resources(rows)
         logs.append(
             f"story mode: ranked {len(rows)} resources by {story_engine.STORY_ENGINE_VERSION}; "
-            "narrative specificity, transformation, evidence and visual potential are prioritized"
+            "hook, change, evidence density, scale, market implication and visual potential are scored generically"
         )
     else:
         rows = rank_resources(MODE_TRADER, rows)
