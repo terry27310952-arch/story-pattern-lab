@@ -4,10 +4,11 @@ import json
 import re
 from urllib.request import Request, urlopen
 
+import story_japanese_rewriter
 import story_llm_runtime
 
 
-STORY_HOOK_ENGINE_VERSION = "story-hook-v1.1"
+STORY_HOOK_ENGINE_VERSION = "story-hook-v1.2"
 PROVIDER_LOCAL = "local"
 PROVIDER_OLLAMA = "ollama"
 PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
@@ -88,14 +89,7 @@ def hook_style_pass(headline: str, subline: str) -> bool:
 
 
 def _json_from_text(text: str) -> dict | None:
-    value = str(text or "").strip()
-    value = re.sub(r"^```(?:json)?\s*", "", value, flags=re.I)
-    value = re.sub(r"\s*```$", "", value)
-    try:
-        parsed = json.loads(value)
-        return parsed if isinstance(parsed, dict) else None
-    except Exception:
-        return None
+    return story_japanese_rewriter.parse_json_object(text)
 
 
 def _post_json(url: str, payload: dict, headers: dict[str, str], timeout: int = 90) -> dict:
@@ -150,8 +144,10 @@ def _call_hook_model(config: dict, prompt_payload: dict) -> tuple[dict | None, s
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                 "options": {"temperature": temperature},
             }
-            # Ollama Cloud direct API currently does not support structured outputs.
-            # The prompt still demands JSON and the parser validates the response.
+            if model.casefold().startswith("gpt-oss"):
+                payload["think"] = "low"
+            # Ollama Cloud does not currently support structured outputs.
+            # The prompt demands JSON and the tolerant parser extracts the JSON object.
             if not story_llm_runtime.is_cloud_ollama(base):
                 payload["format"] = "json"
             raw = _post_json(
@@ -263,6 +259,32 @@ def generate_hook(
             "warning": warning,
             "style_pass": True,
         }
+
+    # One-card repair pass catches Cloud responses that were malformed, too literal,
+    # or insufficiently Japanese without falling back to an English headline seed.
+    if str(config.get("provider") or PROVIDER_LOCAL) != PROVIDER_LOCAL and evidence:
+        repair = story_japanese_rewriter.rewrite_card(
+            config,
+            role="hook",
+            evidence=evidence,
+            subject=entities[0] if entities else "",
+            original_headline=fallback_headline,
+            original_body=fallback_subline,
+            hook=True,
+        )
+        rh = _clean(repair.get("headline"), 80)
+        rb = _clean(repair.get("body"), 70)
+        if repair.get("accepted") and hook_style_pass(rh, rb) and _numeric_safe(rh, rb, evidence):
+            return {
+                "headline": rh,
+                "subline": rb,
+                "source": "llm_repair",
+                "score": round(_style_score(rh, rb), 2),
+                "candidate_count": 1,
+                "candidates": [{"headline": rh, "subline": rb, "angle": "repair", "score": round(_style_score(rh, rb), 2)}],
+                "warning": warning or repair.get("warning"),
+                "style_pass": True,
+            }
 
     fh, fs = _fallback(fallback_headline, evidence or fallback_subline, entities[0] if entities else "")
     return {
