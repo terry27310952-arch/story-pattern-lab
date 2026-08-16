@@ -10,7 +10,7 @@ import streamlit as st
 
 APP_DIR = Path(__file__).parent / "apps" / "streamlit"
 APP_FILE = APP_DIR / "app_v2.py"
-RUNTIME_TOKEN = "dual-pipeline-v10.2"
+RUNTIME_TOKEN = "dual-pipeline-v10.3"
 
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -25,9 +25,6 @@ def _drop_poisoned_legacy_alias(module_name: str, expected_filename: str) -> Non
         del sys.modules[module_name]
 
 
-# Compatibility modules are pinned only for reusable provider/composition helpers.
-# Production Story selection/planning no longer uses the article-specific v3/v4
-# archetype source engine.
 for _module_name, _expected_filename in {
     "story_engine_v3": "story_engine_v3.py",
     "story_content_pipeline_v3": "story_content_pipeline_v3.py",
@@ -71,14 +68,11 @@ importlib.reload(story_content_pipeline_v5)
 importlib.reload(mode_exporter_v5)
 importlib.reload(story_output_guard)
 
-# Fail fast on the historical Streamlit alias recursion class that still matters for
-# the reusable v4 composition layer.
 if story_renderer_v4.legacy is story_renderer_v4:
     raise RuntimeError("Story runtime boot failed: renderer legacy dependency points to itself")
 
 story_output_guard.apply_generation_guard(story_content_pipeline_v5)
 
-# Generic production imports used by app_v2 and mode-aware helpers.
 sys.modules["story_engine"] = story_source_engine_v5
 sys.modules["story_content_pipeline"] = story_content_pipeline_v5
 sys.modules["mode_exporter"] = mode_exporter_v5
