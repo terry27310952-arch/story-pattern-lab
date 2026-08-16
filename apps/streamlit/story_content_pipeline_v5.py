@@ -11,7 +11,7 @@ import story_graph_engine
 import story_renderer_v5 as story_renderer
 
 
-STORY_CONTENT_PIPELINE_VERSION = "story-content-v10.2"
+STORY_CONTENT_PIPELINE_VERSION = "story-content-v10.3"
 DISPLAY_BRAND_LABEL = legacy.DISPLAY_BRAND_LABEL
 PROVIDER_LOCAL = legacy.PROVIDER_LOCAL
 PROVIDER_OLLAMA = legacy.PROVIDER_OLLAMA
@@ -52,6 +52,24 @@ def _prepare(resources: list[dict]) -> list[dict]:
     return [story_article_cleaner.clean_story_resource(dict(row)) for row in resources or [] if isinstance(row, dict)]
 
 
+def _candidate_ja_ratio(candidate: dict) -> float:
+    row = candidate.get("hero_resource") or {}
+    return source_engine.japanese_ratio(f"{row.get('title','')} {row.get('material') or row.get('excerpt') or ''}")
+
+
+def _select_hero(source_context: dict, config: dict, output_locale: str) -> tuple[dict, str]:
+    candidates = [dict(c) for c in source_context.get("candidates") or []]
+    if not candidates:
+        return {}, "no_candidates"
+    provider = str(config.get("provider") or PROVIDER_LOCAL)
+    if output_locale == "ja-JP" and provider == PROVIDER_LOCAL:
+        japanese = [c for c in candidates if _candidate_ja_ratio(c) >= 0.28]
+        if japanese:
+            return japanese[0], "local_provider_prefers_japanese_evidence"
+        return {}, "local_provider_has_no_japanese_evidence"
+    return candidates[0], "top_hero_with_model_translation_allowed"
+
+
 def _fact_map(graph: dict) -> dict[str, dict]:
     return {str(f.get("id")): dict(f) for f in graph.get("facts") or [] if f.get("id")}
 
@@ -79,8 +97,11 @@ def _fact_pack(graph: dict) -> dict:
             "text": fact.get("sentence"),
             "source_id": fact.get("source_id"),
             "value": vals[0] if vals else "",
+            "values": vals,
+            "value_details": fact.get("value_details") or [],
             "source_sentence": fact.get("sentence"),
             "confidence": fact.get("score"),
+            "complete": fact.get("complete", True),
         })
     return {
         "source_ids": list(graph.get("source_ids") or []),
@@ -94,41 +115,30 @@ def _fact_pack(graph: dict) -> dict:
 
 
 def _numeric_tokens(text: str) -> set[str]:
-    """Return unit-aware canonical claims for evidence validation.
-
-    Surface forms like `2028` and `2028年`, or `420MW` and `420メガワット`,
-    normalize to the same semantic token. This avoids false mismatches while still
-    rejecting a genuinely different year, amount, percentage or capacity.
-    """
     value = str(text or "")
     tokens: set[str] = set()
-
     for year in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", value):
         tokens.add(f"year:{year}")
-
+    for symbol, number in re.findall(r"([$¥￥])\s*(\d[\d,.]*(?:\.\d+)?)", value):
+        currency = "usd" if symbol == "$" else "jpy"
+        tokens.add(f"money:{number.replace(',', '').rstrip('.') }:{currency}")
     for number, unit in re.findall(r"(\d[\d,.]*(?:\.\d+)?)\s*(MW|GW|メガワット|ギガワット)", value, flags=re.I):
         canonical_unit = "mw" if unit.casefold() in {"mw", "メガワット"} else "gw"
-        tokens.add(f"capacity:{number.replace(',', '')}{canonical_unit}")
-
+        tokens.add(f"capacity:{number.replace(',', '').rstrip('.') }:{canonical_unit}")
     for number in re.findall(r"(\d+(?:\.\d+)?)\s*%", value):
         tokens.add(f"percent:{number}")
-
-    money_pattern = re.compile(
-        r"(?:約\s*)?(?:\$\s*)?(\d[\d,.]*(?:\.\d+)?)\s*(兆円|億円|万円|円|兆ドル|億ドル|万ドル|ドル|USD|JPY|billion|million|trillion|bn|mn)",
+    for number, unit in re.findall(
+        r"(\d[\d,.]*(?:\.\d+)?)\s*(兆円|億円|万円|円|兆ドル|億ドル|万ドル|ドル|USD|JPY|billion|million|trillion|bn|mn)",
+        value,
         flags=re.I,
-    )
-    for number, unit in money_pattern.findall(value):
-        unit_norm = unit.casefold().replace("usd", "ドル").replace("jpy", "円")
-        tokens.add(f"money:{number.replace(',', '')}:{unit_norm}")
-
+    ):
+        normalized = unit.casefold()
+        currency = "jpy" if normalized in {"兆円", "億円", "万円", "円", "jpy"} else "usd"
+        tokens.add(f"money:{number.replace(',', '').rstrip('.') }:{normalized}:{currency}")
     for number, unit in re.findall(r"(?<!\d)(\d{1,3})\s*(年間|年|years?|months?|か月|ヶ月)(?!\d)", value, flags=re.I):
         normalized_unit = unit.casefold()
-        if normalized_unit in {"年", "年間", "year", "years"}:
-            normalized_unit = "years"
-        elif normalized_unit in {"か月", "ヶ月", "month", "months"}:
-            normalized_unit = "months"
+        normalized_unit = "years" if normalized_unit in {"年", "年間", "year", "years"} else "months"
         tokens.add(f"duration:{number}:{normalized_unit}")
-
     return tokens
 
 
@@ -137,63 +147,71 @@ def _claim_ok(headline: str, body: str, evidence: str) -> bool:
     if not claims:
         return True
     supported = _numeric_tokens(evidence)
-    return claims.issubset(supported)
+    missing = set()
+    for claim in claims:
+        if claim in supported:
+            continue
+        if claim.startswith("money:"):
+            parts = claim.split(":")
+            amount = parts[1] if len(parts) > 1 else ""
+            currency = parts[-1] if len(parts) > 2 else ""
+            if any(s.startswith(f"money:{amount}:") and s.endswith(currency) for s in supported):
+                continue
+        missing.add(claim)
+    return not missing
 
 
 def _japanese_ratio(text: str) -> float:
-    value = str(text or "")
-    letters = re.findall(r"[A-Za-zぁ-んァ-ヶ一-龥]", value)
-    if not letters:
-        return 0.0
-    jp = re.findall(r"[ぁ-んァ-ヶ一-龥]", value)
-    return len(jp) / len(letters)
+    return source_engine.japanese_ratio(text)
 
 
 def _evidence_text(facts: list[dict]) -> str:
     chunks: list[str] = []
     for fact in facts:
-        sentence = _clean(fact.get("sentence"), 500)
+        sentence = _clean(fact.get("sentence"), 650)
         if sentence and sentence not in chunks:
             chunks.append(sentence)
-    return _clean(" ".join(chunks), 900)
+    return _clean(" ".join(chunks), 1100)
 
 
 def _subject(plan: dict, hero: dict) -> str:
     return _clean(plan.get("subject") or next(iter(hero.get("entities") or []), ""), 100)
 
 
+def _scale_values(facts: list[dict]) -> list[str]:
+    out: list[str] = []
+    for fact in facts:
+        for detail in fact.get("value_details") or []:
+            if detail.get("kind") in {"money", "capacity", "percent", "quantity", "price", "valuation"}:
+                raw = str(detail.get("raw") or "")
+                if raw and raw not in out:
+                    out.append(raw)
+    return out
+
+
 def _fallback_copy(role: str, facts: list[dict], plan: dict, hero: dict) -> tuple[str, str]:
     evidence = _evidence_text(facts)
     subject = _subject(plan, hero)
-    values = []
-    years = []
-    for fact in facts:
-        for value in fact.get("values") or []:
-            if value not in values:
-                values.append(str(value))
-        for year in fact.get("years") or []:
-            if year not in years:
-                years.append(str(year))
+    years = list(dict.fromkeys(str(y) for fact in facts for y in fact.get("years") or []))
+    scale_values = _scale_values(facts)
 
     if role == "hook":
         headline = _clean(plan.get("headline_ja") or hero.get("headline_ja") or "今日の主役を一つに絞る", 90)
         return headline, evidence
-    if role == "scale" and values:
-        return "数字で見ると、" + "・".join(values[:3]), evidence
+    if role == "scale" and scale_values:
+        return "数字で見ると、" + "・".join(scale_values[:3]), evidence
     if role in {"timeline", "watch"} and years:
         return "次の節目は" + "・".join(years[:3]) + "年", evidence
     if role == "before" and subject:
         return f"{subject}のこれまで", evidence
     if role in {"change", "deal"} and subject:
         return f"{subject}で変わったこと", evidence
-    headline = _ROLE_HEADLINES.get(role, "確認できる事実")
-    return headline, evidence
+    return _ROLE_HEADLINES.get(role, "確認できる事実"), evidence
 
 
 def _model_cards(config: dict, hero: dict, plan: dict, graph: dict) -> tuple[dict[str, dict], str | None]:
     roles = [str(item.get("role")) for item in plan.get("cards") or []]
-    pack = _fact_pack(graph)
-    model_raw, warning = legacy._call_model(config, hero, roles, pack)
+    model_raw, warning = legacy._call_model(config, hero, roles, _fact_pack(graph))
     by_role: dict[str, dict] = {}
     if isinstance(model_raw, dict):
         for item in model_raw.get("cards") or []:
@@ -216,10 +234,10 @@ def _scene_prompt(scene_type: str, role: str, plan: dict, hero: dict, evidence: 
     subject = _subject(plan, hero) or "financial subject"
     return (
         "Premium Japanese documentary editorial image for a financial story. "
-        f"Subject: {subject}. Story role: {role}. Scene semantics: {scene_type}. Evidence context: {_clean(evidence, 320)}. "
-        f"Composition: {layout}. Build the visual from the evidence and scene semantics, not from a recurring market chart template. "
-        "Photographic, cinematic, tactile, high-end magazine direction. No text inside the generated image, no captions, no glyphs, "
-        "no K monogram, no orange K symbol, no decorative logo, no watermark, no floating coins. Leave negative space for typography."
+        f"Subject: {subject}. Story role: {role}. Scene semantics: {scene_type}. Evidence context: {_clean(evidence, 420)}. "
+        f"Composition: {layout}. The scene must literally match the evidence semantics. Do not infer electricity from phrases like purchasing power. "
+        "Use a real-world documentary subject when an image provider is available. No recurring market-chart wallpaper. "
+        "No text inside the generated image, no captions, no glyphs, no K monogram, no orange K symbol, no decorative logo, no watermark, no floating coins."
     )
 
 
@@ -255,7 +273,15 @@ def generate_story_package(
         return StoryGenerationResult({}, error="No story resources are available.")
 
     source_context = source_engine.story_context(ranked)
-    hero = dict(source_context.get("hero_story") or {})
+    hero, hero_selection_reason = _select_hero(source_context, config, output_locale)
+    if not hero:
+        return StoryGenerationResult(
+            {},
+            error="Japanese Story generation blocked: local deterministic mode needs Japanese source evidence. Use an external reasoning model for non-Japanese Hero sources.",
+        )
+
+    source_context["hero_story"] = hero
+    source_context["hero_selection_reason"] = hero_selection_reason
     hero_rows = _hero_resources(ranked, hero)
     if not hero_rows:
         return StoryGenerationResult({}, error="Hero Story has no isolated source resources.")
@@ -299,7 +325,7 @@ def generate_story_package(
 
         model_card = model_by_role.get(role) or {}
         mh = _clean(model_card.get("headline"), 90)
-        mb = _clean(model_card.get("body"), 260)
+        mb = _clean(model_card.get("body"), 300)
         if mh and mb and _japanese_ratio(mh + mb) >= 0.45 and _claim_ok(mh, mb, evidence):
             headline, body = mh, mb
 
@@ -312,7 +338,10 @@ def generate_story_package(
         evidence_ref = fact_source_ids[0] if fact_source_ids else next(iter(hero_ids), "")
         layout = _layout(seed, index, used_layouts)
         scene_type = str(item.get("scene_type") or "documentary_editorial")
+        scene_ok = story_graph_engine.scene_matches_evidence(scene_type, role, facts)
+        evidence_complete = all(bool(f.get("complete", True)) and story_article_cleaner.sentence_complete(str(f.get("sentence") or "")) for f in facts)
         prompt = _scene_prompt(scene_type, role, plan, hero, evidence, layout)
+
         cards.append({
             "set": "STORY",
             "slide": len(cards) + 1,
@@ -353,6 +382,8 @@ def generate_story_package(
                 "claim_evidence_consistent": claim_ok,
                 "story_plan_fact_ids_valid": all(str(fid) in plan_fact_ids for fid in item.get("fact_ids") or []),
                 "event_ref_score": min((cluster_scores.get(ref, 0.0) for ref in fact_source_ids), default=0.0),
+                "evidence_sentence_complete": evidence_complete,
+                "scene_evidence_consistent": scene_ok,
             },
         })
 
@@ -360,19 +391,33 @@ def generate_story_package(
         return StoryGenerationResult({}, error="Evidence was too thin to build the requested Story card count without filler.")
 
     cards = cards[: total_card_count - 1]
-    cards.append(_outro(total_card_count, str(plan.get("archetype_tag") or "story_event"), brand))
-    content_cards = cards[:-1]
-
+    content_cards = cards
     refs_ok = all(set(c.get("evidence_refs") or []).issubset(hero_ids) for c in content_cards)
     graph_sources_ok = set(graph.get("source_ids") or []).issubset(hero_ids)
     claims_ok = all(bool((c.get("qa") or {}).get("claim_evidence_consistent")) for c in content_cards)
     plan_ids_ok = all(bool((c.get("qa") or {}).get("story_plan_fact_ids_valid")) for c in content_cards)
+    evidence_complete_ok = all(bool((c.get("qa") or {}).get("evidence_sentence_complete")) for c in content_cards)
+    scene_evidence_ok = all(bool((c.get("qa") or {}).get("scene_evidence_consistent")) for c in content_cards)
     japanese_ok = all(_japanese_ratio(f"{c.get('headline','')} {c.get('key_message','')}") >= 0.35 for c in content_cards)
     cleaner_ok = not any(story_article_cleaner.has_boilerplate(str(row.get("material") or "")) for row in hero_rows)
+    social_embed_free = cleaner_ok and not any(re.search(r"https?://(?:t\.co|twitter\.com|x\.com|pic\.twitter\.com)/", str(row.get("material") or ""), flags=re.I) for row in hero_rows)
+
+    if not japanese_ok:
+        return StoryGenerationResult(
+            {},
+            error="Japanese Story generation blocked: final card copy did not meet the ja-JP language gate. No publishable package was created.",
+            model_warning=model_warning,
+        )
+
+    cards.append(_outro(total_card_count, str(plan.get("archetype_tag") or "story_event"), brand))
     unique_layouts = len({(c.get("visual_direction") or {}).get("layout_variant") for c in content_cards})
     unique_scenes = len({(c.get("visual_direction") or {}).get("scene_type") for c in content_cards})
     visual_diag = story_renderer.scene_diagnostics(content_cards)
-    visual_ok = unique_scenes >= min(4, len(content_cards)) and int(visual_diag.get("render_signature_count") or 0) >= min(4, len(content_cards)) and not visual_diag.get("near_duplicate_scene_pairs")
+    visual_ok = (
+        unique_scenes >= min(4, len(content_cards))
+        and int(visual_diag.get("render_signature_count") or 0) >= min(4, len(content_cards))
+        and not visual_diag.get("near_duplicate_scene_pairs")
+    )
 
     failures: list[str] = []
     if not refs_ok or not graph_sources_ok:
@@ -381,10 +426,12 @@ def generate_story_package(
         failures.append("claim_evidence_mismatch")
     if not plan_ids_ok:
         failures.append("story_plan_fact_mismatch")
-    if not cleaner_ok:
+    if not cleaner_ok or not social_embed_free:
         failures.append("article_boilerplate_contamination")
-    if not japanese_ok:
-        failures.append("non_japanese_story_copy")
+    if not evidence_complete_ok:
+        failures.append("incomplete_evidence")
+    if not scene_evidence_ok:
+        failures.append("scene_evidence_mismatch")
     if unique_layouts < min(4, len(content_cards)):
         failures.append("layout_repetition")
     if not visual_ok:
@@ -400,6 +447,9 @@ def generate_story_package(
         "claim_evidence_consistent": claims_ok,
         "story_plan_fact_binding": plan_ids_ok,
         "article_cleaner_pass": cleaner_ok,
+        "social_embed_free": social_embed_free,
+        "evidence_sentence_complete": evidence_complete_ok,
+        "scene_evidence_consistent": scene_evidence_ok,
         "japanese_copy_pass": japanese_ok,
         "unique_layouts": unique_layouts,
         "unique_scene_types": unique_scenes,
@@ -438,10 +488,11 @@ def generate_story_package(
             "story_archetype": plan.get("archetype_tag"),
             "story_score": hero.get("story_score"),
             "hero_story_score": hero.get("hero_story_score"),
+            "hero_selection_reason": hero_selection_reason,
             "model_provider": config.get("provider") or PROVIDER_LOCAL,
             "model_used": bool(model_by_role),
             "story_qa": story_qa,
-            "policy": "generic source ranking -> same-event hero -> generic fact graph -> dynamic story plan -> evidence-bound copy -> semantic scene renderer",
+            "policy": "locale-aware hero -> typed Fact Graph -> dynamic Story Plan -> evidence-bound ja-JP copy -> semantic scene/evidence QA",
         },
     }
     return StoryGenerationResult(package=package, model_warning=model_warning)
