@@ -39,6 +39,7 @@ jobs:
             apps/streamlit/story_source_engine_v5.py \
             apps/streamlit/story_graph_engine.py \
             apps/streamlit/story_hook_engine.py \
+            apps/streamlit/story_llm_runtime.py \
             apps/streamlit/story_renderer_v4.py \
             apps/streamlit/story_renderer_v5.py \
             apps/streamlit/story_content_pipeline_v5.py \
@@ -47,7 +48,8 @@ jobs:
             apps/streamlit/app_v2.py \
             streamlit_app.py \
             tests/run_regression_suite.py \
-            tests/test_story_v10.py
+            tests/test_story_v10.py \
+            tests/test_story_ollama_default.py
 
       - name: Compile compatibility modules
         run: |
