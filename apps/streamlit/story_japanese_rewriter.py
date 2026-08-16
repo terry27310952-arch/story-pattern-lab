@@ -7,7 +7,7 @@ from urllib.request import Request, urlopen
 import story_llm_runtime
 
 
-STORY_JAPANESE_REWRITER_VERSION = "story-ja-rewriter-v1.1"
+STORY_JAPANESE_REWRITER_VERSION = "story-ja-rewriter-v1.2"
 PROVIDER_LOCAL = "local"
 PROVIDER_OLLAMA = "ollama"
 PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
@@ -17,13 +17,39 @@ def _clean(value: object, limit: int = 900) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
 
-def japanese_ratio(text: str) -> float:
-    value = str(text or "")
-    letters = re.findall(r"[A-Za-zぁ-んァ-ヶ一-龥]", value)
+def _neutral_latin_token(token: str) -> bool:
+    value = str(token or "")
+    if not value:
+        return True
+    if any(ch.isdigit() for ch in value):
+        return True
+    letters = re.sub(r"[^A-Za-z]", "", value)
     if not letters:
+        return True
+    if letters.isupper() and len(letters) <= 12:
+        return True
+    if len(letters) >= 2 and letters[0].isupper() and any(ch.isupper() for ch in letters[1:]):
+        return True
+    if len(letters) >= 3 and letters[0].isupper() and letters[1:].islower():
+        return True
+    return False
+
+
+def japanese_ratio(text: str) -> float:
+    """Estimate Japanese prose while treating Latin tickers/product/proper names as neutral.
+
+    This keeps BTC, ETF, BlackRock, OpenAI, XRP, etc. from making otherwise Japanese
+    editorial copy fail the ja-JP gate, while full English sentences still score low.
+    """
+    value = re.sub(r"https?://\S+", " ", str(text or ""))
+    jp_count = len(re.findall(r"[ぁ-んァ-ヶ一-龥]", value))
+    english_letters = 0
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9.+&/_-]*", value):
+        if not _neutral_latin_token(token):
+            english_letters += len(re.sub(r"[^A-Za-z]", "", token))
+    if jp_count == 0:
         return 0.0
-    jp = re.findall(r"[ぁ-んァ-ヶ一-龥]", value)
-    return len(jp) / len(letters)
+    return jp_count / max(1, jp_count + english_letters)
 
 
 def _numeric_tokens(text: str) -> set[str]:
