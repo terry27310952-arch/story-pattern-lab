@@ -98,6 +98,55 @@ class StoryJapaneseRewriterTest(unittest.TestCase):
         self.assertIn("AIインフラ", cards["change"]["body"])
         self.assertIn("change:repaired:1", warning)
 
+    def test_output_guard_repairs_english_hook_before_final_language_gate(self) -> None:
+        hook_engine = SimpleNamespace()
+        hook_engine._kiyosaki_ja_hook_patch = None
+        hook_engine.generate_hook = lambda config, hero, plan, facts, fallback_headline, fallback_subline="": {
+            "headline": "Bitcoin miner moves into AI infrastructure",
+            "subline": "",
+            "source": "deterministic",
+            "score": 0.0,
+            "warning": None,
+            "style_pass": False,
+            "candidate_count": 0,
+            "candidates": [],
+        }
+        hook_engine.hook_style_pass = lambda headline, subline: bool("AI" in headline)
+        hook_engine._style_score = lambda headline, subline: 88.0
+
+        fake = SimpleNamespace()
+        fake.PROVIDER_LOCAL = "local"
+        fake.story_hook_engine = hook_engine
+        fake._clean = lambda value, limit=900: str(value or "")[:limit]
+        fake._evidence_text = lambda facts: "The Bitcoin miner is moving into AI infrastructure."
+        fake._subject = lambda plan, hero: "NeoGrid"
+
+        with patch.object(
+            story_japanese_rewriter,
+            "rewrite_card",
+            return_value={
+                "accepted": True,
+                "headline": "採掘会社が、AIへ動いた。",
+                "body": "",
+                "attempts": 1,
+                "warning": "",
+            },
+        ):
+            story_output_guard._patch_hook_generation(fake)
+            result = hook_engine.generate_hook(
+                {"provider": "ollama"},
+                {"entities": ["NeoGrid"]},
+                {"subject": "NeoGrid"},
+                [{"sentence": "The Bitcoin miner is moving into AI infrastructure."}],
+                "Bitcoin miner moves into AI infrastructure",
+                "",
+            )
+
+        self.assertEqual(result["source"], "ja_rewriter")
+        self.assertEqual(result["headline"], "採掘会社が、AIへ動いた。")
+        self.assertTrue(result["style_pass"])
+        self.assertEqual(result["rewrite_attempts"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
