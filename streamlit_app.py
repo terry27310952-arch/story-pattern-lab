@@ -50,6 +50,7 @@ sys.modules["story_content_pipeline_v3"] = story_content_pipeline_legacy
 import story_article_cleaner  # noqa: E402
 import story_source_engine_v5  # noqa: E402
 import story_graph_engine  # noqa: E402
+import story_hook_engine  # noqa: E402
 import story_renderer_v4  # noqa: E402
 import story_renderer_v5  # noqa: E402
 import story_content_pipeline_v5  # noqa: E402
@@ -62,6 +63,7 @@ apply_brand_patch(reasoning_engine)
 importlib.reload(story_article_cleaner)
 importlib.reload(story_source_engine_v5)
 importlib.reload(story_graph_engine)
+importlib.reload(story_hook_engine)
 importlib.reload(story_renderer_v4)
 importlib.reload(story_renderer_v5)
 importlib.reload(story_content_pipeline_v5)
@@ -110,6 +112,7 @@ st.sidebar.caption(f"Story · {story_content_pipeline_v5.STORY_CONTENT_PIPELINE_
 st.sidebar.caption(f"Cleaner · {story_article_cleaner.STORY_ARTICLE_CLEANER_VERSION}")
 st.sidebar.caption(f"Source · {story_source_engine_v5.STORY_SOURCE_ENGINE_VERSION}")
 st.sidebar.caption(f"Graph · {story_graph_engine.STORY_GRAPH_ENGINE_VERSION}")
+st.sidebar.caption(f"Hook · {story_hook_engine.STORY_HOOK_ENGINE_VERSION}")
 st.sidebar.caption(f"Story Renderer · {story_renderer_v5.STORY_RENDERER_VERSION}")
 st.sidebar.caption(f"Excel · {mode_exporter_v5.MODE_EXPORTER_VERSION}")
 
