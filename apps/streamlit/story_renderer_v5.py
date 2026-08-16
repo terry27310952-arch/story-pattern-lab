@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from io import BytesIO
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageStat
@@ -9,7 +10,7 @@ import card_renderer
 import story_renderer_v4 as legacy
 
 
-STORY_RENDERER_VERSION = "story-renderer-v10.1"
+STORY_RENDERER_VERSION = "story-renderer-v10.3"
 ORANGE = card_renderer.ORANGE
 
 
@@ -18,12 +19,6 @@ def _scene_type(card: dict) -> str:
 
 
 def _base_scene(width: int, height: int) -> Image.Image:
-    """Neutral photographic canvas for v10 semantic scenes.
-
-    v10 must not fall through the old archetype renderer for unknown semantic scene
-    names. The old generic branch was both visually repetitive and had assumptions
-    about its legacy color tuple. This base is intentionally content-neutral.
-    """
     image = Image.new("RGBA", (width, height), (3, 5, 6, 255))
     d = ImageDraw.Draw(image, "RGBA")
     d.rectangle((0, 0, width, int(height * .58)), fill=(5, 7, 8, 255))
@@ -42,10 +37,12 @@ def _semantic_overlay(image: Image.Image, card: dict) -> Image.Image:
     top_h = int(h * 0.58)
 
     if scene == "industrial_infrastructure":
-        d.rectangle((int(w*.07), int(h*.23), int(w*.93), int(h*.48)), fill=(7, 10, 11, 190), outline=ORANGE+(55,), width=lw)
-        for x in [int(w*.18), int(w*.34), int(w*.72), int(w*.84)]:
-            d.rectangle((x, int(h*.12), x+int(w*.035), int(h*.48)), fill=(15, 18, 18, 205), outline=(180,180,170,45), width=lw)
-        d.line((int(w*.05), int(h*.17), int(w*.95), int(h*.17)), fill=ORANGE+(70,), width=lw)
+        d.rectangle((int(w*.06), int(h*.28), int(w*.94), int(h*.49)), fill=(7, 10, 11, 190), outline=ORANGE+(55,), width=lw)
+        for x in [int(w*.12), int(w*.26), int(w*.70), int(w*.84)]:
+            d.rectangle((x, int(h*.16), x+int(w*.045), int(h*.49)), fill=(15, 18, 18, 205), outline=(180,180,170,45), width=lw)
+        d.line((int(w*.05), int(h*.15), int(w*.95), int(h*.15)), fill=ORANGE+(70,), width=lw)
+        for x in [int(w*.46), int(w*.53)]:
+            d.line((x, int(h*.07), x, int(h*.48)), fill=(180,180,170,35), width=lw)
 
     elif scene == "policy_document":
         for i, dx in enumerate([.10, .21, .32]):
@@ -54,17 +51,15 @@ def _semantic_overlay(image: Image.Image, card: dict) -> Image.Image:
             for k in range(6):
                 y = y0 + int(h*(.055+.035*k))
                 d.line((x0+int(w*.04), y, x0+int(w*.42), y), fill=(220,215,200,55), width=lw)
-        for x in [int(w*.72), int(w*.79), int(w*.86)]:
-            d.rectangle((x, int(h*.18), x+int(w*.035), int(h*.49)), fill=(120,120,115,35))
+        d.rectangle((int(w*.72), int(h*.17), int(w*.88), int(h*.45)), fill=(8,10,11,160), outline=ORANGE+(70,), width=lw)
 
     elif scene == "capital_flow":
-        centers = [(int(w*.15),int(h*.28)),(int(w*.40),int(h*.14)),(int(w*.56),int(h*.39)),(int(w*.82),int(h*.22))]
+        centers = [(int(w*.15),int(h*.30)),(int(w*.39),int(h*.15)),(int(w*.58),int(h*.40)),(int(w*.84),int(h*.20))]
         for a,b in zip(centers, centers[1:]):
             d.line((*a,*b), fill=ORANGE+(105,), width=max(3,lw))
         for i,(cx,cy) in enumerate(centers):
             r=max(13,w//32)
             d.ellipse((cx-r,cy-r,cx+r,cy+r), fill=(7,10,11,210), outline=ORANGE+((160 if i in {0,3} else 85),), width=lw)
-        d.arc((int(w*.08),int(h*.06),int(w*.90),int(h*.55)), 205, 340, fill=(210,200,180,38), width=max(3,lw))
 
     elif scene == "archive_context":
         wash = Image.new("RGBA", image.size, (155, 106, 54, 22))
@@ -86,7 +81,8 @@ def _semantic_overlay(image: Image.Image, card: dict) -> Image.Image:
         for a,b in [(0,1),(1,2),(1,3)]:
             d.line((*nodes[a],*nodes[b]),fill=ORANGE+(90,),width=lw)
         for cx,cy in nodes:
-            r=max(8,w//55); d.ellipse((cx-r,cy-r,cx+r,cy+r),outline=ORANGE+(130,),width=lw)
+            r=max(8,w//55)
+            d.ellipse((cx-r,cy-r,cx+r,cy+r),outline=ORANGE+(130,),width=lw)
 
     elif scene == "timeline_milestones":
         y=int(h*.35)
@@ -103,6 +99,24 @@ def _semantic_overlay(image: Image.Image, card: dict) -> Image.Image:
             x0=int(w*(.19+i*.23)); y1=int(h*.44); y0=int(h*(.44-height*.31))
             d.rounded_rectangle((x0,y0,x0+int(w*.11),y1),radius=max(3,w//140),fill=ORANGE+((70+35*i),))
 
+    elif scene == "market_price_context":
+        d.rounded_rectangle((int(w*.07), int(h*.10), int(w*.93), int(h*.49)), radius=max(8,w//70), fill=(4,7,8,210), outline=(180,185,180,40), width=lw)
+        pts = [(int(w*.11),int(h*.40)),(int(w*.24),int(h*.34)),(int(w*.38),int(h*.37)),(int(w*.52),int(h*.23)),(int(w*.66),int(h*.28)),(int(w*.83),int(h*.15))]
+        d.line(pts, fill=ORANGE+(145,), width=max(4,lw))
+        d.line((int(w*.10),int(h*.45),int(w*.88),int(h*.45)),fill=(180,180,175,35),width=lw)
+
+    elif scene == "asset_store_of_value":
+        cx, cy = int(w*.50), int(h*.28)
+        r = int(min(w,h)*.16)
+        d.ellipse((cx-r,cy-r,cx+r,cy+r), fill=(8,10,10,210), outline=ORANGE+(110,), width=max(4,lw))
+        d.ellipse((cx-int(r*.62),cy-int(r*.62),cx+int(r*.62),cy+int(r*.62)), outline=(220,210,190,50), width=max(3,lw))
+        for angle in [0,45,90,135]:
+            rad=math.radians(angle)
+            x1=cx+int(r*.2*math.cos(rad)); y1=cy+int(r*.2*math.sin(rad))
+            x2=cx+int(r*.85*math.cos(rad)); y2=cy+int(r*.85*math.sin(rad))
+            d.line((x1,y1,x2,y2),fill=(210,205,190,55),width=lw)
+        d.rectangle((int(w*.14),int(h*.42),int(w*.86),int(h*.49)),fill=(105,85,55,30),outline=(210,180,120,35),width=lw)
+
     elif scene == "split_comparison":
         d.rectangle((0,0,w//2,top_h),fill=(32,16,7,45))
         d.rectangle((w//2,0,w,top_h),fill=(5,14,22,55))
@@ -113,7 +127,8 @@ def _semantic_overlay(image: Image.Image, card: dict) -> Image.Image:
     elif scene == "entity_environment":
         d.rectangle((int(w*.08),int(h*.26),int(w*.92),int(h*.50)),fill=(8,10,10,180),outline=(180,180,170,35),width=lw)
         for i in range(8):
-            x=int(w*(.11+i*.10)); d.rectangle((x,int(h*.18),x+int(w*.055),int(h*.26)),fill=(45,48,48,70))
+            x=int(w*(.11+i*.10))
+            d.rectangle((x,int(h*.18),x+int(w*.055),int(h*.26)),fill=(45,48,48,70))
         d.ellipse((int(w*.39),int(h*.08),int(w*.61),int(h*.29)),fill=(2,3,3,145),outline=ORANGE+(50,),width=lw)
 
     elif scene == "transition_scene":
