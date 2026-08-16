@@ -7,7 +7,7 @@ from urllib.request import Request, urlopen
 import story_llm_runtime
 
 
-STORY_JAPANESE_REWRITER_VERSION = "story-ja-rewriter-v1.2"
+STORY_JAPANESE_REWRITER_VERSION = "story-ja-rewriter-v1.3"
 PROVIDER_LOCAL = "local"
 PROVIDER_OLLAMA = "ollama"
 PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
@@ -36,11 +36,7 @@ def _neutral_latin_token(token: str) -> bool:
 
 
 def japanese_ratio(text: str) -> float:
-    """Estimate Japanese prose while treating Latin tickers/product/proper names as neutral.
-
-    This keeps BTC, ETF, BlackRock, OpenAI, XRP, etc. from making otherwise Japanese
-    editorial copy fail the ja-JP gate, while full English sentences still score low.
-    """
+    """Estimate Japanese prose while treating Latin tickers/product/proper names as neutral."""
     value = re.sub(r"https?://\S+", " ", str(text or ""))
     jp_count = len(re.findall(r"[ぁ-んァ-ヶ一-龥]", value))
     english_letters = 0
@@ -55,17 +51,31 @@ def japanese_ratio(text: str) -> float:
 def _numeric_tokens(text: str) -> set[str]:
     return set(
         re.findall(
-            r"(?<![A-Za-z0-9])(?:[$¥￥]\s*)?\d[\d,.]*(?:\.\d+)?(?:\s*(?:%|MW|GW|億円|兆円|万円|円|億ドル|兆ドル|万ドル|ドル|USD|JPY|年|年間|か月|ヶ月|years?|months?))?",
+            r"(?<![A-Za-z0-9])(?:[$¥￥]\s*)?\d[\d,.]*(?:\.\d+)?(?:\s*(?:%|MW|GW|億円|兆円|万円|円|億ドル|兆ドル|万ドル|ドル|USD|JPY|年|年間|か月|ヶ月|years?|months?|billion|million|trillion|bn|mn))?",
             str(text or ""),
             flags=re.I,
         )
     )
 
 
+def _digits(token: str) -> str:
+    return re.sub(r"[^0-9]", "", str(token or ""))
+
+
 def numeric_safe(headline: str, body: str, evidence: str) -> bool:
-    evidence_digits = re.sub(r"[^0-9]", "", str(evidence or ""))
-    for token in _numeric_tokens(f"{headline} {body}"):
-        digits = re.sub(r"[^0-9]", "", token)
+    """Require every output number to correspond to one concrete evidence number.
+
+    The old implementation concatenated every evidence digit and then used substring
+    matching. That accidentally accepted unit conversions such as $100,000 -> 10万ドル,
+    which the stricter production claim validator later rejected. Here each claim number
+    must match one evidence number independently (commas/decimal punctuation may differ).
+    """
+    claim_tokens = _numeric_tokens(f"{headline} {body}")
+    if not claim_tokens:
+        return True
+    evidence_digits = {_digits(token) for token in _numeric_tokens(evidence) if _digits(token)}
+    for token in claim_tokens:
+        digits = _digits(token)
         if digits and digits not in evidence_digits:
             return False
     return True
@@ -198,7 +208,7 @@ def _extract_card(parsed: dict | None) -> tuple[str, str]:
     return headline, body
 
 
-def _valid_copy(headline: str, body: str, evidence: str, hook: bool) -> bool:
+def _valid_copy(headline: str, body: str, evidence: str, hook: bool, avoid_numbers: bool = False) -> bool:
     combined = f"{headline} {body}".strip()
     if not headline:
         return False
@@ -207,6 +217,8 @@ def _valid_copy(headline: str, body: str, evidence: str, hook: bool) -> bool:
     if not hook and not body:
         return False
     if hook and len(headline) > 48:
+        return False
+    if avoid_numbers and _numeric_tokens(combined):
         return False
     if not numeric_safe(headline, body, evidence):
         return False
@@ -221,6 +233,7 @@ def rewrite_card(
     original_headline: str = "",
     original_body: str = "",
     hook: bool = False,
+    avoid_numbers: bool = False,
 ) -> dict:
     """Translate/rewrite one evidence-bound card into publishable ja-JP, with recovery retries."""
     if str(config.get("provider") or PROVIDER_LOCAL) == PROVIDER_LOCAL:
@@ -237,7 +250,10 @@ def rewrite_card(
         "あなたは日本の金融メディアの編集者です。入力されたEVIDENCEだけを根拠に、カード本文を自然な日本語へ書き直してください。"
         "翻訳調ではなく、日本人が読む短い編集文にしてください。数字、日付、固有名詞、因果関係を追加・推測・変更してはいけません。"
         "英語の原文を本文に残さないでください。固有名詞とティッカーは原綴りのままで構いません。"
+        "数字を使う場合はEVIDENCE中の数字表記をそのまま使い、換算・単位変換・桁の言い換えをしないでください。"
     )
+    if avoid_numbers:
+        system += "今回は数字・年・金額・割合を一切使わず、意味だけを日本語で表現してください。"
     if hook:
         system += (
             "これは1枚目のフックです。記事タイトルの要約ではなく、EVIDENCE内の最も強い変化・矛盾・規模・意外性を一つだけ使い、"
@@ -253,7 +269,8 @@ def rewrite_card(
         "rules": {
             "locale": "ja-JP",
             "evidence_only": True,
-            "preserve_numbers": True,
+            "preserve_numbers_verbatim": not avoid_numbers,
+            "avoid_numbers": avoid_numbers,
             "no_new_claims": True,
             "no_english_sentence_fallback": True,
         },
@@ -269,7 +286,7 @@ def rewrite_card(
             if attempt == 2:
                 payload["repair_instruction"] = (
                     "前回は形式または日本語品質の検証に失敗しました。説明文を一切付けず、JSONオブジェクト1個だけを返してください。"
-                    "EVIDENCEの意味を短く正確に日本語化してください。"
+                    "EVIDENCEの意味を短く正確に日本語化してください。数字を使うならEVIDENCEの表記を一字も換算しないでください。"
                 )
             prompt_text = json.dumps(payload, ensure_ascii=False)
         else:
@@ -294,7 +311,7 @@ def rewrite_card(
             headline, body = _extract_card(parse_json_object(raw))
         else:
             headline, body = _parse_line_protocol(raw)
-        if _valid_copy(headline, body, evidence, hook):
+        if _valid_copy(headline, body, evidence, hook, avoid_numbers=avoid_numbers):
             return {
                 "accepted": True,
                 "headline": headline,
