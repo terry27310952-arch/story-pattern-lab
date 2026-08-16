@@ -4,8 +4,10 @@ import json
 import re
 from urllib.request import Request, urlopen
 
+import story_llm_runtime
 
-STORY_HOOK_ENGINE_VERSION = "story-hook-v1.0"
+
+STORY_HOOK_ENGINE_VERSION = "story-hook-v1.1"
 PROVIDER_LOCAL = "local"
 PROVIDER_OLLAMA = "ollama"
 PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
@@ -140,17 +142,22 @@ def _call_hook_model(config: dict, prompt_payload: dict) -> tuple[dict | None, s
 
     try:
         if provider == PROVIDER_OLLAMA:
-            base = str(config.get("base_url") or "http://localhost:11434").rstrip("/")
+            base = str(config.get("base_url") or story_llm_runtime.DEFAULT_OLLAMA_BASE_URL).rstrip("/")
+            model = str(config.get("model") or (story_llm_runtime.DEFAULT_OLLAMA_MODEL if story_llm_runtime.is_cloud_ollama(base) else story_llm_runtime.DEFAULT_LOCAL_OLLAMA_MODEL))
+            payload = {
+                "model": model,
+                "stream": False,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                "options": {"temperature": temperature},
+            }
+            # Ollama Cloud direct API currently does not support structured outputs.
+            # The prompt still demands JSON and the parser validates the response.
+            if not story_llm_runtime.is_cloud_ollama(base):
+                payload["format"] = "json"
             raw = _post_json(
-                base + "/api/chat",
-                {
-                    "model": config.get("model") or "qwen3:4b",
-                    "stream": False,
-                    "format": "json",
-                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                    "options": {"temperature": temperature},
-                },
-                {},
+                story_llm_runtime.ollama_api_url(base, "chat"),
+                payload,
+                story_llm_runtime.ollama_headers(str(config.get("api_key") or "")),
             )
             return _json_from_text(((raw.get("message") or {}).get("content") or "")), None
         if provider == PROVIDER_OPENAI_COMPATIBLE:
