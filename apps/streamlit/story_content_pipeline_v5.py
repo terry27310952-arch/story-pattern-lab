@@ -8,6 +8,7 @@ import story_article_cleaner
 import story_content_pipeline_v3 as legacy
 import story_source_engine_v5 as source_engine
 import story_graph_engine
+import story_hook_engine
 import story_renderer_v5 as story_renderer
 
 
@@ -70,6 +71,78 @@ def _select_hero(source_context: dict, config: dict, output_locale: str) -> tupl
     return candidates[0], "top_hero_with_model_translation_allowed"
 
 
+def _selected_event_context(
+    ranked: list[dict], selected_event: dict, config: dict, output_locale: str
+) -> tuple[dict, dict, list[dict], str, dict[str, float], str | None]:
+    """Lock production to one user-selected event without reselecting a Hero."""
+    selected = dict(selected_event or {})
+    requested_ids = {str(v) for v in selected.get("resource_ids") or [] if v}
+    if not requested_ids:
+        return {}, {}, [], "user_selected_event_missing_resources", {}, "Selected Story event has no resources."
+
+    event_rows = [dict(row) for row in ranked if _sid(row) in requested_ids]
+    if not event_rows:
+        return {}, {}, [], "user_selected_event_missing_resources", {}, "Selected Story event resources are no longer available."
+
+    selected_anchor_id = str((selected.get("hero_resource") or {}).get("id") or selected.get("anchor_resource_id") or "")
+    anchor = next((row for row in event_rows if _sid(row) == selected_anchor_id), None)
+    if anchor is None:
+        anchor = max(
+            event_rows,
+            key=lambda row: (
+                float(row.get("evidence_story_score") or 0),
+                float(row.get("story_score") or 0),
+                source_engine.japanese_ratio(f"{row.get('title','')} {row.get('material') or ''}"),
+            ),
+        )
+
+    cluster_scores: dict[str, float] = {}
+    coherent: list[dict] = []
+    for row in event_rows:
+        score = 1.0 if _sid(row) == _sid(anchor) else source_engine.event_similarity(anchor, row)
+        cluster_scores[_sid(row)] = score
+        if _sid(row) == _sid(anchor) or score >= 0.47:
+            coherent.append(row)
+
+    if not coherent:
+        coherent = [anchor]
+        cluster_scores[_sid(anchor)] = 1.0
+
+    hero = dict(selected)
+    hero["resource_ids"] = [_sid(row) for row in coherent if _sid(row)]
+    hero["hero_resource"] = anchor
+    hero["entities"] = list(anchor.get("story_entities") or hero.get("entities") or [])
+    hero["entity_details"] = list(anchor.get("story_entity_details") or hero.get("entity_details") or [])
+    hero["story_score"] = float(selected.get("story_score") or anchor.get("story_score") or 0)
+    hero["hero_story_score"] = float(selected.get("hero_story_score") or hero.get("story_score") or 0)
+    hero["headline_seed"] = str(selected.get("headline_seed") or anchor.get("title") or "")
+    if not hero.get("headline_ja") and source_engine.japanese_ratio(str(anchor.get("title") or "")) >= 0.20:
+        hero["headline_ja"] = str(anchor.get("title") or "")
+
+    provider = str(config.get("provider") or PROVIDER_LOCAL)
+    if output_locale == "ja-JP" and provider == PROVIDER_LOCAL:
+        event_ja_ratio = max(
+            source_engine.japanese_ratio(f"{row.get('title','')} {row.get('material') or row.get('excerpt') or ''}")
+            for row in coherent
+        )
+        if event_ja_ratio < 0.28:
+            return {}, {}, [], "user_selected_event_locked", cluster_scores, (
+                "Japanese Story generation blocked: the selected event has no Japanese evidence and local deterministic mode cannot translate it. "
+                "Use an external reasoning model or select a Japanese event."
+            )
+
+    context = {
+        "engine": source_engine.STORY_SOURCE_ENGINE_VERSION,
+        "hero_story": hero,
+        "selected_event": selected,
+        "selected_event_id": selected.get("id"),
+        "candidates": [selected],
+        "selection_policy": "user-selected event locked -> anchor/corroboration only -> Fact Graph; no hero reselection",
+        "excluded_event_resource_ids": sorted(requested_ids - set(hero["resource_ids"])),
+    }
+    return context, hero, coherent, "user_selected_event_locked", cluster_scores, None
+
+
 def _fact_map(graph: dict) -> dict[str, dict]:
     return {str(f.get("id")): dict(f) for f in graph.get("facts") or [] if f.get("id")}
 
@@ -121,10 +194,10 @@ def _numeric_tokens(text: str) -> set[str]:
         tokens.add(f"year:{year}")
     for symbol, number in re.findall(r"([$¥￥])\s*(\d[\d,.]*(?:\.\d+)?)", value):
         currency = "usd" if symbol == "$" else "jpy"
-        tokens.add(f"money:{number.replace(',', '').rstrip('.') }:{currency}")
+        tokens.add(f"money:{number.replace(',', '').rstrip('.')}:{currency}")
     for number, unit in re.findall(r"(\d[\d,.]*(?:\.\d+)?)\s*(MW|GW|メガワット|ギガワット)", value, flags=re.I):
         canonical_unit = "mw" if unit.casefold() in {"mw", "メガワット"} else "gw"
-        tokens.add(f"capacity:{number.replace(',', '').rstrip('.') }:{canonical_unit}")
+        tokens.add(f"capacity:{number.replace(',', '').rstrip('.')}:{canonical_unit}")
     for number in re.findall(r"(\d+(?:\.\d+)?)\s*%", value):
         tokens.add(f"percent:{number}")
     for number, unit in re.findall(
@@ -134,7 +207,7 @@ def _numeric_tokens(text: str) -> set[str]:
     ):
         normalized = unit.casefold()
         currency = "jpy" if normalized in {"兆円", "億円", "万円", "円", "jpy"} else "usd"
-        tokens.add(f"money:{number.replace(',', '').rstrip('.') }:{normalized}:{currency}")
+        tokens.add(f"money:{number.replace(',', '').rstrip('.')}:{normalized}:{currency}")
     for number, unit in re.findall(r"(?<!\d)(\d{1,3})\s*(年間|年|years?|months?|か月|ヶ月)(?!\d)", value, flags=re.I):
         normalized_unit = unit.casefold()
         normalized_unit = "years" if normalized_unit in {"年", "年間", "year", "years"} else "months"
@@ -196,8 +269,8 @@ def _fallback_copy(role: str, facts: list[dict], plan: dict, hero: dict) -> tupl
     scale_values = _scale_values(facts)
 
     if role == "hook":
-        headline = _clean(plan.get("headline_ja") or hero.get("headline_ja") or "今日の主役を一つに絞る", 90)
-        return headline, evidence
+        headline = _clean(plan.get("headline_ja") or hero.get("headline_ja") or hero.get("headline_seed") or "前提が、静かに変わった。", 90)
+        return headline, ""
     if role == "scale" and scale_values:
         return "数字で見ると、" + "・".join(scale_values[:3]), evidence
     if role in {"timeline", "watch"} and years:
@@ -210,7 +283,9 @@ def _fallback_copy(role: str, facts: list[dict], plan: dict, hero: dict) -> tupl
 
 
 def _model_cards(config: dict, hero: dict, plan: dict, graph: dict) -> tuple[dict[str, dict], str | None]:
-    roles = [str(item.get("role")) for item in plan.get("cards") or []]
+    roles = [str(item.get("role")) for item in plan.get("cards") or [] if str(item.get("role")) != "hook"]
+    if not roles:
+        return {}, None
     model_raw, warning = legacy._call_model(config, hero, roles, _fact_pack(graph))
     by_role: dict[str, dict] = {}
     if isinstance(model_raw, dict):
@@ -263,6 +338,7 @@ def generate_story_package(
     output_locale: str = "ja-JP",
     brand: dict | None = None,
     generation_seed: str | None = None,
+    selected_event: dict | None = None,
 ) -> StoryGenerationResult:
     if output_locale != "ja-JP":
         return StoryGenerationResult({}, error="Storytelling mode requires ja-JP output.")
@@ -272,28 +348,31 @@ def generate_story_package(
     if not ranked:
         return StoryGenerationResult({}, error="No story resources are available.")
 
-    source_context = source_engine.story_context(ranked)
-    hero, hero_selection_reason = _select_hero(source_context, config, output_locale)
-    if not hero:
-        return StoryGenerationResult(
-            {},
-            error="Japanese Story generation blocked: local deterministic mode needs Japanese source evidence. Use an external reasoning model for non-Japanese Hero sources.",
-        )
-
-    source_context["hero_story"] = hero
-    source_context["hero_selection_reason"] = hero_selection_reason
-    hero_rows = _hero_resources(ranked, hero)
-    if not hero_rows:
-        return StoryGenerationResult({}, error="Hero Story has no isolated source resources.")
-
-    hero_resource = dict(hero.get("hero_resource") or hero_rows[0])
     cluster_scores: dict[str, float] = {}
-    cluster_ok = True
-    for row in hero_rows:
-        score = 1.0 if _sid(row) == _sid(hero_resource) else source_engine.event_similarity(hero_resource, row)
-        cluster_scores[_sid(row)] = score
-        if score < 0.47:
-            cluster_ok = False
+    if selected_event:
+        source_context, hero, hero_rows, hero_selection_reason, cluster_scores, selected_error = _selected_event_context(
+            ranked, selected_event, config, output_locale
+        )
+        if selected_error:
+            return StoryGenerationResult({}, error=selected_error)
+    else:
+        source_context = source_engine.story_context(ranked)
+        hero, hero_selection_reason = _select_hero(source_context, config, output_locale)
+        if not hero:
+            return StoryGenerationResult(
+                {},
+                error="Japanese Story generation blocked: local deterministic mode needs Japanese source evidence. Use an external reasoning model for non-Japanese Hero sources.",
+            )
+        source_context["hero_story"] = hero
+        source_context["hero_selection_reason"] = hero_selection_reason
+        hero_rows = _hero_resources(ranked, hero)
+        if not hero_rows:
+            return StoryGenerationResult({}, error="Hero Story has no isolated source resources.")
+        hero_resource = dict(hero.get("hero_resource") or hero_rows[0])
+        for row in hero_rows:
+            cluster_scores[_sid(row)] = 1.0 if _sid(row) == _sid(hero_resource) else source_engine.event_similarity(hero_resource, row)
+
+    cluster_ok = all(score >= 0.47 for score in cluster_scores.values())
     if not cluster_ok:
         return StoryGenerationResult({}, error="Hero Story cluster contains resources from different events.")
 
@@ -315,6 +394,23 @@ def generate_story_package(
     cards: list[dict] = []
     plan_fact_ids = set(str(v) for v in plan.get("fact_ids") or [])
 
+    hook_item = next((item for item in plan.get("cards") or [] if str(item.get("role")) == "hook"), None)
+    hook_facts = _card_facts(graph, hook_item or {}) if hook_item else []
+    fallback_hook_headline, fallback_hook_subline = _fallback_copy("hook", hook_facts, plan, hero)
+    hook_result = story_hook_engine.generate_hook(
+        config, hero, plan, hook_facts, fallback_hook_headline, fallback_hook_subline
+    ) if hook_facts else {
+        "headline": fallback_hook_headline,
+        "subline": fallback_hook_subline,
+        "source": "deterministic",
+        "score": 0.0,
+        "candidate_count": 0,
+        "candidates": [],
+        "warning": None,
+        "style_pass": story_hook_engine.hook_style_pass(fallback_hook_headline, fallback_hook_subline),
+    }
+    hook_warning = hook_result.get("warning")
+
     for index, item in enumerate(plan.get("cards") or []):
         role = str(item.get("role") or "evidence")
         facts = _card_facts(graph, item)
@@ -323,15 +419,21 @@ def generate_story_package(
         evidence = _evidence_text(facts)
         headline, body = _fallback_copy(role, facts, plan, hero)
 
-        model_card = model_by_role.get(role) or {}
-        mh = _clean(model_card.get("headline"), 90)
-        mb = _clean(model_card.get("body"), 300)
-        if mh and mb and _japanese_ratio(mh + mb) >= 0.45 and _claim_ok(mh, mb, evidence):
-            headline, body = mh, mb
+        if role == "hook":
+            headline = _clean(hook_result.get("headline"), 90) or headline
+            body = _clean(hook_result.get("subline"), 90)
+        else:
+            model_card = model_by_role.get(role) or {}
+            mh = _clean(model_card.get("headline"), 90)
+            mb = _clean(model_card.get("body"), 300)
+            if mh and mb and _japanese_ratio(mh + mb) >= 0.45 and _claim_ok(mh, mb, evidence):
+                headline, body = mh, mb
 
         claim_ok = _claim_ok(headline, body, evidence)
         if not claim_ok:
             headline, body = _fallback_copy(role, facts, plan, hero)
+            if role == "hook":
+                body = ""
             claim_ok = _claim_ok(headline, body, evidence)
 
         fact_source_ids = list(dict.fromkeys(str(f.get("source_id") or "") for f in facts if f.get("source_id")))
@@ -341,6 +443,24 @@ def generate_story_package(
         scene_ok = story_graph_engine.scene_matches_evidence(scene_type, role, facts)
         evidence_complete = all(bool(f.get("complete", True)) and story_article_cleaner.sentence_complete(str(f.get("sentence") or "")) for f in facts)
         prompt = _scene_prompt(scene_type, role, plan, hero, evidence, layout)
+
+        qa = {
+            "renderable": True,
+            "mode": "story",
+            "fact_bound": True,
+            "claim_evidence_consistent": claim_ok,
+            "story_plan_fact_ids_valid": all(str(fid) in plan_fact_ids for fid in item.get("fact_ids") or []),
+            "event_ref_score": min((cluster_scores.get(ref, 0.0) for ref in fact_source_ids), default=0.0),
+            "evidence_sentence_complete": evidence_complete,
+            "scene_evidence_consistent": scene_ok,
+        }
+        if role == "hook":
+            qa.update({
+                "hook_source": hook_result.get("source"),
+                "hook_style_score": hook_result.get("score"),
+                "hook_style_pass": bool(hook_result.get("style_pass")),
+                "hook_candidate_count": int(hook_result.get("candidate_count") or 0),
+            })
 
         cards.append({
             "set": "STORY",
@@ -375,16 +495,7 @@ def generate_story_package(
                 "brand_mark_policy": "text-only キヨサキ; no K monogram/icon",
                 "image_prompts": {"4:5": prompt + " 4:5 vertical, 1080x1350.", "9:16": prompt + " 9:16 vertical, 1080x1920."},
             },
-            "qa": {
-                "renderable": True,
-                "mode": "story",
-                "fact_bound": True,
-                "claim_evidence_consistent": claim_ok,
-                "story_plan_fact_ids_valid": all(str(fid) in plan_fact_ids for fid in item.get("fact_ids") or []),
-                "event_ref_score": min((cluster_scores.get(ref, 0.0) for ref in fact_source_ids), default=0.0),
-                "evidence_sentence_complete": evidence_complete,
-                "scene_evidence_consistent": scene_ok,
-            },
+            "qa": qa,
         })
 
     if len(cards) < total_card_count - 1:
@@ -399,6 +510,7 @@ def generate_story_package(
     evidence_complete_ok = all(bool((c.get("qa") or {}).get("evidence_sentence_complete")) for c in content_cards)
     scene_evidence_ok = all(bool((c.get("qa") or {}).get("scene_evidence_consistent")) for c in content_cards)
     japanese_ok = all(_japanese_ratio(f"{c.get('headline','')} {c.get('key_message','')}") >= 0.35 for c in content_cards)
+    hook_style_ok = bool(content_cards and (content_cards[0].get("qa") or {}).get("hook_style_pass"))
     cleaner_ok = not any(story_article_cleaner.has_boilerplate(str(row.get("material") or "")) for row in hero_rows)
     social_embed_free = cleaner_ok and not any(re.search(r"https?://(?:t\.co|twitter\.com|x\.com|pic\.twitter\.com)/", str(row.get("material") or ""), flags=re.I) for row in hero_rows)
 
@@ -406,7 +518,7 @@ def generate_story_package(
         return StoryGenerationResult(
             {},
             error="Japanese Story generation blocked: final card copy did not meet the ja-JP language gate. No publishable package was created.",
-            model_warning=model_warning,
+            model_warning=model_warning or hook_warning,
         )
 
     cards.append(_outro(total_card_count, str(plan.get("archetype_tag") or "story_event"), brand))
@@ -432,6 +544,8 @@ def generate_story_package(
         failures.append("incomplete_evidence")
     if not scene_evidence_ok:
         failures.append("scene_evidence_mismatch")
+    if not hook_style_ok:
+        failures.append("weak_hook")
     if unique_layouts < min(4, len(content_cards)):
         failures.append("layout_repetition")
     if not visual_ok:
@@ -444,6 +558,8 @@ def generate_story_package(
     story_qa = {
         "hero_evidence_isolated": refs_ok and graph_sources_ok,
         "hero_cluster_same_event": cluster_ok,
+        "selected_event_locked": bool(selected_event),
+        "selected_event_id": (selected_event or {}).get("id") if selected_event else "",
         "claim_evidence_consistent": claims_ok,
         "story_plan_fact_binding": plan_ids_ok,
         "article_cleaner_pass": cleaner_ok,
@@ -451,6 +567,10 @@ def generate_story_package(
         "evidence_sentence_complete": evidence_complete_ok,
         "scene_evidence_consistent": scene_evidence_ok,
         "japanese_copy_pass": japanese_ok,
+        "hook_style_pass": hook_style_ok,
+        "hook_source": hook_result.get("source"),
+        "hook_style_score": hook_result.get("score"),
+        "hook_candidate_count": hook_result.get("candidate_count"),
         "unique_layouts": unique_layouts,
         "unique_scene_types": unique_scenes,
         "render_signature_count": visual_diag.get("render_signature_count"),
@@ -467,10 +587,23 @@ def generate_story_package(
     context["fact_graph"] = graph
     context["story_plan"] = plan
     context["evidence_facts"] = _fact_pack(graph)
+    context["hook_generation"] = {
+        "engine": story_hook_engine.STORY_HOOK_ENGINE_VERSION,
+        "source": hook_result.get("source"),
+        "score": hook_result.get("score"),
+        "candidate_count": hook_result.get("candidate_count"),
+        "candidates": hook_result.get("candidates") or [],
+    }
 
-    note_lines = [f"# {plan.get('headline_ja')}", "", _clean(plan.get("thesis"), 400), ""]
-    for card in content_cards:
+    note_lines = [f"# {content_cards[0].get('headline') or plan.get('headline_ja')}", ""]
+    if content_cards[0].get("key_message"):
+        note_lines.extend([content_cards[0].get("key_message") or "", ""])
+    for card in content_cards[1:]:
         note_lines.extend([f"## {card['slide']}. {card['headline']}", card.get("key_message") or "", ""])
+
+    combined_warning = model_warning or hook_warning
+    if model_warning and hook_warning and model_warning != hook_warning:
+        combined_warning = f"{model_warning} / {hook_warning}"
 
     package = {
         "mode": "story",
@@ -482,6 +615,7 @@ def generate_story_package(
             "pipeline": STORY_CONTENT_PIPELINE_VERSION,
             "source_engine": source_engine.STORY_ENGINE_VERSION,
             "graph_engine": story_graph_engine.STORY_GRAPH_ENGINE_VERSION,
+            "hook_engine": story_hook_engine.STORY_HOOK_ENGINE_VERSION,
             "renderer": story_renderer.STORY_RENDERER_VERSION,
             "generation_seed": seed,
             "hero_story_title": plan.get("headline_ja"),
@@ -489,10 +623,12 @@ def generate_story_package(
             "story_score": hero.get("story_score"),
             "hero_story_score": hero.get("hero_story_score"),
             "hero_selection_reason": hero_selection_reason,
+            "selected_event_id": (selected_event or {}).get("id") if selected_event else "",
             "model_provider": config.get("provider") or PROVIDER_LOCAL,
-            "model_used": bool(model_by_role),
+            "model_used": bool(model_by_role) or hook_result.get("source") == "llm",
+            "hook_llm_used": hook_result.get("source") == "llm",
             "story_qa": story_qa,
-            "policy": "locale-aware hero -> typed Fact Graph -> dynamic Story Plan -> evidence-bound ja-JP copy -> semantic scene/evidence QA",
+            "policy": "user-selected event when supplied -> anchor/corroboration -> typed Fact Graph -> dynamic Story Plan -> dedicated high-creativity evidence-bound hook -> semantic QA",
         },
     }
-    return StoryGenerationResult(package=package, model_warning=model_warning)
+    return StoryGenerationResult(package=package, model_warning=combined_warning)
