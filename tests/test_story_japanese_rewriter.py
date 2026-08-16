@@ -10,6 +10,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "streamlit"))
 
+import story_content_pipeline_v5  # noqa: E402
 import story_japanese_rewriter  # noqa: E402
 import story_output_guard  # noqa: E402
 
@@ -64,6 +65,60 @@ class StoryJapaneseRewriterTest(unittest.TestCase):
         self.assertTrue(result["accepted"])
         self.assertEqual(result["attempts"], 3)
         self.assertGreaterEqual(story_japanese_rewriter.japanese_ratio(result["headline"] + result["body"]), 0.42)
+
+    def test_core_finalizer_repairs_english_copy_before_language_gate(self) -> None:
+        config = {"provider": "ollama", "base_url": "https://ollama.com/api", "model": "gpt-oss:20b", "api_key": "x"}
+        facts = [{"sentence": "NeoGrid shifted its business model toward AI infrastructure."}]
+        with patch.object(
+            story_japanese_rewriter,
+            "rewrite_card",
+            return_value={
+                "accepted": True,
+                "headline": "事業の軸が変わった。",
+                "body": "NeoGridはAIインフラへ事業の軸を移した。",
+                "attempts": 1,
+                "warning": "",
+            },
+        ) as mocked:
+            headline, body, source, warning = story_content_pipeline_v5._finalize_japanese_copy(
+                config,
+                "change",
+                facts,
+                {"subject": "NeoGrid"},
+                {"entities": ["NeoGrid"]},
+                "The business model changed",
+                "NeoGrid shifted toward AI infrastructure.",
+            )
+        self.assertEqual(mocked.call_count, 1)
+        self.assertEqual(source, "ja_rewriter")
+        self.assertIsNone(warning)
+        self.assertGreaterEqual(story_content_pipeline_v5._japanese_ratio(headline + body), 0.35)
+
+    def test_core_finalizer_never_returns_english_when_rewriter_fails(self) -> None:
+        config = {"provider": "ollama", "base_url": "https://ollama.com/api", "model": "gpt-oss:20b", "api_key": "x"}
+        facts = [{"sentence": "NeoGrid shifted its business model toward AI infrastructure."}]
+        failed = {
+            "accepted": False,
+            "headline": "",
+            "body": "",
+            "attempts": 3,
+            "warning": "model output invalid",
+            "raw_preview": "English only",
+        }
+        with patch.object(story_japanese_rewriter, "rewrite_card", side_effect=[failed, failed]) as mocked:
+            headline, body, source, warning = story_content_pipeline_v5._finalize_japanese_copy(
+                config,
+                "change",
+                facts,
+                {"subject": "NeoGrid"},
+                {"entities": ["NeoGrid"]},
+                "The business model changed",
+                "NeoGrid shifted toward AI infrastructure.",
+            )
+        self.assertEqual(mocked.call_count, 2)
+        self.assertEqual(source, "ja_failsafe")
+        self.assertIn("ja_failsafe_used", warning)
+        self.assertGreaterEqual(story_content_pipeline_v5._japanese_ratio(headline + body), 0.35)
 
     def test_output_guard_repairs_english_batch_card_before_pipeline_fallback(self) -> None:
         fake = SimpleNamespace()
