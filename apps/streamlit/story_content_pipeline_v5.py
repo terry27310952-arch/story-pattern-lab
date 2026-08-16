@@ -9,10 +9,12 @@ import story_content_pipeline_v3 as legacy
 import story_source_engine_v5 as source_engine
 import story_graph_engine
 import story_hook_engine
+import story_japanese_rewriter
 import story_renderer_v5 as story_renderer
 
 
 STORY_CONTENT_PIPELINE_VERSION = "story-content-v10.3"
+STORY_FINAL_JA_VERSION = "story-final-ja-v1.0"
 DISPLAY_BRAND_LABEL = legacy.DISPLAY_BRAND_LABEL
 PROVIDER_LOCAL = legacy.PROVIDER_LOCAL
 PROVIDER_OLLAMA = legacy.PROVIDER_OLLAMA
@@ -282,6 +284,88 @@ def _fallback_copy(role: str, facts: list[dict], plan: dict, hero: dict) -> tupl
     return _ROLE_HEADLINES.get(role, "確認できる事実"), evidence
 
 
+def _japanese_failsafe_copy(role: str, plan: dict, hero: dict) -> tuple[str, str]:
+    """Last resort must stay Japanese and claim-safe; it must never copy English evidence."""
+    subject = _subject(plan, hero)
+    subject_prefix = f"{subject}をめぐる" if subject else "今回の"
+    if role == "hook":
+        return "前提が、静かに変わった。", ""
+    if role == "actor":
+        return (f"焦点は{subject}にある。" if subject else "焦点になる主体を見る。"), "確認できた主体に絞って見る。"
+    if role == "before":
+        return "これまでの前提を見る。", f"{subject_prefix}従来の前提を整理する。"
+    if role in {"change", "deal"}:
+        return "何が変わったのか。", f"{subject_prefix}変化を、確認できた事実だけで見る。"
+    if role == "scale":
+        return "規模が、見えてきた。", "確認できた事実から規模を読み解く。"
+    if role == "cause":
+        return "なぜ今なのか。", "確認できた背景だけを切り分けて見る。"
+    if role == "contrast":
+        return "二つの事実が並んでいる。", "同時に確認できる事実を分けて見る。"
+    if role == "impact":
+        return "変化の先を見る。", "確認できた変化がどこへつながるかを追う。"
+    if role in {"timeline", "watch"}:
+        return "次の節目を見る。", "確認できた時点を基準に、次の変化を追う。"
+    if role == "evidence":
+        return "根拠を一つに絞る。", "確認できた事実だけを残して読む。"
+    return "まず、確認できる事実から。", "確認できた内容だけを整理する。"
+
+
+def _finalize_japanese_copy(
+    config: dict,
+    role: str,
+    facts: list[dict],
+    plan: dict,
+    hero: dict,
+    headline: str,
+    body: str,
+) -> tuple[str, str, str, str | None]:
+    """Core final Japanese pass. The language gate must never see an English fallback."""
+    evidence = _evidence_text(facts)
+    current_headline = _clean(headline, 90)
+    current_body = _clean(body, 300)
+    if (
+        current_headline
+        and _japanese_ratio(f"{current_headline} {current_body}") >= 0.35
+        and _claim_ok(current_headline, current_body, evidence)
+    ):
+        return current_headline, current_body, "existing", None
+
+    provider = str(config.get("provider") or PROVIDER_LOCAL)
+    warnings: list[str] = []
+    if provider != PROVIDER_LOCAL:
+        for avoid_numbers in (False, True):
+            repair = story_japanese_rewriter.rewrite_card(
+                config,
+                role=role,
+                evidence=evidence,
+                subject=_subject(plan, hero),
+                original_headline=current_headline,
+                original_body=current_body,
+                hook=role == "hook",
+                avoid_numbers=avoid_numbers,
+            )
+            warning = str(repair.get("warning") or "").strip()
+            if warning:
+                warnings.append(warning)
+            rh = _clean(repair.get("headline"), 90)
+            rb = _clean(repair.get("body"), 300)
+            if (
+                repair.get("accepted")
+                and rh
+                and (role == "hook" or rb)
+                and _japanese_ratio(f"{rh} {rb}") >= 0.35
+                and _claim_ok(rh, rb, evidence)
+            ):
+                source = "ja_rewriter_no_numbers" if avoid_numbers else "ja_rewriter"
+                return rh, rb, source, " / ".join(dict.fromkeys(warnings)) or None
+
+    fh, fb = _japanese_failsafe_copy(role, plan, hero)
+    warning_text = " / ".join(dict.fromkeys(warnings))
+    warning_text = (warning_text + " / " if warning_text else "") + f"{role}:ja_failsafe_used"
+    return fh, fb, "ja_failsafe", warning_text
+
+
 def _model_cards(config: dict, hero: dict, plan: dict, graph: dict) -> tuple[dict[str, dict], str | None]:
     roles = [str(item.get("role")) for item in plan.get("cards") or [] if str(item.get("role")) != "hook"]
     if not roles:
@@ -393,6 +477,7 @@ def generate_story_package(
     used_layouts: set[str] = set()
     cards: list[dict] = []
     plan_fact_ids = set(str(v) for v in plan.get("fact_ids") or [])
+    final_copy_warnings: list[str] = []
 
     hook_item = next((item for item in plan.get("cards") or [] if str(item.get("role")) == "hook"), None)
     hook_facts = _card_facts(graph, hook_item or {}) if hook_item else []
@@ -418,23 +503,36 @@ def generate_story_package(
             continue
         evidence = _evidence_text(facts)
         headline, body = _fallback_copy(role, facts, plan, hero)
+        copy_source = "fallback"
 
         if role == "hook":
             headline = _clean(hook_result.get("headline"), 90) or headline
             body = _clean(hook_result.get("subline"), 90)
+            copy_source = str(hook_result.get("source") or "hook_engine")
         else:
             model_card = model_by_role.get(role) or {}
             mh = _clean(model_card.get("headline"), 90)
             mb = _clean(model_card.get("body"), 300)
             if mh and mb and _japanese_ratio(mh + mb) >= 0.45 and _claim_ok(mh, mb, evidence):
                 headline, body = mh, mb
+                copy_source = str(model_card.get("_copy_source") or "batch_llm")
 
         claim_ok = _claim_ok(headline, body, evidence)
         if not claim_ok:
             headline, body = _fallback_copy(role, facts, plan, hero)
             if role == "hook":
                 body = ""
-            claim_ok = _claim_ok(headline, body, evidence)
+            copy_source = "fallback_after_claim_reject"
+
+        headline, body, final_source, final_warning = _finalize_japanese_copy(
+            config, role, facts, plan, hero, headline, body
+        )
+        if final_source != "existing":
+            copy_source = final_source
+        if final_warning:
+            final_copy_warnings.append(final_warning)
+        claim_ok = _claim_ok(headline, body, evidence)
+        japanese_ratio_value = _japanese_ratio(f"{headline} {body}")
 
         fact_source_ids = list(dict.fromkeys(str(f.get("source_id") or "") for f in facts if f.get("source_id")))
         evidence_ref = fact_source_ids[0] if fact_source_ids else next(iter(hero_ids), "")
@@ -453,6 +551,10 @@ def generate_story_package(
             "event_ref_score": min((cluster_scores.get(ref, 0.0) for ref in fact_source_ids), default=0.0),
             "evidence_sentence_complete": evidence_complete,
             "scene_evidence_consistent": scene_ok,
+            "japanese_ratio": round(japanese_ratio_value, 4),
+            "japanese_copy_pass": japanese_ratio_value >= 0.35,
+            "copy_source": copy_source,
+            "final_ja_engine": STORY_FINAL_JA_VERSION,
         }
         if role == "hook":
             qa.update({
@@ -509,16 +611,68 @@ def generate_story_package(
     plan_ids_ok = all(bool((c.get("qa") or {}).get("story_plan_fact_ids_valid")) for c in content_cards)
     evidence_complete_ok = all(bool((c.get("qa") or {}).get("evidence_sentence_complete")) for c in content_cards)
     scene_evidence_ok = all(bool((c.get("qa") or {}).get("scene_evidence_consistent")) for c in content_cards)
-    japanese_ok = all(_japanese_ratio(f"{c.get('headline','')} {c.get('key_message','')}") >= 0.35 for c in content_cards)
+
+    language_diagnostics = [
+        {
+            "slide": c.get("slide"),
+            "role": c.get("story_role"),
+            "ratio": round(_japanese_ratio(f"{c.get('headline','')} {c.get('key_message','')}"), 4),
+            "copy_source": (c.get("qa") or {}).get("copy_source"),
+            "headline": _clean(c.get("headline"), 90),
+        }
+        for c in content_cards
+    ]
+    failing_language_cards = [d for d in language_diagnostics if float(d.get("ratio") or 0) < 0.35]
+
+    # Belt-and-suspenders: core generation must never die because an English fallback
+    # survived an upstream model/parser path. Replace only the failing visible copy,
+    # preserve evidence separately, and surface the fallback in QA rather than aborting.
+    if failing_language_cards:
+        for card in content_cards:
+            ratio = _japanese_ratio(f"{card.get('headline','')} {card.get('key_message','')}")
+            if ratio >= 0.35:
+                continue
+            fh, fb = _japanese_failsafe_copy(str(card.get("story_role") or "evidence"), plan, hero)
+            card["headline"] = fh
+            card["subheadline"] = fb
+            card["key_message"] = fb
+            qa = card.setdefault("qa", {})
+            qa["japanese_ratio"] = round(_japanese_ratio(f"{fh} {fb}"), 4)
+            qa["japanese_copy_pass"] = True
+            qa["copy_source"] = "ja_emergency_failsafe"
+            qa["final_ja_engine"] = STORY_FINAL_JA_VERSION
+            final_copy_warnings.append(
+                f"slide={card.get('slide')},role={card.get('story_role')}:ja_emergency_failsafe"
+            )
+        language_diagnostics = [
+            {
+                "slide": c.get("slide"),
+                "role": c.get("story_role"),
+                "ratio": round(_japanese_ratio(f"{c.get('headline','')} {c.get('key_message','')}"), 4),
+                "copy_source": (c.get("qa") or {}).get("copy_source"),
+                "headline": _clean(c.get("headline"), 90),
+            }
+            for c in content_cards
+        ]
+
+    japanese_ok = all(float(d.get("ratio") or 0) >= 0.35 for d in language_diagnostics)
     hook_style_ok = bool(content_cards and (content_cards[0].get("qa") or {}).get("hook_style_pass"))
     cleaner_ok = not any(story_article_cleaner.has_boilerplate(str(row.get("material") or "")) for row in hero_rows)
     social_embed_free = cleaner_ok and not any(re.search(r"https?://(?:t\.co|twitter\.com|x\.com|pic\.twitter\.com)/", str(row.get("material") or ""), flags=re.I) for row in hero_rows)
 
     if not japanese_ok:
+        detail = "; ".join(
+            f"slide={d.get('slide')},role={d.get('role')},ratio={d.get('ratio')},source={d.get('copy_source')}"
+            for d in language_diagnostics
+            if float(d.get("ratio") or 0) < 0.35
+        )
         return StoryGenerationResult(
             {},
-            error="Japanese Story generation blocked: final card copy did not meet the ja-JP language gate. No publishable package was created.",
-            model_warning=model_warning or hook_warning,
+            error=(
+                "Japanese Story generation blocked after the core final Japanese pass. "
+                f"Failing cards: {detail or 'unknown'}."
+            ),
+            model_warning=" / ".join(final_copy_warnings) or model_warning or hook_warning,
         )
 
     cards.append(_outro(total_card_count, str(plan.get("archetype_tag") or "story_event"), brand))
@@ -550,6 +704,8 @@ def generate_story_package(
         failures.append("layout_repetition")
     if not visual_ok:
         failures.append("visual_scene_repetition")
+    if any((c.get("qa") or {}).get("copy_source") in {"ja_failsafe", "ja_emergency_failsafe"} for c in content_cards):
+        failures.append("japanese_rewrite_failsafe_used")
 
     publishable = not failures
     for card in cards:
@@ -567,6 +723,8 @@ def generate_story_package(
         "evidence_sentence_complete": evidence_complete_ok,
         "scene_evidence_consistent": scene_evidence_ok,
         "japanese_copy_pass": japanese_ok,
+        "japanese_language_diagnostics": language_diagnostics,
+        "final_ja_engine": STORY_FINAL_JA_VERSION,
         "hook_style_pass": hook_style_ok,
         "hook_source": hook_result.get("source"),
         "hook_style_score": hook_result.get("score"),
@@ -601,9 +759,8 @@ def generate_story_package(
     for card in content_cards[1:]:
         note_lines.extend([f"## {card['slide']}. {card['headline']}", card.get("key_message") or "", ""])
 
-    combined_warning = model_warning or hook_warning
-    if model_warning and hook_warning and model_warning != hook_warning:
-        combined_warning = f"{model_warning} / {hook_warning}"
+    warning_parts = [str(v).strip() for v in [model_warning, hook_warning, *final_copy_warnings] if str(v or "").strip()]
+    combined_warning = " / ".join(dict.fromkeys(warning_parts)) or None
 
     package = {
         "mode": "story",
@@ -613,6 +770,7 @@ def generate_story_package(
         "content_quality": {
             "mode": "story",
             "pipeline": STORY_CONTENT_PIPELINE_VERSION,
+            "final_ja_engine": STORY_FINAL_JA_VERSION,
             "source_engine": source_engine.STORY_ENGINE_VERSION,
             "graph_engine": story_graph_engine.STORY_GRAPH_ENGINE_VERSION,
             "hook_engine": story_hook_engine.STORY_HOOK_ENGINE_VERSION,
@@ -625,10 +783,10 @@ def generate_story_package(
             "hero_selection_reason": hero_selection_reason,
             "selected_event_id": (selected_event or {}).get("id") if selected_event else "",
             "model_provider": config.get("provider") or PROVIDER_LOCAL,
-            "model_used": bool(model_by_role) or hook_result.get("source") == "llm",
-            "hook_llm_used": hook_result.get("source") == "llm",
+            "model_used": bool(model_by_role) or hook_result.get("source") in {"llm", "ja_rewriter", "ja_rewriter_no_numbers"},
+            "hook_llm_used": hook_result.get("source") in {"llm", "ja_rewriter", "ja_rewriter_no_numbers"},
             "story_qa": story_qa,
-            "policy": "user-selected event when supplied -> anchor/corroboration -> typed Fact Graph -> dynamic Story Plan -> dedicated high-creativity evidence-bound hook -> semantic QA",
+            "policy": "user-selected event when supplied -> anchor/corroboration -> typed Fact Graph -> dynamic Story Plan -> dedicated high-creativity evidence-bound hook -> core final Japanese pass -> semantic QA",
         },
     }
     return StoryGenerationResult(package=package, model_warning=combined_warning)
