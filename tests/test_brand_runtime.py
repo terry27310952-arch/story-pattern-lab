@@ -10,7 +10,9 @@ APP_DIR = ROOT / "apps" / "streamlit"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+import card_renderer  # noqa: E402
 import reasoning_engine  # noqa: E402
+import visual_variation_runtime  # noqa: E402
 from brand_runtime import DISPLAY_BRAND_LABEL, apply_brand_patch  # noqa: E402
 
 
@@ -45,6 +47,20 @@ class BrandRuntimeTest(unittest.TestCase):
     def test_internal_character_codename_is_preserved_only_as_metadata(self) -> None:
         self.assertEqual(reasoning_engine.OBSERVER_BRAND_SYSTEM["display_brand_label"], DISPLAY_BRAND_LABEL)
         self.assertEqual(reasoning_engine.OBSERVER_BRAND_SYSTEM["internal_character_codename"], "THE OBSERVER")
+
+    def test_visual_director_bootstraps_before_app_generation(self) -> None:
+        self.assertEqual(
+            reasoning_engine.VISUAL_DIRECTOR_RUNTIME_VERSION,
+            visual_variation_runtime.VISUAL_VARIATION_RUNTIME_VERSION,
+        )
+        self.assertEqual(
+            getattr(reasoning_engine, "_kiyosaki_visual_variation_version", None),
+            visual_variation_runtime.VISUAL_VARIATION_RUNTIME_VERSION,
+        )
+        self.assertEqual(
+            getattr(card_renderer, "_kiyosaki_visual_renderer_version", None),
+            visual_variation_runtime.VISUAL_VARIATION_RUNTIME_VERSION,
+        )
 
 
 if __name__ == "__main__":

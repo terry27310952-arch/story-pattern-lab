@@ -19,14 +19,32 @@ def _clean_source_footer(card: dict) -> str:
     return " · ".join(parts)
 
 
-def apply_brand_patch(reasoning_engine) -> None:
-    """Keep THE OBSERVER internal while exposing キヨサキ as the public card brand.
+def _apply_visual_director_runtime(reasoning_engine) -> None:
+    """Boot the trader Visual Director after the base modules are importable.
 
-    This is applied before Streamlit imports app.py, so every card generated through
-    the deployed app uses the public Kiyosaki label without changing the internal
-    character codename used by visual prompts and metadata.
+    The deployed Streamlit entry point always calls ``apply_brand_patch`` before
+    importing app_v2. Keeping the Visual Director bootstrap here guarantees that
+    app_v2 captures the patched ``generate_content_package`` function and that the
+    trader renderer captures the matching v5 visual runtime without changing the
+    Story pipeline router.
+    """
+    import card_renderer
+    import visual_variation_runtime
+
+    visual_variation_runtime.apply_reasoning_patch(reasoning_engine)
+    visual_variation_runtime.apply_renderer_patch(card_renderer)
+    reasoning_engine.VISUAL_DIRECTOR_RUNTIME_VERSION = visual_variation_runtime.VISUAL_VARIATION_RUNTIME_VERSION
+
+
+def apply_brand_patch(reasoning_engine) -> None:
+    """Expose キヨサキ publicly and boot the trader visual runtime.
+
+    THE OBSERVER remains an internal character codename. The same bootstrap point
+    is also used for the trader Visual Director because the deployed Streamlit
+    entry point invokes this function before app_v2 imports generation functions.
     """
     if getattr(reasoning_engine, "_kiyosaki_display_patch_applied", False):
+        _apply_visual_director_runtime(reasoning_engine)
         return
 
     original_ja_copy: Callable = reasoning_engine.ja_copy_for_card
@@ -84,3 +102,4 @@ def apply_brand_patch(reasoning_engine) -> None:
         ]
 
     reasoning_engine._kiyosaki_display_patch_applied = True
+    _apply_visual_director_runtime(reasoning_engine)

@@ -10,11 +10,12 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 
-VISUAL_VARIATION_RUNTIME_VERSION = "visual-blueprint-v4.4"
+VISUAL_VARIATION_RUNTIME_VERSION = "visual-blueprint-v5.0"
 
 # Brand invariants stay fixed. The rest of the composition is allowed to move.
 DISPLAY_BRAND_LABEL = "キヨサキ"
 RECENT_BLUEPRINTS: deque[str] = deque(maxlen=6)
+RECENT_SCENES: deque[str] = deque(maxlen=24)
 
 # Each briefing selects one deck family. The card role still controls what information
 # is shown, but the composition shell is not hard-wired 1:1 to the role anymore.
@@ -99,6 +100,610 @@ FORMAT_PROMPTS = {
 }
 
 
+def _scene(
+    scene_id: str,
+    environment: str,
+    action: str,
+    body_orientation: str,
+    hand_action: str,
+    props: tuple[str, ...],
+    camera_distance: str,
+    camera_height: str,
+    camera_side: str,
+    lens: str,
+    lighting: str,
+    foreground: str,
+    background: str,
+    character_scale: float,
+    character_crop: str,
+    character_position: str,
+    motion_state: str,
+    negative_space: str,
+    character_present: bool = True,
+) -> dict:
+    return {
+        "id": scene_id,
+        "environment": environment,
+        "action": action,
+        "body_orientation": body_orientation,
+        "hand_action": hand_action,
+        "props": list(props),
+        "camera_distance": camera_distance,
+        "camera_height": camera_height,
+        "camera_side": camera_side,
+        "lens": lens,
+        "lighting": lighting,
+        "foreground": foreground,
+        "background": background,
+        "character_scale": character_scale,
+        "character_crop": character_crop,
+        "character_position": character_position,
+        "motion_state": motion_state,
+        "negative_space": negative_space,
+        "character_present": character_present,
+    }
+
+
+# These are physical scenes, not abstract pose labels. The image model receives a
+# visible action, body geometry, hand interaction, lens and location on every card.
+SCENE_ARCHETYPES: dict[str, list[dict]] = {
+    "market_conclusion": [
+        _scene(
+            "market_wall_observer",
+            "real institutional trading room at night",
+            "standing several meters from a wall of market monitors and studying the whole room rather than posing for camera",
+            "three-quarter rear view with shoulders turned about thirty degrees away from camera",
+            "left gloved hand holds a thin folded market report at thigh level; right hand hangs naturally",
+            ("folded market report", "monitor wall"),
+            "medium-wide",
+            "waist height",
+            "rear left",
+            "35mm documentary lens",
+            "monitor spill with one restrained warm practical behind the subject",
+            "soft blurred edge of a nearby monitor",
+            "real trading desks and dim operators' screens softly out of focus",
+            0.30,
+            "three-quarter full body",
+            "right_center",
+            "still observational pause",
+            "large clean area on the left for the main thesis",
+        ),
+        _scene(
+            "market_window_risk_check",
+            "private high-floor market office overlooking a night city",
+            "standing beside the window and checking a tablet before turning back toward the market screens",
+            "clean side profile with torso facing the window",
+            "one gloved hand holds a tablet low; the other rests naturally in a trouser pocket",
+            ("tablet", "window glass"),
+            "medium",
+            "chest height",
+            "side right",
+            "50mm documentary lens",
+            "cool city spill with a narrow warm rim from the room",
+            "dark window frame crossing one edge",
+            "distant city lights and subdued reflections",
+            0.34,
+            "knees-up side profile",
+            "right_lower",
+            "quiet risk check",
+            "upper-left negative space for headline copy",
+        ),
+        _scene(
+            "market_corridor_walk",
+            "dim institutional operations corridor connecting trading rooms",
+            "walking away from the camera toward a brighter dealing room with a report tucked under one arm",
+            "rear three-quarter walking posture",
+            "right arm carries a slim report folder; left arm swings naturally",
+            ("report folder",),
+            "wide",
+            "low waist height",
+            "rear center",
+            "28mm documentary lens",
+            "practical ceiling lights with faint warm edge light",
+            "soft doorway edge in foreground",
+            "open trading room glowing at the end of the corridor",
+            0.20,
+            "full body small",
+            "center_lower",
+            "walking",
+            "open upper and left field for editorial copy",
+        ),
+        _scene(
+            "market_desk_lean",
+            "dark research desk inside a real trading office",
+            "standing at the desk and leaning forward slightly to compare a printed chart with a distant monitor",
+            "three-quarter side view, torso angled toward the desk",
+            "both gloved hands rest apart on the desk surface, never clasped",
+            ("printed chart", "desk lamp", "keyboard"),
+            "medium-wide",
+            "slightly above desk height",
+            "front left",
+            "40mm documentary lens",
+            "soft tungsten desk lamp plus low monitor light",
+            "out-of-focus paper corner near lens",
+            "monitor wall remains distant and secondary",
+            0.28,
+            "thigh-up",
+            "right_center",
+            "active comparison",
+            "left half kept dark and clean for the conclusion",
+        ),
+    ],
+    "key_levels": [
+        _scene(
+            "level_wall_point",
+            "institutional trading room with one large physical wall monitor",
+            "standing with his back to camera and indicating one horizontal price area on the wall display",
+            "straight back view with body weight shifted slightly to the left leg",
+            "right arm raised; index finger points toward the monitor while left arm stays relaxed",
+            ("wall monitor",),
+            "wide",
+            "waist height",
+            "rear right",
+            "35mm documentary lens",
+            "low monitor spill and subtle warm rim light",
+            "dark desk edge at the bottom of frame",
+            "other screens remain soft and subordinate",
+            0.20,
+            "full body small",
+            "left_edge",
+            "precise pointing action",
+            "center and upper-right remain open for support/resistance typography",
+        ),
+        _scene(
+            "level_glass_board_mark",
+            "glass analysis wall inside an institutional office",
+            "marking a single horizontal level on transparent glass while market screens glow behind it",
+            "side profile, shoulders perpendicular to camera",
+            "right gloved hand uses a white grease pencil on the glass; left hand holds the cap",
+            ("glass board", "grease pencil"),
+            "medium",
+            "eye level",
+            "side left",
+            "50mm documentary lens",
+            "cool monitor light through glass with restrained orange edge light",
+            "blurred glass reflection near lens",
+            "real market screens visible through the glass without readable generated text",
+            0.27,
+            "waist-up side profile",
+            "right_edge",
+            "marking",
+            "left-center reserved for the two key levels",
+        ),
+        _scene(
+            "level_over_shoulder_map",
+            "standing terminal station with a large monitor and printed market map",
+            "cross-checking a printed market map against a screen from over the shoulder",
+            "rear three-quarter standing posture",
+            "left hand holds the printout; right hand rests on the terminal desk beside the keyboard",
+            ("printed market map", "keyboard", "monitor"),
+            "medium-close over shoulder",
+            "shoulder height",
+            "rear left",
+            "55mm documentary lens",
+            "monitor spill with almost no fill light",
+            "shoulder and printout create a natural foreground frame",
+            "single terminal screen dominates the background",
+            0.25,
+            "upper torso over shoulder",
+            "left_lower",
+            "cross-checking",
+            "right half kept clear for numeric hierarchy",
+        ),
+        _scene(
+            "level_glove_price_map",
+            "dark physical research table with a printed Bitcoin structure chart",
+            "reviewing the price map from directly above; only the observer's forearms and black leather gloves enter the frame",
+            "head and torso outside the frame",
+            "one glove holds a metal pen over a level while the other pins the paper flat",
+            ("printed chart", "metal pen", "ruler"),
+            "close overhead detail",
+            "top-down",
+            "overhead",
+            "70mm detail lens",
+            "single warm desk practical with deep falloff",
+            "paper edge and pen tip in crisp focus",
+            "dark desk texture with no monitor wall",
+            0.10,
+            "hands-only detail",
+            "bottom_left",
+            "measured annotation",
+            "upper half open for support/resistance copy",
+        ),
+    ],
+    "derivatives": [
+        _scene(
+            "derivatives_sideways_tablet",
+            "private derivatives desk with restrained futures screens",
+            "sitting sideways to the desk while cross-checking a tablet against two monitors",
+            "seated three-quarter rear profile",
+            "left hand holds a tablet; right gloved hand operates the mouse",
+            ("tablet", "mouse", "two monitors"),
+            "medium-wide",
+            "seated eye level",
+            "rear right",
+            "50mm documentary lens",
+            "monitor spill and a distant tungsten desk lamp",
+            "blurred monitor edge in foreground",
+            "futures screens softly visible without readable generated text",
+            0.29,
+            "seated knees-up",
+            "right_lower",
+            "active data cross-check",
+            "upper-left left clean for funding/OI information",
+        ),
+        _scene(
+            "derivatives_terminal_switch",
+            "standing execution console inside a dark trading room",
+            "adjusting one physical terminal control while watching a derivatives screen",
+            "side-rear standing posture",
+            "right gloved fingers adjust a small console control; left hand rests on the desk edge",
+            ("terminal console", "monitor"),
+            "medium close",
+            "chest height",
+            "rear left",
+            "60mm documentary lens",
+            "localized screen light with narrow warm rim",
+            "terminal rack creates a dark foreground strip",
+            "rows of subdued operations terminals",
+            0.24,
+            "waist-up rear profile",
+            "right_center",
+            "precise terminal adjustment",
+            "left side reserved for metrics",
+        ),
+        _scene(
+            "derivatives_printout_compare",
+            "long institutional research desk",
+            "standing over two derivatives printouts and comparing them before looking back to the market wall",
+            "three-quarter front-side view with face still hidden by shadow and viewing angle",
+            "hands spread apart, each glove touching a different sheet",
+            ("two printouts", "calculator", "desk"),
+            "medium",
+            "slightly high",
+            "front right",
+            "45mm documentary lens",
+            "warm desk practical with cool ambient screen spill",
+            "calculator blurred in near foreground",
+            "distant market wall in soft focus",
+            0.26,
+            "thigh-up",
+            "left_lower",
+            "comparative analysis",
+            "upper-right kept open for derivatives headline",
+        ),
+        _scene(
+            "derivatives_server_aisle",
+            "narrow infrastructure aisle between terminal and server racks",
+            "walking slowly through the aisle while checking a tablet of positioning data",
+            "rear side walking posture",
+            "both hands support the tablet at waist level without clasping",
+            ("tablet", "server racks"),
+            "wide",
+            "waist height",
+            "rear left",
+            "32mm documentary lens",
+            "cool rack LEDs with very restrained warm edge light",
+            "rack edge close to lens",
+            "long repeating aisle perspective",
+            0.19,
+            "full body small",
+            "right_edge",
+            "slow walking review",
+            "left-center negative space for data copy",
+        ),
+    ],
+    "news_context": [
+        _scene(
+            "news_report_reading",
+            "quiet institutional briefing desk with one practical lamp",
+            "reading a printed research report before looking toward the market screens",
+            "side profile seated or standing at desk, face hidden by darkness",
+            "both hands hold opposite corners of the report",
+            ("printed research report", "desk lamp"),
+            "medium",
+            "chest height",
+            "side right",
+            "50mm documentary lens",
+            "warm practical pool with deep surrounding shadow",
+            "soft lamp shade edge in foreground",
+            "dark office shelves and distant screens",
+            0.25,
+            "waist-up side profile",
+            "right_lower",
+            "focused reading",
+            "left and upper field for news interpretation",
+        ),
+        _scene(
+            "news_briefing_walk",
+            "institutional corridor outside a research room",
+            "walking toward camera at an angle while carrying a slim briefing folder, never presenting to camera",
+            "three-quarter walking posture with head turned toward an open briefing-room doorway",
+            "left hand carries folder at side; right hand lightly touches the door frame",
+            ("briefing folder", "doorway"),
+            "wide",
+            "waist height",
+            "front left",
+            "35mm documentary lens",
+            "practical corridor light and dim warm room spill",
+            "door frame in foreground",
+            "briefing room visible in the background",
+            0.20,
+            "full body small",
+            "left_edge",
+            "walking transition",
+            "right half kept open for source context",
+        ),
+        _scene(
+            "news_pinboard_review",
+            "dark research wall with pinned physical documents and one monitor",
+            "pinning a new printed clipping to the research wall and comparing it with existing material",
+            "over-shoulder standing view",
+            "right glove pins the clipping; left hand holds two additional sheets",
+            ("printed clipping", "pinboard", "paper sheets"),
+            "medium over shoulder",
+            "shoulder height",
+            "rear right",
+            "55mm documentary lens",
+            "soft task light on paper with low orange rim",
+            "blurred shoulder edge in foreground",
+            "tactile research wall with unreadable paper detail",
+            0.24,
+            "upper torso over shoulder",
+            "right_center",
+            "document placement",
+            "left column open for headline and interpretation",
+        ),
+        _scene(
+            "news_institution_establishing",
+            "real-world institution, exchange, office, data center or city location semantically connected to the source story",
+            "documentary establishing shot of the actual subject environment with no presenter in frame",
+            "none",
+            "none",
+            (),
+            "wide establishing",
+            "human eye level",
+            "observational",
+            "28mm documentary lens",
+            "available practical light with restrained cinematic contrast",
+            "real architectural or street foreground detail",
+            "people may appear only as incidental unidentifiable background staff",
+            0.0,
+            "no character",
+            "none",
+            "observational establishing shot",
+            "one side naturally darker for copy",
+            False,
+        ),
+    ],
+    "scenarios": [
+        _scene(
+            "scenario_three_screen_room",
+            "wide dark strategy room with three physically separated monitor zones",
+            "standing small in the center and comparing the three zones without pointing",
+            "straight back view, feet planted shoulder width apart",
+            "arms hang naturally at the sides",
+            ("three monitor zones",),
+            "very wide",
+            "waist height",
+            "rear center",
+            "28mm documentary lens",
+            "low practical room light with thin warm rim",
+            "desk silhouettes at both lower corners",
+            "three distinct screen groups form a realistic visual fork",
+            0.13,
+            "full body very small",
+            "bottom_center",
+            "still comparison",
+            "three broad visual lanes remain readable",
+        ),
+        _scene(
+            "scenario_overhead_sheets",
+            "large dark conference table",
+            "arranging three separate scenario sheets from a top-down viewpoint; only black-gloved hands are visible",
+            "head and torso outside frame",
+            "left glove moves one sheet while right glove holds a pen above the center sheet",
+            ("three scenario sheets", "pen"),
+            "overhead detail",
+            "top-down",
+            "overhead",
+            "65mm overhead lens",
+            "soft warm table light with strong edge falloff",
+            "table texture fills the frame",
+            "no monitor wall; physical planning materials only",
+            0.08,
+            "hands-only detail",
+            "bottom_center",
+            "arranging options",
+            "three clear paper zones with copy space around them",
+        ),
+        _scene(
+            "scenario_corridor_junction",
+            "real institutional corridor that splits into three visible directions",
+            "pausing at the junction and looking toward one route while keeping the body centered",
+            "rear full-body silhouette",
+            "hands remain separated and relaxed at the sides",
+            ("corridor junction",),
+            "very wide",
+            "low waist height",
+            "rear center",
+            "24mm documentary lens",
+            "real ceiling practicals with subtle warm backlight",
+            "dark doorway edge in foreground",
+            "three architectural directions create the scenario metaphor without fantasy graphics",
+            0.12,
+            "full body small",
+            "bottom_center",
+            "hesitation before decision",
+            "upper half open for Bull/Base/Bear copy",
+        ),
+        _scene(
+            "scenario_glass_room",
+            "glass-walled institutional strategy room overlooking three market workstations",
+            "standing behind the glass and observing the three workstations from a distance",
+            "three-quarter rear silhouette",
+            "one hand loosely holds a report at the side; the other remains relaxed",
+            ("glass wall", "report", "three workstations"),
+            "wide",
+            "chest height",
+            "rear right",
+            "35mm documentary lens",
+            "dim office practicals and controlled reflections",
+            "glass reflection crosses foreground",
+            "three workstations create distinct realistic zones",
+            0.16,
+            "full body small",
+            "left_lower",
+            "quiet scenario review",
+            "right and upper areas kept open for scenario labels",
+        ),
+    ],
+    "trade_plan": [
+        _scene(
+            "plan_notebook_rules",
+            "dark execution desk with a physical notebook and printed chart",
+            "writing one execution rule into the notebook while checking the printed chart",
+            "head mostly outside frame; torso only partially visible",
+            "right gloved hand writes with a pen; left glove keeps the chart flat",
+            ("notebook", "pen", "printed chart"),
+            "close overhead three-quarter",
+            "slightly high",
+            "front right",
+            "70mm detail lens",
+            "focused warm desk light with near-black falloff",
+            "pen and notebook edge in foreground",
+            "single muted monitor far behind",
+            0.14,
+            "hands and torso detail",
+            "right_lower",
+            "writing",
+            "left and upper field reserved for ENTRY WAIT INVALID",
+        ),
+        _scene(
+            "plan_close_report",
+            "institutional trading desk at the end of a review session",
+            "closing a report folder after making a decision and turning slightly away from the desk",
+            "side three-quarter standing posture",
+            "right glove closes the folder; left hand rests separately on the desk edge",
+            ("report folder", "desk"),
+            "medium",
+            "chest height",
+            "side left",
+            "50mm documentary lens",
+            "low tungsten practical with distant monitor spill",
+            "folder corner close to lens",
+            "market screens soft and secondary",
+            0.25,
+            "thigh-up side view",
+            "right_center",
+            "decision completed",
+            "left half dark enough for rule copy",
+        ),
+        _scene(
+            "plan_phone_alert",
+            "quiet side area of a trading floor beside a dark window",
+            "checking one price alert on a phone before returning to the desk",
+            "side profile standing posture",
+            "right glove holds phone at waist level; left hand remains in pocket",
+            ("phone", "window"),
+            "medium-wide",
+            "waist height",
+            "side right",
+            "45mm documentary lens",
+            "cool window spill with faint orange rim",
+            "window mullion in foreground",
+            "trading room visible behind through glass",
+            0.23,
+            "knees-up side profile",
+            "left_lower",
+            "alert check",
+            "upper-right kept open for execution conditions",
+        ),
+        _scene(
+            "plan_table_point",
+            "dark conference table inside the trading office",
+            "standing over a printed execution plan and indicating one line for the final decision",
+            "three-quarter side standing posture",
+            "right index finger points to the paper; left glove rests open on another part of the table",
+            ("printed execution plan", "conference table"),
+            "medium-wide",
+            "slightly high",
+            "front left",
+            "40mm documentary lens",
+            "single warm overhead practical and minimal monitor spill",
+            "paper corner blurred near lens",
+            "empty chairs and dark screens in background",
+            0.24,
+            "thigh-up",
+            "right_lower",
+            "rule confirmation",
+            "left and top kept clean for the action framework",
+        ),
+        _scene(
+            "plan_doorway_pause",
+            "doorway between a dim office and the active trading room",
+            "pausing in the doorway and looking back toward the monitor wall before choosing not to enter",
+            "rear three-quarter full body posture",
+            "both arms stay relaxed and separated at the sides",
+            ("doorway",),
+            "wide",
+            "waist height",
+            "rear left",
+            "32mm documentary lens",
+            "warm room spill behind with dark foreground",
+            "door frame forms a strong foreground border",
+            "monitor wall glows in the room beyond",
+            0.18,
+            "full body small",
+            "right_edge",
+            "pause before action",
+            "left two-thirds available for WAIT/INVALID copy",
+        ),
+        _scene(
+            "plan_glove_pen_detail",
+            "matte black desk with one clean execution sheet",
+            "holding a metal pen above the execution sheet without writing yet; only forearms and black gloves are visible",
+            "head and body outside frame",
+            "right glove holds pen suspended above the sheet; left glove is open and separate",
+            ("execution sheet", "metal pen"),
+            "tight detail",
+            "top-down oblique",
+            "front",
+            "85mm detail lens",
+            "small warm task light with deep black surroundings",
+            "pen tip and glove texture in sharp focus",
+            "no screens required",
+            0.08,
+            "hands-only detail",
+            "bottom_right",
+            "deliberate waiting",
+            "upper and left areas clear for rules",
+        ),
+    ],
+}
+
+OUTRO_SCENE = _scene(
+    "brand_outro_locked",
+    "dim real institutional trading room with market monitors softly out of focus behind the subject",
+    "standing perfectly still as the recurring final brand portrait",
+    "front-facing symmetrical waist-up posture",
+    "both black leather-gloved hands clasped calmly at the lower abdomen",
+    ("softly blurred monitor wall",),
+    "medium-close",
+    "eye level",
+    "front",
+    "70mm portrait lens",
+    "warm orange rim light tracing the hair, head and shoulders; face kept completely black",
+    "subtle dark desk edge if visible",
+    "real trading screens softly out of focus, no readable generated text",
+    0.62,
+    "waist-up front portrait",
+    "center",
+    "completely still",
+    "left side and lower third reserved for brand copy and follow CTA",
+)
+
+
 def _fingerprint(brief: dict, resources: list[dict] | None = None) -> str:
     source_titles = []
     for item in (resources or [])[:12]:
@@ -140,26 +745,163 @@ def _variant_for_card(card: dict, family: str, previous_variant: str | None, rng
     return variant
 
 
-def _update_image_prompts(card: dict, variant: str) -> None:
-    direction = card.setdefault("visual_direction", {})
-    prompts = dict(direction.get("image_prompts") or {})
-    variation_clause = FORMAT_PROMPTS.get(variant, FORMAT_PROMPTS["full_bleed_bottom"])
-    no_mark_clause = (
-        " Do not add a K monogram, orange K symbol, arrow-like brand mark, decorative logo, badge, watermark or icon before the brand name."
-        " The deterministic renderer adds only the text キヨサキ at top-left."
+def _scene_penalty(scene: dict, previous: dict | None, used_ids: set[str], counters: dict[str, int]) -> float:
+    penalty = 100.0 if scene["id"] in used_ids else 0.0
+    if scene["id"] in RECENT_SCENES:
+        penalty += 8.0
+    if previous:
+        if scene["environment"] == previous.get("environment"):
+            penalty += 12.0
+        if scene["camera_distance"] == previous.get("camera_distance"):
+            penalty += 7.0
+        if scene["body_orientation"] == previous.get("body_orientation"):
+            penalty += 7.0
+        if scene["character_position"] == previous.get("character_position"):
+            penalty += 5.0
+        if set(scene.get("props") or []) & set(previous.get("props") or []):
+            penalty += 4.0
+    action_text = f"{scene.get('action', '')} {scene.get('body_orientation', '')}".lower()
+    if "seated" in action_text and counters.get("seated", 0) >= 1:
+        penalty += 18.0
+    if "front-facing" in action_text and counters.get("front", 0) >= 1:
+        penalty += 12.0
+    if "clasp" in str(scene.get("hand_action") or "").lower():
+        penalty += 1000.0
+    return penalty
+
+
+def _choose_scene(card: dict, previous: dict | None, used_ids: set[str], counters: dict[str, int], rng: random.Random) -> dict:
+    card_type = str(card.get("card_type") or "market_conclusion")
+    if card_type == "brand_outro":
+        return copy.deepcopy(OUTRO_SCENE)
+    pool = SCENE_ARCHETYPES.get(card_type) or SCENE_ARCHETYPES["market_conclusion"]
+    ranked = sorted(
+        pool,
+        key=lambda item: (_scene_penalty(item, previous, used_ids, counters), rng.random()),
     )
-    outro_clause = ""
+    return copy.deepcopy(ranked[0])
+
+
+def _source_context(card: dict) -> str:
+    source = card.get("source") or {}
+    parts = [
+        str(source.get("display_headline_ja") or "").strip(),
+        str(source.get("short_title") or "").strip(),
+        str(source.get("publisher") or "").strip(),
+    ]
+    return " / ".join(item for item in parts if item)[:260]
+
+
+def _scene_signature(scene: dict) -> str:
+    prop_key = ",".join(scene.get("props") or [])
+    return "|".join(
+        [
+            str(scene.get("id") or ""),
+            str(scene.get("environment") or ""),
+            str(scene.get("camera_distance") or ""),
+            str(scene.get("body_orientation") or ""),
+            prop_key,
+        ]
+    )
+
+
+def _apply_scene_direction(card: dict, scene: dict) -> None:
+    direction = card.setdefault("visual_direction", {})
+    present = bool(scene.get("character_present", True))
+    direction.update(
+        {
+            "scene_archetype": scene["id"],
+            "environment": scene["environment"],
+            "character_action": scene["action"],
+            "body_orientation": scene["body_orientation"],
+            "hand_action": scene["hand_action"],
+            "prop": list(scene.get("props") or []),
+            "camera_distance": scene["camera_distance"],
+            "camera_height": scene["camera_height"],
+            "camera_side": scene["camera_side"],
+            "lens_language": scene["lens"],
+            "lighting_source": scene["lighting"],
+            "foreground_element": scene["foreground"],
+            "background_activity": scene["background"],
+            "character_scale": scene["character_scale"],
+            "character_crop": scene["character_crop"],
+            "motion_state": scene["motion_state"],
+            "negative_space": scene["negative_space"],
+            "scene_uniqueness_key": _scene_signature(scene),
+            "character_present": present,
+            "character_visibility": float(scene["character_scale"]) if present else 0.0,
+            "character_shot": scene["character_crop"] if present else "none",
+            "character_pose": scene["action"] if present else "none",
+            "character_position": scene["character_position"] if present else "none",
+            "camera_angle": f"{scene['camera_height']} / {scene['camera_side']}",
+            "primary_visual": f"{scene['environment']}; {scene['action']}",
+            "image_strategy": "generated_documentary_scene" if present else "generated_documentary_environment",
+        }
+    )
+    direction["character_runtime"] = {
+        "present": present,
+        "shot": direction["character_shot"],
+        "pose": direction["character_pose"],
+        "presence": direction["character_visibility"],
+    }
+    if isinstance(direction.get("visual_story"), dict):
+        story = dict(direction["visual_story"])
+        story["character_required"] = present
+        story["character_presence"] = direction["character_visibility"]
+        story["subject"] = direction["primary_visual"]
+        story["camera"] = f"{scene['camera_distance']}, {scene['camera_height']}, {scene['camera_side']}, {scene['lens']}"
+        direction["visual_story"] = story
+
+
+def _build_scene_prompt(card: dict, scene: dict, variant: str, ratio: str) -> str:
+    variation_clause = FORMAT_PROMPTS.get(variant, FORMAT_PROMPTS["full_bleed_bottom"])
+    source_context = _source_context(card)
+    ratio_clause = "4:5 vertical composition, 1080x1350" if ratio == "4:5" else "9:16 vertical composition, 1080x1920"
+    present = bool(scene.get("character_present", True))
     if card.get("card_type") == "brand_outro":
-        outro_clause = (
-            " FINAL CARD CHARACTER LOCK: centered front-facing faceless adult male, smooth completely black featureless face, broad tailored black suit,"
-            " black shirt, black tie, black leather gloves clasped calmly at the lower abdomen, straight restrained posture, waist-up framing,"
-            " warm orange rim light tracing the head and shoulders, sparse warm dust, near-black studio background. Keep this silhouette language consistent."
+        return (
+            "SCENE FIRST. Create a photorealistic cinematic documentary closing frame inside a dim real institutional trading room. "
+            "LOCKED KIYOSAKI CHARACTER: centered front-facing anonymous adult male, waist-up, broad tailored black suit, black shirt, black tie, "
+            "black leather gloves clasped calmly at the lower abdomen. The entire face is completely swallowed by black shadow with absolutely no visible eyes, nose, mouth or expression. "
+            "Warm orange rim light traces only the hair, head, shoulders and suit edges. Real trading monitors sit softly out of focus behind him. "
+            "This is the only card allowed to use the clasped-hands brand pose. Keep it restrained, premium and photographic, never superheroic or poster-CGI. "
+            f"Composition: {variation_clause}. Leave {scene['negative_space']}. "
+            "Do not render any readable Japanese or English text, ticker labels, logos or watermarks. Do not add a K monogram, orange K symbol, arrow-like brand mark, decorative logo, badge, watermark or icon before the brand name. "
+            f"{ratio_clause}."
         )
-    for ratio in ("4:5", "9:16"):
-        base = str(prompts.get(ratio) or "").strip()
-        clause = f" Composition variant for this briefing: {variation_clause}."
-        prompts[ratio] = (base + clause + no_mark_clause + outro_clause).strip()
-    direction["image_prompts"] = prompts
+    if present:
+        character_clause = (
+            "Recurring KIYOSAKI observer identity: adult male in a tailored black suit, black shirt, black tie and black leather gloves. "
+            "His face must remain completely unidentifiable through shadow, rear view, crop or angle; never show readable facial features. "
+            "Do not default to a static portrait and do not make him pose for camera. The physical action and body geometry below are mandatory."
+        )
+    else:
+        character_clause = "No presenter or suited observer is visible in this frame; the real-world subject environment carries the story."
+    source_clause = f" Story/source context to respect: {source_context}." if source_context else ""
+    return (
+        "SCENE FIRST. Create a premium observational financial documentary photograph for a Japanese Instagram carousel. "
+        f"Environment: {scene['environment']}. Visible action: {scene['action']}. Body geometry: {scene['body_orientation']}. "
+        f"Hand interaction: {scene['hand_action']}. Props: {', '.join(scene.get('props') or ['none'])}. "
+        f"Camera: {scene['camera_distance']}, {scene['camera_height']}, view from {scene['camera_side']}, {scene['lens']}. "
+        f"Lighting: {scene['lighting']}. Foreground: {scene['foreground']}. Background behavior: {scene['background']}. "
+        f"Motion state: {scene['motion_state']}. Character framing: {scene['character_crop']} at roughly {int(float(scene['character_scale']) * 100)} percent of the frame, positioned {scene['character_position']}. "
+        f"{character_clause}{source_clause} "
+        "Photorealistic real materials, natural fabric folds, realistic black leather glove texture, imperfect physical environment, optical depth and documentary lens behavior. "
+        "Cinematic means light, lens and composition, not glowing CGI effects. Orange is only a restrained practical or rim accent. "
+        f"Composition variant: {variation_clause}. Leave {scene['negative_space']}. "
+        "Do not render any readable Japanese or English text, logos, tickers, article screenshots, watermarks or generated UI labels. "
+        "Do not add a K monogram, orange K symbol, arrow-like brand mark, decorative logo, badge, watermark or icon before the brand name. "
+        "Avoid repeated static standing portraits, clasped hands, presenter stance, superhero pose, cyberpunk neon overload, holograms, floating coins, money rain, luxury flex, cartoon and anime. "
+        f"{ratio_clause}."
+    )
+
+
+def _update_image_prompts(card: dict, variant: str, scene: dict) -> None:
+    direction = card.setdefault("visual_direction", {})
+    direction["image_prompts"] = {
+        "4:5": _build_scene_prompt(card, scene, variant, "4:5"),
+        "9:16": _build_scene_prompt(card, scene, variant, "9:16"),
+    }
 
 
 def apply_blueprint_to_package(package: dict, brief: dict, resources: list[dict] | None = None) -> dict:
@@ -173,31 +915,49 @@ def apply_blueprint_to_package(package: dict, brief: dict, resources: list[dict]
     cards_by_set = next_package.get("cards") or {}
     for set_label, cards in cards_by_set.items():
         previous_variant: str | None = None
+        previous_scene: dict | None = None
+        used_scene_ids: set[str] = set()
+        counters = {"seated": 0, "front": 0}
         for card in cards or []:
             variant = _variant_for_card(card, family, previous_variant, rng)
             previous_variant = variant
+            scene = _choose_scene(card, previous_scene, used_scene_ids, counters, rng)
             direction = card.setdefault("visual_direction", {})
             direction["deck_family"] = family
             direction["format_variant"] = variant
             direction["visual_blueprint_id"] = signature
             direction["format_instruction"] = FORMAT_PROMPTS.get(variant, "")
             direction["brand_mark_policy"] = "text-only キヨサキ; no K monogram/icon"
+            _apply_scene_direction(card, scene)
             if card.get("card_type") == "brand_outro":
                 direction["character_style_lock"] = {
                     "face": "smooth fully featureless black face; no eyes nose mouth",
                     "wardrobe": "tailored black suit, black shirt, black tie, black leather gloves",
                     "pose": "front-facing, waist-up, hands clasped calmly at lower abdomen",
-                    "lighting": "warm orange rim light around head and shoulders",
+                    "lighting": "warm orange rim light around hair, head and shoulders",
+                    "background": "dim real trading room with monitor wall softly out of focus",
                     "mood": "quiet premium anonymous financial observer",
                 }
-            _update_image_prompts(card, variant)
+            else:
+                used_scene_ids.add(scene["id"])
+                RECENT_SCENES.append(scene["id"])
+                action_text = f"{scene.get('action', '')} {scene.get('body_orientation', '')}".lower()
+                if "seated" in action_text:
+                    counters["seated"] += 1
+                if "front-facing" in action_text:
+                    counters["front"] += 1
+            _update_image_prompts(card, variant, scene)
+            previous_scene = scene
 
     quality = next_package.setdefault("content_quality", {})
     quality["visual_blueprint"] = {
         "id": signature,
         "family": family,
         "runtime": VISUAL_VARIATION_RUNTIME_VERSION,
-        "policy": "fresh briefing-level deck family; role-aware composition; no adjacent identical shell; locked brand outro character",
+        "policy": (
+            "fresh briefing-level deck family; physical scene-action archetypes; environment/action/body/hands/props/camera/lens variation; "
+            "anti-repetition scoring inside each set and across recent briefings; hands-clasped pose reserved for locked brand outro"
+        ),
     }
     return next_package
 
