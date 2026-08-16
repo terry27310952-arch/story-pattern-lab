@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import runpy
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import streamlit as st
 
@@ -12,6 +14,17 @@ import streamlit as st
 APP_DIR = Path(__file__).parent / "apps" / "streamlit"
 APP_FILE = APP_DIR / "app_v2.py"
 RUNTIME_TOKEN = "dual-pipeline-v10.5"
+
+STORY_PROVIDER_CLOUD = "Ollama Cloud · 기본 추론 모델"
+STORY_PROVIDER_FALLBACK = "내장 규칙 기반 · deterministic fallback"
+STORY_PROVIDER_LOCAL = "Ollama 로컬 추론 모델"
+STORY_PROVIDER_OPENAI = "OpenAI-compatible API · 외부 추론 모델"
+STORY_PROVIDER_OPTIONS = [
+    STORY_PROVIDER_CLOUD,
+    STORY_PROVIDER_FALLBACK,
+    STORY_PROVIDER_LOCAL,
+    STORY_PROVIDER_OPENAI,
+]
 
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -91,16 +104,27 @@ def _current_ollama_api_key() -> str:
     return str(st.session_state.get("ollama_api_key") or _secret_or_env("OLLAMA_API_KEY", "") or "")
 
 
-def _configured_story_llm(temperature: float = 0.35) -> dict:
-    """Ollama Cloud is the hosted Story default; env/session can opt into self-hosted Ollama."""
-    base_url = str(
-        st.session_state.get("ollama_base_url")
-        or _secret_or_env("OLLAMA_BASE_URL", story_llm_runtime.DEFAULT_OLLAMA_BASE_URL)
-    )
-    cloud_default_model = story_llm_runtime.DEFAULT_OLLAMA_MODEL
-    local_default_model = story_llm_runtime.DEFAULT_LOCAL_OLLAMA_MODEL
-    default_model = cloud_default_model if story_llm_runtime.is_cloud_ollama(base_url) else local_default_model
-    model = str(st.session_state.get("ollama_model") or _secret_or_env("OLLAMA_MODEL", default_model))
+def _story_provider_label() -> str:
+    value = str(st.session_state.get("provider_story") or "").strip()
+    return value if value in STORY_PROVIDER_OPTIONS else STORY_PROVIDER_CLOUD
+
+
+def _story_transport_mode() -> str:
+    label = _story_provider_label()
+    if label == STORY_PROVIDER_LOCAL:
+        return "local"
+    if label == STORY_PROVIDER_FALLBACK:
+        return "deterministic"
+    if label == STORY_PROVIDER_OPENAI:
+        return "openai"
+    return "cloud"
+
+
+def _cloud_story_llm(temperature: float = 0.35) -> dict:
+    # Cloud settings deliberately use dedicated keys. A stale OLLAMA_BASE_URL or
+    # session localhost value must never override the hosted Story default.
+    base_url = _secret_or_env("OLLAMA_CLOUD_BASE_URL", story_llm_runtime.DEFAULT_OLLAMA_BASE_URL)
+    model = _secret_or_env("OLLAMA_CLOUD_MODEL", story_llm_runtime.DEFAULT_OLLAMA_MODEL)
     return story_llm_runtime.ollama_config(
         base_url=base_url,
         model=model,
@@ -109,26 +133,126 @@ def _configured_story_llm(temperature: float = 0.35) -> dict:
     )
 
 
-_story_llm = _configured_story_llm()
-_story_provider_init_key = "_story_default_provider_ollama_cloud_v1"
-if not st.session_state.get(_story_provider_init_key):
-    current_story_provider = str(st.session_state.get("provider_story") or "")
-    if not current_story_provider or current_story_provider.startswith("내장 규칙 기반"):
-        st.session_state["provider_story"] = "Ollama 로컬 추론 모델"
-    st.session_state.setdefault("ollama_base_url", _story_llm.get("base_url"))
-    st.session_state.setdefault("ollama_model", _story_llm.get("model"))
-    st.session_state[_story_provider_init_key] = True
+def _local_story_llm(temperature: float = 0.35) -> dict:
+    base_url = str(
+        st.session_state.get("ollama_base_url")
+        or _secret_or_env(
+            "OLLAMA_LOCAL_BASE_URL",
+            _secret_or_env("OLLAMA_BASE_URL", story_llm_runtime.DEFAULT_LOCAL_OLLAMA_BASE_URL),
+        )
+    )
+    model = str(
+        st.session_state.get("ollama_model")
+        or _secret_or_env(
+            "OLLAMA_LOCAL_MODEL",
+            _secret_or_env("OLLAMA_MODEL", story_llm_runtime.DEFAULT_LOCAL_OLLAMA_MODEL),
+        )
+    )
+    return story_llm_runtime.ollama_config(
+        base_url=base_url,
+        model=model,
+        temperature=temperature,
+        api_key="",
+    )
 
-if story_llm_runtime.is_cloud_ollama(str(_story_llm.get("base_url") or "")) and not _current_ollama_api_key():
-    st.sidebar.info("Streamlit Cloud에서는 Ollama Cloud API를 사용합니다. 최초 1회 API Key가 필요합니다.")
+
+def _configured_story_llm(temperature: float = 0.35) -> dict:
+    return _local_story_llm(temperature) if _story_transport_mode() == "local" else _cloud_story_llm(temperature)
+
+
+def _migrate_story_provider_state() -> None:
+    migration_key = "_story_provider_cloud_default_v106"
+    if not st.session_state.get(migration_key):
+        current = str(st.session_state.get("provider_story") or "")
+        stale_local = str(st.session_state.get("ollama_base_url") or "").startswith("http://localhost")
+        if not current or current == STORY_PROVIDER_FALLBACK or (current == STORY_PROVIDER_LOCAL and stale_local):
+            st.session_state["provider_story"] = STORY_PROVIDER_CLOUD
+        st.session_state[migration_key] = True
+
+    # The cloud path is authoritative. This also clears stale localhost widget
+    # state left by older deployments before app_v2 builds provider_config().
+    if _story_transport_mode() == "cloud":
+        cloud = _cloud_story_llm()
+        st.session_state["ollama_base_url"] = cloud["base_url"]
+        st.session_state["ollama_model"] = cloud["model"]
+    elif _story_transport_mode() == "local":
+        current_base = str(st.session_state.get("ollama_base_url") or "")
+        if story_llm_runtime.is_cloud_ollama(current_base):
+            st.session_state["ollama_base_url"] = _secret_or_env(
+                "OLLAMA_LOCAL_BASE_URL", story_llm_runtime.DEFAULT_LOCAL_OLLAMA_BASE_URL
+            )
+            st.session_state["ollama_model"] = _secret_or_env(
+                "OLLAMA_LOCAL_MODEL", story_llm_runtime.DEFAULT_LOCAL_OLLAMA_MODEL
+            )
+
+
+_migrate_story_provider_state()
+
+if _story_transport_mode() == "cloud" and not _current_ollama_api_key():
+    st.sidebar.info("Story 기본 엔진은 Ollama Cloud입니다. 최초 1회 API Key가 필요합니다.")
     st.sidebar.text_input("Ollama Cloud API Key", type="password", key="ollama_api_key")
+elif _story_transport_mode() == "cloud":
+    st.sidebar.success("Ollama Cloud API Key 인식 완료")
 
+
+# v3 remains the transport helper used by the v10 Story pipeline. Its historical
+# Ollama branch has no Authorization header, so patch only the Cloud branch to use
+# Ollama's authenticated native /api/chat endpoint. Local Ollama and every other
+# provider keep the legacy implementation unchanged.
+_legacy_story_call_model = story_content_pipeline_legacy._call_model
+
+
+def _call_story_model_with_cloud_auth(config: dict, hero: dict, roles: list[str], pack: dict):
+    provider = str(config.get("provider") or story_content_pipeline_v5.PROVIDER_LOCAL)
+    base = str(config.get("base_url") or "").rstrip("/")
+    if provider != story_content_pipeline_v5.PROVIDER_OLLAMA or not story_llm_runtime.is_cloud_ollama(base):
+        return _legacy_story_call_model(config, hero, roles, pack)
+
+    facts = [
+        {"type": f.get("fact_type"), "text": f.get("text"), "source_id": f.get("source_id")}
+        for f in (pack.get("facts") or [])[:18]
+    ]
+    system = (
+        "You edit premium Japanese financial documentary cards. Use ONLY supplied facts. "
+        "Never invent numbers, dates, entities or causes. Return JSON only."
+    )
+    user = json.dumps(
+        {
+            "hero": hero,
+            "roles": roles,
+            "facts": facts,
+            "schema": {"cards": [{"role": "same role", "headline": "Japanese", "body": "Japanese, factual"}]},
+        },
+        ensure_ascii=False,
+    )
+    try:
+        raw = story_content_pipeline_legacy._post_json(
+            story_llm_runtime.ollama_api_url(base, "chat"),
+            {
+                "model": config.get("model") or story_llm_runtime.DEFAULT_OLLAMA_MODEL,
+                "stream": False,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "options": {"temperature": float(config.get("temperature") or 0.25)},
+            },
+            story_llm_runtime.ollama_headers(str(config.get("api_key") or "")),
+        )
+        return story_content_pipeline_legacy._json_from_text(
+            ((raw.get("message") or {}).get("content") or "")
+        ), None
+    except Exception as error:
+        return None, f"story reasoning model failed; evidence-bound fallback used: {error}"
+
+
+story_content_pipeline_legacy._call_model = _call_story_model_with_cloud_auth
 
 _original_story_generate = story_content_pipeline_v5.generate_story_package
 
 
 def _generate_story_llm_first(*args, **kwargs):
-    """Run Story with Ollama by default, validating cloud/local transport before generation."""
+    """Honor the UI provider exactly; Story defaults to authenticated Ollama Cloud."""
     positional = list(args)
     if "config" in kwargs:
         config = dict(kwargs.get("config") or {})
@@ -138,24 +262,26 @@ def _generate_story_llm_first(*args, **kwargs):
         config = {}
 
     incoming_provider = str(config.get("provider") or story_content_pipeline_v5.PROVIDER_LOCAL)
-    promoted = incoming_provider == story_content_pipeline_v5.PROVIDER_LOCAL
-    if incoming_provider in {story_content_pipeline_v5.PROVIDER_LOCAL, story_content_pipeline_v5.PROVIDER_OLLAMA}:
+    transport_mode = _story_transport_mode()
+
+    # Deterministic is a real fallback, not an alias for Ollama. Only an explicit
+    # Ollama selection is rewritten with the authoritative Cloud/local runtime.
+    if incoming_provider == story_content_pipeline_v5.PROVIDER_OLLAMA:
         temperature = float(config.get("temperature") or 0.35)
-        config = {**config, **_configured_story_llm(temperature), "temperature": temperature}
+        selected = _local_story_llm(temperature) if transport_mode == "local" else _cloud_story_llm(temperature)
+        config = {**config, **selected, "temperature": temperature}
 
-    base_url = str(config.get("base_url") or story_llm_runtime.DEFAULT_OLLAMA_BASE_URL)
-    model = str(config.get("model") or story_llm_runtime.DEFAULT_OLLAMA_MODEL)
-    api_key = str(config.get("api_key") or _current_ollama_api_key())
-
-    if str(config.get("provider") or "") == story_content_pipeline_v5.PROVIDER_OLLAMA:
-        status = story_llm_runtime.check_ollama(base_url, model, api_key=api_key, timeout=3.5)
+        base_url = str(config.get("base_url") or "")
+        model = str(config.get("model") or "")
+        api_key = str(config.get("api_key") or "")
+        status = story_llm_runtime.check_ollama(base_url, model, api_key=api_key, timeout=5.0)
         st.session_state["story_ollama_status"] = status
         if status.get("auth_required"):
             return story_content_pipeline_v5.StoryGenerationResult(
                 {},
                 error=(
-                    "Ollama Cloud API Key가 필요합니다. 사이드바의 'Ollama Cloud API Key'에 키를 입력하거나 "
-                    "Streamlit Secrets에 OLLAMA_API_KEY를 추가한 뒤 다시 생성하세요."
+                    "Ollama Cloud API Key가 필요합니다. Streamlit Secrets의 OLLAMA_API_KEY 또는 "
+                    "사이드바 API Key 입력값을 확인하세요."
                 ),
             )
         if not status.get("reachable"):
@@ -169,20 +295,8 @@ def _generate_story_llm_first(*args, **kwargs):
                 {},
                 error=f"Ollama 연결은 정상이나 모델 '{model}'을 사용할 수 없습니다. 사용 가능 모델: {available}",
             )
-
-        if story_llm_runtime.is_cloud_ollama(base_url):
-            # Ollama Cloud exposes an OpenAI-compatible endpoint. Use it here because
-            # Cloud does not support Ollama structured-output `format=json` while our
-            # prompt/parser already enforce JSON at the application layer.
-            config = {
-                **config,
-                "provider": story_content_pipeline_v5.PROVIDER_OPENAI_COMPATIBLE,
-                "base_url": "https://ollama.com/v1",
-                "api_key": api_key,
-                "model": model,
-                "ollama_cloud": True,
-                "runtime_source": "OLLAMA_CLOUD_OPENAI_COMPAT",
-            }
+    else:
+        base_url = str(config.get("base_url") or "")
 
     if "config" in kwargs:
         kwargs["config"] = config
@@ -192,12 +306,15 @@ def _generate_story_llm_first(*args, **kwargs):
     result = _original_story_generate(*positional, **kwargs)
     if getattr(result, "package", None):
         quality = result.package.setdefault("content_quality", {})
-        quality["story_llm_default"] = "ollama"
         quality["story_llm_runtime"] = story_llm_runtime.STORY_LLM_RUNTIME_VERSION
-        quality["story_llm_model"] = config.get("model")
-        quality["story_llm_base_url"] = base_url
-        quality["story_llm_transport"] = "ollama_cloud_openai_compatible" if config.get("ollama_cloud") else "ollama_native"
-        quality["story_llm_auto_promoted"] = promoted
+        quality["story_llm_provider_ui"] = _story_provider_label()
+        quality["story_llm_transport"] = transport_mode
+        if incoming_provider == story_content_pipeline_v5.PROVIDER_OLLAMA:
+            quality["story_llm_model"] = config.get("model")
+            quality["story_llm_base_url"] = config.get("base_url")
+            quality["story_llm_default"] = "ollama_cloud" if transport_mode == "cloud" else "ollama_local"
+        elif incoming_provider == story_content_pipeline_v5.PROVIDER_LOCAL:
+            quality["story_llm_default"] = "deterministic_fallback"
     return result
 
 
@@ -236,6 +353,38 @@ card_renderer.render_card_image = _render_card_image
 card_renderer.render_card_png = _render_card_png
 card_renderer._kiyosaki_runtime_router = RUNTIME_TOKEN
 
+
+# app_v2 still contains the old three-option provider widget. Patch only that
+# Story widget at runtime so the visible UI and provider_config() agree with the
+# new Cloud-first behavior, without touching Trader or other selectboxes.
+_original_sidebar_selectbox = st.sidebar.selectbox
+_original_sidebar_text_input = st.sidebar.text_input
+
+
+def _provider_selectbox(label, options, *args, **kwargs):
+    if kwargs.get("key") == "provider_story":
+        current = _story_provider_label()
+        st.session_state["provider_story"] = current
+        kwargs["index"] = STORY_PROVIDER_OPTIONS.index(current)
+        return _original_sidebar_selectbox(label, STORY_PROVIDER_OPTIONS, *args, **kwargs)
+    return _original_sidebar_selectbox(label, options, *args, **kwargs)
+
+
+def _provider_text_input(label, *args, **kwargs):
+    key = kwargs.get("key")
+    if _story_transport_mode() == "cloud" and key == "ollama_base_url":
+        value = _cloud_story_llm()["base_url"]
+        st.session_state["ollama_base_url"] = value
+        st.sidebar.caption(f"Ollama Cloud URL · {value}")
+        return value
+    if _story_transport_mode() == "cloud" and key == "ollama_model":
+        value = _cloud_story_llm()["model"]
+        st.session_state["ollama_model"] = value
+        st.sidebar.caption(f"Ollama Cloud 모델 · {value}")
+        return value
+    return _original_sidebar_text_input(label, *args, **kwargs)
+
+
 _story_llm = _configured_story_llm()
 st.sidebar.caption(f"Runtime · {RUNTIME_TOKEN}")
 st.sidebar.caption(f"Story · {story_content_pipeline_v5.STORY_CONTENT_PIPELINE_VERSION}")
@@ -244,9 +393,9 @@ st.sidebar.caption(f"Source · {story_source_engine_v5.STORY_SOURCE_ENGINE_VERSI
 st.sidebar.caption(f"Graph · {story_graph_engine.STORY_GRAPH_ENGINE_VERSION}")
 st.sidebar.caption(f"Hook · {story_hook_engine.STORY_HOOK_ENGINE_VERSION}")
 st.sidebar.caption(f"LLM Runtime · {story_llm_runtime.STORY_LLM_RUNTIME_VERSION}")
-st.sidebar.caption(
-    f"Story LLM · Ollama · {_story_llm.get('model')} · {_story_llm.get('runtime_source')}"
-)
+st.sidebar.caption(f"Story AI · {_story_provider_label()}")
+if _story_transport_mode() in {"cloud", "local"}:
+    st.sidebar.caption(f"Model · {_story_llm.get('model')} · {_story_llm.get('base_url')}")
 _ollama_status = st.session_state.get("story_ollama_status") or {}
 if _ollama_status:
     if _ollama_status.get("reachable") and _ollama_status.get("model_available"):
@@ -260,4 +409,7 @@ if _ollama_status:
 st.sidebar.caption(f"Story Renderer · {story_renderer_v5.STORY_RENDERER_VERSION}")
 st.sidebar.caption(f"Excel · {mode_exporter_v5.MODE_EXPORTER_VERSION}")
 
-runpy.run_path(str(APP_FILE), run_name="__main__")
+with patch.object(st.sidebar, "selectbox", new=_provider_selectbox), patch.object(
+    st.sidebar, "text_input", new=_provider_text_input
+):
+    runpy.run_path(str(APP_FILE), run_name="__main__")
