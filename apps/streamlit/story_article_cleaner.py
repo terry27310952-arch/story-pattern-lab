@@ -4,10 +4,8 @@ import re
 from dataclasses import asdict, dataclass
 
 
-STORY_ARTICLE_CLEANER_VERSION = "story-article-cleaner-v2.0"
+STORY_ARTICLE_CLEANER_VERSION = "story-article-cleaner-v2.1"
 
-# The cleaner intentionally knows structural page roles, not publishers or article topics.
-# New sites should therefore not require code changes just because their brand/name changes.
 _CUTOFF_MARKERS = [
     "関連記事", "関連ニュース", "あわせて読みたい", "合わせて読みたい", "おすすめ記事",
     "おすすめのニュース", "最新記事", "もっと見る", "著者情報", "この記事を書いた人",
@@ -25,13 +23,29 @@ _STRUCTURAL_DROP_PATTERNS = [
     r"The post .* appeared first on",
     r"^\s*(?:next|previous|前の記事|次の記事)\s*$",
     r"^(?:Share|Follow|Subscribe|Newsletter|シェア|フォロー|会員登録|ログイン)\b",
-    # Generic price/ticker widgets flattened into article text, independent of site/asset.
     r"\b1\s*(?:BTC|ETH|SOL|XRP|USDT|USD|JPY)\s*=",
 ]
 
 _AUTHOR_BIO_HINTS = [
     "プロフィール", "経歴", "ライター", "編集者", "記者として", "参画", "joined", "contributor",
 ]
+
+_SOCIAL_URL_RE = re.compile(
+    r"https?://(?:t\.co|twitter\.com|x\.com|pic\.twitter\.com)/\S+",
+    re.I,
+)
+_SOCIAL_ATTRIBUTION_RE = re.compile(
+    r"(?:[—\-–]\s*)?[A-ZÀ-ÖØ-öø-ÿ一-龥ぁ-んァ-ヶ][^。！？!?\n]{0,100}"
+    r"\(@[A-Za-z0-9_]{1,30}\)\s+"
+    r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|"
+    r"Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+    r"\s+\d{1,2},\s+(?:19|20)\d{2}",
+    re.I,
+)
+_HANDLE_DATE_RE = re.compile(
+    r"@[A-Za-z0-9_]{1,30}.{0,80}(?:19|20)\d{2}",
+    re.I,
+)
 
 
 @dataclass
@@ -41,6 +55,8 @@ class CleaningDiagnostics:
     removed_segments: int
     cutoff_marker: str
     removal_reasons: dict[str, int]
+    social_embed_removed: int = 0
+    incomplete_tail_dropped: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -48,6 +64,24 @@ class CleaningDiagnostics:
 
 def _clean_space(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _strip_social_embeds(text: str) -> tuple[str, int]:
+    value = str(text or "")
+    before = value
+    value, n1 = _SOCIAL_URL_RE.subn(" ", value)
+    value, n2 = _SOCIAL_ATTRIBUTION_RE.subn(" ", value)
+    value, n3 = re.subn(
+        r"\s*[—\-–]?\s*[^。！？!?\n]{0,80}"
+        r"@[A-Za-z0-9_]{1,30}\s+"
+        r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|"
+        r"Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+        r"\s+\d{1,2},\s+(?:19|20)\d{2}\s*",
+        " ",
+        value,
+        flags=re.I,
+    )
+    return _clean_space(value), n1 + n2 + n3 + (1 if before and not value else 0)
 
 
 def _split_segments(text: str) -> list[str]:
@@ -63,19 +97,28 @@ def _split_segments(text: str) -> list[str]:
 def _is_structural_noise(segment: str) -> tuple[bool, str]:
     if len(segment) < 4:
         return True, "too_short"
+    if _SOCIAL_URL_RE.search(segment) or _HANDLE_DATE_RE.search(segment):
+        return True, "social_embed"
     for pattern in _STRUCTURAL_DROP_PATTERNS:
         if re.search(pattern, segment, flags=re.I):
             return True, "structural_pattern"
     lower = segment.casefold()
-    # Author bios often survive flattened HTML without a heading. Detect the role,
-    # not the publisher/person name. Require a career/profile cue plus a year/date.
     if any(hint.casefold() in lower for hint in _AUTHOR_BIO_HINTS) and re.search(r"(?:19|20)\d{2}", segment):
         return True, "author_bio"
-    # Navigation/ad widgets are typically link-dense, sentence-poor fragments.
     pipe_count = segment.count("|") + segment.count("›") + segment.count("→")
     if pipe_count >= 3 and len(re.findall(r"[。！？.!?]", segment)) <= 1:
         return True, "navigation_block"
     return False, ""
+
+
+def _looks_incomplete_tail(segment: str) -> bool:
+    value = str(segment or "").strip()
+    if len(value) < 40:
+        return False
+    if re.search(r"[。！？.!?」』”’)]$", value):
+        return False
+    words = re.findall(r"[A-Za-z]+|[ぁ-んァ-ヶ一-龥]+", value)
+    return len(words) >= 8 or len(value) >= 120
 
 
 def clean_article_text(text: str, title: str = "") -> tuple[str, dict]:
@@ -83,7 +126,8 @@ def clean_article_text(text: str, title: str = "") -> tuple[str, dict]:
     if not original:
         return "", CleaningDiagnostics(0, 0, 0, "", {}).to_dict()
 
-    segments = _split_segments(original)
+    social_cleaned, social_removed = _strip_social_embeds(original)
+    segments = _split_segments(social_cleaned)
     kept: list[str] = []
     removed_count = 0
     cutoff_marker = ""
@@ -103,6 +147,13 @@ def clean_article_text(text: str, title: str = "") -> tuple[str, dict]:
             continue
         kept.append(segment)
 
+    tail_dropped = False
+    if kept and _looks_incomplete_tail(kept[-1]):
+        kept.pop()
+        removed_count += 1
+        reasons["incomplete_tail"] = reasons.get("incomplete_tail", 0) + 1
+        tail_dropped = True
+
     cleaned = " ".join(kept)
     cleaned = re.sub(r"\s+(?:next|previous)\s+The post .*? appeared first on .*?$", "", cleaned, flags=re.I)
     cleaned = re.sub(r"\s+The post .*? appeared first on .*?$", "", cleaned, flags=re.I)
@@ -114,6 +165,8 @@ def clean_article_text(text: str, title: str = "") -> tuple[str, dict]:
         removed_segments=removed_count,
         cutoff_marker=cutoff_marker,
         removal_reasons=reasons,
+        social_embed_removed=social_removed,
+        incomplete_tail_dropped=tail_dropped,
     ).to_dict()
     return cleaned, diagnostics
 
@@ -133,7 +186,14 @@ def clean_story_resource(row: dict) -> dict:
 
 def has_boilerplate(text: str) -> bool:
     value = str(text or "")
+    if _SOCIAL_URL_RE.search(value) or _HANDLE_DATE_RE.search(value):
+        return True
     if any(marker.casefold() in value.casefold() for marker in _CUTOFF_MARKERS):
         return True
     drop, _ = _is_structural_noise(value)
     return drop
+
+
+def sentence_complete(text: str) -> bool:
+    value = str(text or "").strip()
+    return bool(value and re.search(r"[。！？.!?」』”’)]$", value))
