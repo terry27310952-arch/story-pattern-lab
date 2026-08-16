@@ -8,6 +8,7 @@ from datetime import datetime
 import streamlit as st
 
 import card_renderer
+import story_engine as story_source_engine
 from content_modes import (
     MODE_LABELS,
     MODE_STORY,
@@ -30,7 +31,7 @@ from story_content_pipeline import (
 from trader_pipeline import generate_trader_result
 
 
-APP_VERSION = "2026-08-16 dual-pipeline-v10.2"
+APP_VERSION = "2026-08-16 dual-pipeline-v10.4"
 DISPLAY_BRAND_LABEL = "キヨサキ"
 DEFAULT_CTA = "フォローして、勢力が入ったポイントを無料でチェック。"
 
@@ -43,6 +44,7 @@ st.markdown(
 .mode-banner { border:1px solid #31363a; border-radius:10px; padding:14px 16px; background:#101214; margin-bottom:14px; }
 .mode-banner strong { color:#f69f19; }
 .small-muted { color:#7f8992; font-size:0.88rem; }
+.event-card { border:1px solid #2a2f33; border-radius:12px; padding:12px 14px; background:#0d0f11; margin:8px 0; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -68,6 +70,8 @@ def init_state() -> None:
         "logs_story": [],
         "selected_ids_trader": [],
         "selected_ids_story": [],
+        "story_event_candidates": [],
+        "selected_story_event_id": "",
         "enriched_trader": [],
         "enriched_story": [],
         "trader_brief": {},
@@ -140,6 +144,36 @@ def selected_resources(mode: str) -> list[dict]:
     return [row for row in rows if row.get("id") in selected_ids]
 
 
+def build_story_event_candidates(rows: list[dict]) -> list[dict]:
+    if not rows:
+        return []
+    try:
+        return [dict(item) for item in story_source_engine.build_story_candidates(rows)]
+    except Exception:
+        return []
+
+
+def selected_story_event() -> dict:
+    event_id = str(st.session_state.get("selected_story_event_id") or "")
+    for candidate in st.session_state.get("story_event_candidates", []) or []:
+        if str(candidate.get("id") or "") == event_id:
+            return dict(candidate)
+    return {}
+
+
+def selected_story_resources() -> list[dict]:
+    event = selected_story_event()
+    allowed = {str(value) for value in event.get("resource_ids") or [] if value}
+    return [dict(row) for row in st.session_state.get("resources_story", []) or [] if str(row.get("id") or "") in allowed]
+
+
+def event_label(candidate: dict) -> str:
+    score = float(candidate.get("hero_story_score") or candidate.get("story_score") or 0)
+    title = candidate.get("headline_ja") or candidate.get("headline_seed") or candidate.get("topic") or "Untitled Event"
+    count = int(candidate.get("cluster_size") or len(candidate.get("resource_ids") or []) or 1)
+    return f"{score:.1f} · {shorten(title, 86)} · {count} source{'s' if count != 1 else ''}"
+
+
 def cards_to_markdown(cards: list[dict]) -> str:
     lines: list[str] = []
     for card in cards:
@@ -182,24 +216,26 @@ def render_card_package(package: dict) -> None:
                     if card.get("subheadline"):
                         st.write(card.get("subheadline"))
                     metrics = card.get("metrics") or []
-                    if metrics:
-                        for metric in metrics[:5]:
-                            st.write(f"- {metric.get('label')}: {metric.get('value')}")
+                    for metric in metrics[:5]:
+                        st.write(f"- {metric.get('label')}: {metric.get('value')}")
                     source = card.get("source") or {}
                     if source.get("publisher") or source.get("short_title"):
                         st.caption(" · ".join(v for v in [source.get("publisher"), source.get("short_title")] if v))
                     with st.expander("구조 / 근거", expanded=False):
-                        st.json(
-                            {
-                                "card_type": card.get("card_type"),
-                                "story_role": card.get("story_role"),
-                                "story_tag": card.get("story_archetype"),
-                                "evidence_refs": card.get("evidence_refs"),
-                                "layout": (card.get("visual_direction") or {}).get("layout_variant"),
-                                "scene_type": (card.get("visual_direction") or {}).get("scene_type"),
-                                "character_required": (card.get("visual_direction") or {}).get("character_required"),
-                            }
-                        )
+                        payload = {
+                            "card_type": card.get("card_type"),
+                            "story_role": card.get("story_role"),
+                            "story_tag": card.get("story_archetype"),
+                            "evidence_refs": card.get("evidence_refs"),
+                            "layout": (card.get("visual_direction") or {}).get("layout_variant"),
+                            "scene_type": (card.get("visual_direction") or {}).get("scene_type"),
+                            "character_required": (card.get("visual_direction") or {}).get("character_required"),
+                        }
+                        if card.get("story_role") == "hook":
+                            payload["hook_source"] = (card.get("qa") or {}).get("hook_source")
+                            payload["hook_style_score"] = (card.get("qa") or {}).get("hook_style_score")
+                            payload["hook_candidate_count"] = (card.get("qa") or {}).get("hook_candidate_count")
+                        st.json(payload)
             st.download_button(
                 f"{label} Markdown 다운로드",
                 cards_to_markdown(cards),
@@ -238,29 +274,16 @@ def render_story_summary(package: dict) -> None:
     if not hero:
         return
     c1, c2, c3 = st.columns([2, 1, 1])
-    c1.markdown(f"### {plan.get('headline_ja') or hero.get('headline_ja', '')}")
+    first_card = ((package.get("cards") or {}).get("STORY") or [{}])[0]
+    c1.markdown(f"### {first_card.get('headline') or plan.get('headline_ja') or hero.get('headline_ja', '')}")
     c2.metric("Story Tag", plan.get("archetype_tag", "story_event"))
     c3.metric("Fact Nodes", len(graph.get("facts") or []))
-    if plan.get("thesis"):
-        st.write(plan.get("thesis"))
-    st.caption(f"Story Score · {hero.get('story_score', 0)} · Graph · {quality.get('graph_engine', 'N/A')}")
-    candidates = context.get("candidates") or []
-    if candidates:
-        with st.expander("스토리 후보 랭킹", expanded=False):
-            st.dataframe(
-                [
-                    {
-                        "story_score": item.get("story_score"),
-                        "hero_score": item.get("hero_story_score"),
-                        "topic": item.get("topic"),
-                        "headline": item.get("headline_seed"),
-                        "sources": ", ".join(item.get("source_names") or []),
-                    }
-                    for item in candidates[:10]
-                ],
-                hide_index=True,
-                use_container_width=True,
-            )
+    if first_card.get("key_message"):
+        st.write(first_card.get("key_message"))
+    st.caption(
+        f"Selected Event · {quality.get('selected_event_id') or 'auto'} · "
+        f"Story Score · {hero.get('story_score', 0)} · Hook · {quality.get('hook_engine', 'N/A')}"
+    )
 
 
 def render_market_snapshot(snapshot: dict) -> None:
@@ -278,7 +301,7 @@ def render_market_snapshot(snapshot: dict) -> None:
 init_state()
 
 st.title("Kiyosaki Editorial Lab")
-st.caption("트레이더 브리핑과 스토리텔링 콘텐츠를 서로 다른 입력·추론·카드 파이프라인으로 생성합니다.")
+st.caption("트레이더 브리핑은 여러 소스를 종합하고, 스토리텔링은 하나의 사건을 선택해 깊게 파고듭니다.")
 
 mode_labels = [MODE_LABELS[MODE_TRADER], MODE_LABELS[MODE_STORY]]
 label_to_mode = {value: key for key, value in MODE_LABELS.items()}
@@ -295,37 +318,11 @@ public_registry = available_public_registry(mode)
 default_rss, default_public = default_sources(mode, RSS_SOURCES, public_registry)
 
 st.sidebar.header("1. 리소스 수집")
-selected_rss = st.sidebar.multiselect(
-    "RSS / 미디어",
-    options=list(RSS_SOURCES.keys()),
-    default=default_rss,
-    key=f"rss_sources_{mode}",
-)
-selected_public = st.sidebar.multiselect(
-    "공개 목록 / 공식 소스",
-    options=list(public_registry.keys()),
-    default=default_public,
-    key=f"public_sources_{mode}",
-)
-per_source_limit = st.sidebar.slider(
-    "소스별 수집 수",
-    5,
-    60,
-    min(60, policy.source_limit),
-    5,
-    key=f"source_limit_{mode}",
-)
-refresh_market_with_collection = st.sidebar.checkbox(
-    "시장 데이터 함께 갱신",
-    value=mode == MODE_TRADER,
-    key=f"refresh_market_{mode}",
-)
-collect_button = st.sidebar.button(
-    f"{MODE_LABELS[mode]}용 리소스 수집",
-    type="primary",
-    use_container_width=True,
-    key=f"collect_{mode}",
-)
+selected_rss = st.sidebar.multiselect("RSS / 미디어", options=list(RSS_SOURCES.keys()), default=default_rss, key=f"rss_sources_{mode}")
+selected_public = st.sidebar.multiselect("공개 목록 / 공식 소스", options=list(public_registry.keys()), default=default_public, key=f"public_sources_{mode}")
+per_source_limit = st.sidebar.slider("소스별 수집 수", 5, 60, min(60, policy.source_limit), 5, key=f"source_limit_{mode}")
+refresh_market_with_collection = st.sidebar.checkbox("시장 데이터 함께 갱신", value=mode == MODE_TRADER, key=f"refresh_market_{mode}")
+collect_button = st.sidebar.button(f"{MODE_LABELS[mode]}용 리소스 수집", type="primary", use_container_width=True, key=f"collect_{mode}")
 
 st.sidebar.divider()
 st.sidebar.header("2. 추론 엔진")
@@ -335,12 +332,7 @@ provider_options = [
     "Ollama 로컬 추론 모델",
     "OpenAI-compatible API · 외부 추론 모델",
 ]
-provider_label = st.sidebar.selectbox(
-    "AI 엔진",
-    provider_options,
-    index=2 if external_ready else 0,
-    key=f"provider_{mode}",
-)
+provider_label = st.sidebar.selectbox("AI 엔진", provider_options, index=2 if external_ready else 0, key=f"provider_{mode}")
 temperature = st.sidebar.slider("추론 온도", 0.1, 0.9, 0.35, 0.05, key=f"temperature_{mode}")
 if provider_label.startswith("Ollama"):
     st.sidebar.text_input("Ollama URL", value=env_value("OLLAMA_BASE_URL", "http://localhost:11434"), key="ollama_base_url")
@@ -350,7 +342,8 @@ elif provider_label.startswith("OpenAI-compatible"):
     st.sidebar.text_input("모델", value=env_value("FREE_AI_MODEL", ""), key="free_ai_model")
     st.sidebar.text_input("API Key", value=env_value("FREE_AI_API_KEY", ""), type="password", key="free_ai_api_key")
 
-auto_fetch_body = st.sidebar.checkbox("선택 리소스 원문 전체 취합", value=True, key=f"fetch_body_{mode}")
+fetch_label = "선택 사건 관련 원문 전체 취합" if mode == MODE_STORY else "선택 리소스 원문 전체 취합"
+auto_fetch_body = st.sidebar.checkbox(fetch_label, value=True, key=f"fetch_body_{mode}")
 brand_account = st.sidebar.text_input("브랜드 계정 ID", value=env_value("BRAND_ACCOUNT", ""), key=f"brand_account_{mode}")
 brand_cta = st.sidebar.text_area("브랜드 CTA", value=DEFAULT_CTA, height=70, key=f"brand_cta_{mode}")
 
@@ -361,7 +354,11 @@ if mode == MODE_TRADER:
     custom_card_count = st.sidebar.slider("자율제안 분석 카드 수", 5, 7, 6, 1, key="trader_custom_count")
 else:
     story_card_count = st.sidebar.slider("스토리 총 카드 수", 5, 8, 7, 1, key="story_card_count")
-    st.sidebar.caption("마지막 1장은 고정 브랜드 아웃트로입니다. 나머지 전개는 Fact Graph와 Story Plan이 근거에 맞춰 동적으로 결정합니다.")
+    st.sidebar.caption("마지막 1장은 고정 브랜드 아웃트로입니다. 사건 선택 후 Fact Graph가 전개를 결정합니다.")
+    if provider_label.startswith("내장"):
+        st.sidebar.caption("1장 Hook · deterministic fallback. LLM을 선택하면 별도 고창의성 패스에서 5안을 생성·선정합니다.")
+    else:
+        st.sidebar.caption("1장 Hook · LLM 별도 패스 · 5안 생성 → evidence 검증 → 감각 점수 최고안 선택")
 
 st.sidebar.divider()
 st.sidebar.caption(f"App · {APP_VERSION}")
@@ -373,26 +370,38 @@ if collect_button:
         rows, logs = collect_for_mode(mode, selected_rss, selected_public, per_source_limit)
     st.session_state[state_key("resources", mode)] = rows
     st.session_state[state_key("logs", mode)] = logs
-    st.session_state[state_key("selected_ids", mode)] = [
-        row.get("id") for row in rows[: policy.default_select_count] if row.get("id")
-    ]
     st.session_state[state_key("enriched", mode)] = []
     if mode == MODE_TRADER:
+        st.session_state.selected_ids_trader = [row.get("id") for row in rows[: policy.default_select_count] if row.get("id")]
         st.session_state.trader_brief = {}
         st.session_state.trader_package = {}
     else:
+        candidates = build_story_event_candidates(rows)
+        st.session_state.story_event_candidates = candidates
+        st.session_state.selected_story_event_id = str((candidates[0] if candidates else {}).get("id") or "")
+        st.session_state.selected_ids_story = []
         st.session_state.story_package = {}
     if refresh_market_with_collection:
         with st.spinner("시장 데이터를 갱신하는 중입니다."):
             st.session_state.market_snapshot = collect_market_snapshot()
 
 resources = st.session_state.get(state_key("resources", mode), [])
-selected = selected_resources(mode)
+if mode == MODE_STORY and resources and not st.session_state.story_event_candidates:
+    st.session_state.story_event_candidates = build_story_event_candidates(resources)
+    if st.session_state.story_event_candidates and not st.session_state.selected_story_event_id:
+        st.session_state.selected_story_event_id = str(st.session_state.story_event_candidates[0].get("id") or "")
+
+selected = selected_resources(mode) if mode == MODE_TRADER else selected_story_resources()
+selected_event = selected_story_event() if mode == MODE_STORY else {}
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("수집 리소스", len(resources))
-m2.metric("선택 리소스", len(selected))
-m3.metric("주 점수", policy.primary_score)
+if mode == MODE_STORY:
+    m2.metric("스토리 사건", len(st.session_state.story_event_candidates or []))
+    m3.metric("선택 사건 소스", len(selected))
+else:
+    m2.metric("선택 리소스", len(selected))
+    m3.metric("주 점수", policy.primary_score)
 m4.metric("시장 데이터", len(flatten_market_rows(st.session_state.market_snapshot)) if st.session_state.market_snapshot else 0)
 
 logs = st.session_state.get(state_key("logs", mode), [])
@@ -401,21 +410,79 @@ if logs:
         for log in logs:
             st.write(f"- {log}")
 
-main_tabs = st.tabs(["리소스 선택", "생성", "결과", "구조"])
+main_tabs = st.tabs(["사건 선택" if mode == MODE_STORY else "리소스 선택", "생성", "결과", "구조"])
 
 with main_tabs[0]:
     if not resources:
         st.info("왼쪽에서 현재 모드용 리소스를 먼저 수집하세요.")
+    elif mode == MODE_STORY:
+        candidates = [dict(c) for c in st.session_state.story_event_candidates or []]
+        q1, q2 = st.columns([2, 1])
+        query = q1.text_input("사건 검색", "", key="story_event_query")
+        min_score = q2.slider("최소 Hero Score", 0, 100, 0, 5, key="story_event_min_score")
+        filtered_events = []
+        for c in candidates:
+            haystack = " ".join([
+                str(c.get("headline_ja") or c.get("headline_seed") or ""),
+                " ".join(str(v) for v in c.get("entities") or []),
+                " ".join(str(v) for v in c.get("source_names") or []),
+            ]).lower()
+            if query and query.lower() not in haystack:
+                continue
+            if float(c.get("hero_story_score") or 0) < min_score:
+                continue
+            filtered_events.append(c)
+
+        if not filtered_events:
+            st.info("조건에 맞는 사건 후보가 없습니다.")
+        else:
+            options = [str(c.get("id")) for c in filtered_events]
+            current = str(st.session_state.get("selected_story_event_id") or "")
+            index = options.index(current) if current in options else 0
+            lookup = {str(c.get("id")): c for c in filtered_events}
+            chosen = st.radio(
+                "스토리로 만들 사건 1개를 선택하세요",
+                options,
+                index=index,
+                format_func=lambda event_id: event_label(lookup[event_id]),
+                key="story_event_radio",
+            )
+            st.session_state.selected_story_event_id = chosen
+            selected_event = lookup[chosen]
+            selected = selected_story_resources()
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Hero Score", selected_event.get("hero_story_score", 0))
+            c2.metric("Story Score", selected_event.get("story_score", 0))
+            c3.metric("Sources", selected_event.get("cluster_size") or len(selected_event.get("resource_ids") or []))
+            c4.metric("Coherence", selected_event.get("cluster_coherence", 0))
+            entities = ", ".join(selected_event.get("entities") or [])
+            if entities:
+                st.caption(f"Entities · {entities}")
+
+            with st.expander("이 사건에 묶인 소스", expanded=True):
+                allowed = {str(v) for v in selected_event.get("resource_ids") or []}
+                event_rows = [row for row in resources if str(row.get("id") or "") in allowed]
+                st.dataframe(
+                    [
+                        {
+                            "source": row.get("source"),
+                            "story_score": row.get("story_score"),
+                            "title": row.get("title"),
+                            "url": row.get("url"),
+                        }
+                        for row in event_rows
+                    ],
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={"url": st.column_config.LinkColumn("URL")},
+                )
+            st.caption("선택 이후 Story ranking은 종료됩니다. 생성 단계에서는 이 사건 안에서만 Anchor와 보조 근거를 정리합니다.")
     else:
         f1, f2, f3 = st.columns([2, 1, 1])
         query = f1.text_input("검색", "", key=f"query_{mode}")
         min_score = f2.slider("최소 점수", 0, 100, 0, 5, key=f"min_score_{mode}")
-        archetype_filter: list[str] = []
-        if mode == MODE_STORY:
-            f3.caption("Story score 기준 · 구조는 생성 시 결정")
-        else:
-            f3.caption("Trader score 기준")
-
+        f3.caption("Trader score 기준")
         filtered: list[dict] = []
         for row in resources:
             haystack = f"{row.get('title', '')} {row.get('source', '')} {row.get('tags', '')}".lower()
@@ -425,160 +492,110 @@ with main_tabs[0]:
                 continue
             filtered.append(row)
 
-        selected_ids = set(st.session_state.get(state_key("selected_ids", mode), []))
-        if mode == MODE_STORY:
-            display_rows = [
-                {
-                    "선택": row.get("id") in selected_ids,
-                    "id": row.get("id"),
-                    "story": row.get("story_score"),
-                    "trader": row.get("trader_score"),
-                    "hook": row.get("story_hook_score"),
-                    "change": row.get("change_score"),
-                    "scale": row.get("scale_score"),
-                    "evidence": row.get("evidence_story_score"),
-                    "visual": row.get("visuality_score"),
-                    "source": row.get("source"),
-                    "title": row.get("title"),
-                    "url": row.get("url"),
-                }
-                for row in filtered
-            ]
-            disabled = ["id", "story", "trader", "hook", "change", "scale", "evidence", "visual", "source", "title", "url"]
-        else:
-            display_rows = [
-                {
-                    "선택": row.get("id") in selected_ids,
-                    "id": row.get("id"),
-                    "score": row.get("trader_score"),
-                    "risk": row.get("risk_score"),
-                    "source": row.get("source"),
-                    "tags": row.get("tags"),
-                    "title": row.get("title"),
-                    "url": row.get("url"),
-                }
-                for row in filtered
-            ]
-            disabled = ["id", "score", "risk", "source", "tags", "title", "url"]
-
+        selected_ids = set(st.session_state.selected_ids_trader or [])
+        display_rows = [
+            {
+                "선택": row.get("id") in selected_ids,
+                "id": row.get("id"),
+                "score": row.get("trader_score"),
+                "risk": row.get("risk_score"),
+                "source": row.get("source"),
+                "tags": row.get("tags"),
+                "title": row.get("title"),
+                "url": row.get("url"),
+            }
+            for row in filtered
+        ]
         edited = st.data_editor(
             display_rows,
             hide_index=True,
             use_container_width=True,
-            disabled=disabled,
-            column_config={
-                "선택": st.column_config.CheckboxColumn("선택"),
-                "url": st.column_config.LinkColumn("URL"),
-            },
-            key=f"resource_selector_{mode}",
+            disabled=["id", "score", "risk", "source", "tags", "title", "url"],
+            column_config={"선택": st.column_config.CheckboxColumn("선택"), "url": st.column_config.LinkColumn("URL")},
+            key="resource_selector_trader",
         )
         edited_rows = records(edited)
         visible_ids = {row.get("id") for row in filtered if row.get("id")}
         selected_visible = {row.get("id") for row in edited_rows if row.get("선택") and row.get("id")}
         preserved_hidden = selected_ids - visible_ids
-        st.session_state[state_key("selected_ids", mode)] = list(preserved_hidden | selected_visible)
-        selected = selected_resources(mode)
+        st.session_state.selected_ids_trader = list(preserved_hidden | selected_visible)
+        selected = selected_resources(MODE_TRADER)
 
         b1, b2, b3 = st.columns([1, 1, 2])
-        if b1.button(f"상위 {policy.default_select_count}개 선택", use_container_width=True, key=f"top_select_{mode}"):
-            st.session_state[state_key("selected_ids", mode)] = [row.get("id") for row in filtered[: policy.default_select_count] if row.get("id")]
+        if b1.button(f"상위 {policy.default_select_count}개 선택", use_container_width=True, key="top_select_trader"):
+            st.session_state.selected_ids_trader = [row.get("id") for row in filtered[: policy.default_select_count] if row.get("id")]
             st.rerun()
-        if b2.button("선택 초기화", use_container_width=True, key=f"clear_select_{mode}"):
-            st.session_state[state_key("selected_ids", mode)] = []
+        if b2.button("선택 초기화", use_container_width=True, key="clear_select_trader"):
+            st.session_state.selected_ids_trader = []
             st.rerun()
         b3.caption(f"현재 선택: {len(selected)}건")
 
-        if mode == MODE_STORY and filtered:
-            with st.expander("왜 이 소재가 스토리 후보인가", expanded=False):
-                st.dataframe(
-                    [
-                        {
-                            "story_score": row.get("story_score"),
-                            "hook": row.get("story_hook_score"),
-                            "conflict": row.get("conflict_score"),
-                            "change": row.get("change_score"),
-                            "scale": row.get("scale_score"),
-                            "evidence": row.get("evidence_story_score"),
-                            "market_implication": row.get("market_implication_score"),
-                            "visuality": row.get("visuality_score"),
-                            "title": row.get("title"),
-                        }
-                        for row in filtered[:15]
-                    ],
-                    hide_index=True,
-                    use_container_width=True,
-                )
-
 with main_tabs[1]:
-    selected = selected_resources(mode)
-    if not selected:
-        st.info("사용할 리소스를 먼저 선택하세요.")
-    elif mode == MODE_TRADER:
-        st.subheader("트레이더 브리핑 생성")
-        st.caption("이 경로만 시장 snapshot, 가격 레벨, 파생, 시나리오, 매매 조건을 생성합니다.")
-        if st.button("트레이더 브리핑 + 카드 생성", type="primary", use_container_width=True, key="run_trader"):
-            if not st.session_state.market_snapshot:
-                with st.spinner("트레이더용 시장 데이터를 수집하는 중입니다."):
-                    st.session_state.market_snapshot = collect_market_snapshot()
-            with st.spinner("선택 기사 원문을 취합하는 중입니다."):
-                enriched, enrich_logs = enrich_material(selected, auto_fetch_body)
-                st.session_state.enriched_trader = enriched
-            config = provider_config(provider_label, temperature)
-            config["brand_outro"] = {
-                "brand_name": DISPLAY_BRAND_LABEL,
-                "cta": brand_cta.strip() or DEFAULT_CTA,
-                "account": brand_account.strip(),
-            }
-            briefing_type = "weekly" if briefing_type_label == "주간 방향" else "daily"
-            with st.spinner("트레이더 전용 추론 파이프라인 실행 중입니다."):
-                result = generate_trader_result(
-                    enriched,
-                    st.session_state.market_snapshot,
-                    briefing_type,
-                    tone,
-                    config,
-                    output_locale,
-                    custom_card_count,
-                )
-            if result.error:
-                st.error(result.error)
-            else:
-                st.session_state.trader_brief = result.brief
-                st.session_state.trader_package = result.content_package
-                st.success("트레이더 브리핑 생성 완료")
-            if enrich_logs:
-                with st.expander("원문 취합 로그", expanded=False):
-                    for log in enrich_logs:
-                        st.write(f"- {log}")
-        render_market_snapshot(st.session_state.market_snapshot)
+    if mode == MODE_TRADER:
+        selected = selected_resources(MODE_TRADER)
+        if not selected:
+            st.info("사용할 리소스를 먼저 선택하세요.")
+        else:
+            st.subheader("트레이더 브리핑 생성")
+            st.caption("이 경로만 시장 snapshot, 가격 레벨, 파생, 시나리오, 매매 조건을 생성합니다.")
+            if st.button("트레이더 브리핑 + 카드 생성", type="primary", use_container_width=True, key="run_trader"):
+                if not st.session_state.market_snapshot:
+                    with st.spinner("트레이더용 시장 데이터를 수집하는 중입니다."):
+                        st.session_state.market_snapshot = collect_market_snapshot()
+                with st.spinner("선택 기사 원문을 취합하는 중입니다."):
+                    enriched, enrich_logs = enrich_material(selected, auto_fetch_body)
+                    st.session_state.enriched_trader = enriched
+                config = provider_config(provider_label, temperature)
+                config["brand_outro"] = {"brand_name": DISPLAY_BRAND_LABEL, "cta": brand_cta.strip() or DEFAULT_CTA, "account": brand_account.strip()}
+                briefing_type = "weekly" if briefing_type_label == "주간 방향" else "daily"
+                with st.spinner("트레이더 전용 추론 파이프라인 실행 중입니다."):
+                    result = generate_trader_result(enriched, st.session_state.market_snapshot, briefing_type, tone, config, output_locale, custom_card_count)
+                if result.error:
+                    st.error(result.error)
+                else:
+                    st.session_state.trader_brief = result.brief
+                    st.session_state.trader_package = result.content_package
+                    st.success("트레이더 브리핑 생성 완료")
+                if enrich_logs:
+                    with st.expander("원문 취합 로그", expanded=False):
+                        for log in enrich_logs:
+                            st.write(f"- {log}")
+            render_market_snapshot(st.session_state.market_snapshot)
     else:
-        st.subheader("스토리텔링 콘텐츠 생성")
-        st.caption("이 경로는 트레이더 브리핑을 만들지 않습니다. 선택된 원문을 Fact Graph로 구조화한 뒤 Story Plan을 동적으로 만듭니다.")
-        if st.button("Hero Story + 카드뉴스 생성", type="primary", use_container_width=True, key="run_story"):
-            with st.spinner("스토리 후보 원문을 취합하는 중입니다."):
-                enriched, enrich_logs = enrich_material(selected, auto_fetch_body)
-                st.session_state.enriched_story = enriched
-            config = provider_config(provider_label, temperature)
-            with st.spinner("스토리 점수 → 사건 클러스터 → Hero Story → Fact Graph → Story Plan → 카드 전개를 생성하는 중입니다."):
-                result = generate_story_package(
-                    enriched,
-                    total_card_count=story_card_count,
-                    config=config,
-                    output_locale="ja-JP",
-                    brand={"cta": brand_cta.strip() or DEFAULT_CTA, "account": brand_account.strip()},
-                    generation_seed=str(time.time_ns()),
-                )
-            if result.error:
-                st.error(result.error)
-            else:
-                st.session_state.story_package = result.package
-                st.success("스토리텔링 카드뉴스 생성 완료")
-                if result.model_warning:
-                    st.warning(result.model_warning)
-            if enrich_logs:
-                with st.expander("원문 취합 로그", expanded=False):
-                    for log in enrich_logs:
-                        st.write(f"- {log}")
+        event = selected_story_event()
+        event_rows = selected_story_resources()
+        if not event or not event_rows:
+            st.info("먼저 '사건 선택' 탭에서 스토리 사건 1개를 선택하세요.")
+        else:
+            st.subheader("스토리텔링 콘텐츠 생성")
+            st.caption("선택한 사건은 고정됩니다. 엔진은 사건을 바꾸지 않고 Anchor·보조 근거·Fact Graph·Story Plan만 구성합니다.")
+            st.info(event.get("headline_ja") or event.get("headline_seed") or event.get("topic") or "Selected Event")
+            if st.button("선택 사건으로 카드뉴스 생성", type="primary", use_container_width=True, key="run_story"):
+                with st.spinner("선택 사건에 포함된 원문을 취합하는 중입니다."):
+                    enriched, enrich_logs = enrich_material(event_rows, auto_fetch_body)
+                    st.session_state.enriched_story = enriched
+                config = provider_config(provider_label, temperature)
+                with st.spinner("선택 사건 고정 → Anchor/Corroboration → Fact Graph → Story Plan → LLM Hook → 카드 생성 중입니다."):
+                    result = generate_story_package(
+                        enriched,
+                        total_card_count=story_card_count,
+                        config=config,
+                        output_locale="ja-JP",
+                        brand={"cta": brand_cta.strip() or DEFAULT_CTA, "account": brand_account.strip()},
+                        generation_seed=str(time.time_ns()),
+                        selected_event=event,
+                    )
+                if result.error:
+                    st.error(result.error)
+                else:
+                    st.session_state.story_package = result.package
+                    st.success("스토리텔링 카드뉴스 생성 완료")
+                    if result.model_warning:
+                        st.warning(result.model_warning)
+                if enrich_logs:
+                    with st.expander("원문 취합 로그", expanded=False):
+                        for log in enrich_logs:
+                            st.write(f"- {log}")
 
 with main_tabs[2]:
     if mode == MODE_TRADER:
@@ -590,29 +607,11 @@ with main_tabs[2]:
             st.subheader("트레이더 결과")
             render_trader_brief(brief)
             try:
-                excel_bytes = build_trader_excel(
-                    brief,
-                    package,
-                    st.session_state.enriched_trader or selected_resources(MODE_TRADER),
-                    st.session_state.market_snapshot,
-                )
-                st.download_button(
-                    "Excel + 카드 미리보기 이미지 다운로드",
-                    excel_bytes,
-                    file_name=f"kiyosaki_trader_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key="download_trader_excel",
-                )
+                excel_bytes = build_trader_excel(brief, package, st.session_state.enriched_trader or selected_resources(MODE_TRADER), st.session_state.market_snapshot)
+                st.download_button("Excel + 카드 미리보기 이미지 다운로드", excel_bytes, file_name=f"kiyosaki_trader_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="download_trader_excel")
             except Exception as error:
                 st.error(f"Excel 생성 실패: {error}")
-            st.download_button(
-                "트레이더 JSON 다운로드",
-                json.dumps({"brief": brief, "package": package}, ensure_ascii=False, indent=2, default=str),
-                file_name="kiyosaki_trader.json",
-                mime="application/json",
-                use_container_width=True,
-            )
+            st.download_button("트레이더 JSON 다운로드", json.dumps({"brief": brief, "package": package}, ensure_ascii=False, indent=2, default=str), file_name="kiyosaki_trader.json", mime="application/json", use_container_width=True)
             render_card_package(package)
     else:
         package = st.session_state.story_package
@@ -622,32 +621,13 @@ with main_tabs[2]:
             st.subheader("스토리텔링 결과")
             render_story_summary(package)
             try:
-                excel_bytes = build_story_excel(package, st.session_state.enriched_story or selected_resources(MODE_STORY))
-                st.download_button(
-                    "Excel + 카드 미리보기 이미지 다운로드",
-                    excel_bytes,
-                    file_name=f"kiyosaki_story_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key="download_story_excel",
-                )
+                excel_bytes = build_story_excel(package, st.session_state.enriched_story or selected_story_resources())
+                st.download_button("Excel + 카드 미리보기 이미지 다운로드", excel_bytes, file_name=f"kiyosaki_story_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="download_story_excel")
             except Exception as error:
                 st.error(f"Excel 생성 실패: {error}")
             c1, c2 = st.columns(2)
-            c1.download_button(
-                "Story JSON 다운로드",
-                json.dumps(package, ensure_ascii=False, indent=2, default=str),
-                file_name="kiyosaki_story.json",
-                mime="application/json",
-                use_container_width=True,
-            )
-            c2.download_button(
-                "Story Note 다운로드",
-                package.get("note_markdown", ""),
-                file_name="kiyosaki_story_note.md",
-                mime="text/markdown",
-                use_container_width=True,
-            )
+            c1.download_button("Story JSON 다운로드", json.dumps(package, ensure_ascii=False, indent=2, default=str), file_name="kiyosaki_story.json", mime="application/json", use_container_width=True)
+            c2.download_button("Story Note 다운로드", package.get("note_markdown", ""), file_name="kiyosaki_story_note.md", mime="text/markdown", use_container_width=True)
             render_card_package(package)
 
 with main_tabs[3]:
@@ -655,28 +635,27 @@ with main_tabs[3]:
     st.code(
         """MODE SELECT
 ├─ TRADER
-│  ├─ trader source preset
-│  ├─ trader_score ranking
-│  ├─ market snapshot required
-│  ├─ generate_trader_brief()
-│  ├─ build_trader_content_package()
-│  └─ trader Excel + previews
+│  ├─ multi-resource selection
+│  ├─ trader_score + market snapshot
+│  └─ trader briefing / cards / Excel
 │
 └─ STORY
-   ├─ story source preset + official policy sources
-   ├─ generic story_score ranking
-   ├─ full article enrichment + structural cleaner
+   ├─ broad multi-source collection
+   ├─ generic story scoring
    ├─ same-event clustering
-   ├─ Hero Story selection
-   ├─ Fact Graph (entity / relation / value / timeline)
+   ├─ user selects exactly ONE Event Candidate
+   ├─ selected event is locked; ranking stops here
+   ├─ anchor + same-event corroboration only
+   ├─ full article enrichment + structural cleaner
+   ├─ typed Fact Graph
    ├─ dynamic Story Plan / Card Plan
-   ├─ archetype tag is assigned after planning
-   ├─ evidence-bound copy + semantic visual scenes
-   └─ story Excel + Story_Graph + Story_Plan + previews
+   ├─ Card 1: dedicated high-creativity LLM hook pass (5 candidates)
+   ├─ evidence / ja-JP / hook-style / scene QA
+   └─ Story Excel + Graph + Plan + previews
 
+IMPORTANT: STORY NEVER REPLACES THE USER-SELECTED EVENT WITH ANOTHER HERO.
 IMPORTANT: STORY DOES NOT CALL generate_trader_brief() OR generate_content_package().
-IMPORTANT: STORY PLAN IS NOT SELECTED BY A HARD-CODED ARTICLE OR ARCHETYPE TEMPLATE.
 """,
         language="text",
     )
-    st.write("트레이더와 스토리 상태도 각각 `trader_*`, `story_*`로 분리되어 서로 덮어쓰지 않습니다.")
+    st.write("Trader는 다중 리소스 종합, Story는 단일 사건 선택 후 깊이 있는 제작으로 분리됩니다.")
