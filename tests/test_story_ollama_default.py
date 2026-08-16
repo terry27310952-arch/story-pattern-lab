@@ -114,10 +114,12 @@ class StoryOllamaDefaultTest(unittest.TestCase):
     def test_runtime_entrypoint_declares_cloud_default_and_api_key_gate(self) -> None:
         source = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
         self.assertIn('RUNTIME_TOKEN = "dual-pipeline-v10.5"', source)
-        self.assertIn('st.session_state["provider_story"] = "Ollama 로컬 추론 모델"', source)
+        self.assertIn('STORY_PROVIDER_CLOUD = "Ollama Cloud · 기본 추론 모델"', source)
+        self.assertIn('st.session_state["provider_story"] = STORY_PROVIDER_CLOUD', source)
         self.assertIn("Ollama Cloud API Key", source)
         self.assertIn("story_llm_runtime.check_ollama", source)
-        self.assertIn('"base_url": "https://ollama.com/v1"', source)
+        self.assertIn('story_llm_runtime.ollama_api_url(base, "chat")', source)
+        self.assertIn("story_llm_runtime.ollama_headers", source)
         self.assertNotIn("Cloud에서 접근 가능한 OLLAMA_BASE_URL이 필요합니다", source)
 
 
