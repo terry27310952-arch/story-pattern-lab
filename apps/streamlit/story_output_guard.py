@@ -3,8 +3,10 @@ from __future__ import annotations
 import copy
 import re
 
+import story_japanese_rewriter
 
-STORY_OUTPUT_GUARD_VERSION = "story-output-guard-v6.2"
+
+STORY_OUTPUT_GUARD_VERSION = "story-output-guard-v6.3"
 DISPLAY_BRAND_LABEL = "キヨサキ"
 FORBIDDEN_VISIBLE_TOKENS = ["THE OBSERVER", "The Observer"]
 
@@ -69,19 +71,114 @@ def sanitize_story_package(package: dict) -> dict:
 
     quality = next_package.setdefault("content_quality", {})
     quality["output_guard"] = STORY_OUTPUT_GUARD_VERSION
+    quality["japanese_rewriter"] = story_japanese_rewriter.STORY_JAPANESE_REWRITER_VERSION
     quality["visible_language_policy"] = "ja-JP; no Korean; no THE OBSERVER; text-only キヨサキ"
     return next_package
+
+
+def _patch_model_cards(story_content_pipeline) -> None:
+    """Repair missing/English batch LLM cards one role at a time before fallback copy is used."""
+    if getattr(story_content_pipeline, "_kiyosaki_ja_rewriter_patch", None) == STORY_OUTPUT_GUARD_VERSION:
+        return
+    original_model_cards = getattr(story_content_pipeline, "_model_cards", None)
+    if not callable(original_model_cards):
+        return
+
+    def model_cards_with_ja_repair(config: dict, hero: dict, plan: dict, graph: dict):
+        by_role, warning = original_model_cards(config, hero, plan, graph)
+        by_role = dict(by_role or {})
+        provider = str(config.get("provider") or getattr(story_content_pipeline, "PROVIDER_LOCAL", "local"))
+        if provider == getattr(story_content_pipeline, "PROVIDER_LOCAL", "local"):
+            return by_role, warning
+
+        repair_notes: list[str] = []
+        failed_roles: list[str] = []
+        subject = story_content_pipeline._subject(plan, hero)
+
+        for item in plan.get("cards") or []:
+            role = str(item.get("role") or "")
+            if not role or role == "hook":
+                continue
+            facts = story_content_pipeline._card_facts(graph, item)
+            if not facts:
+                continue
+            evidence = story_content_pipeline._evidence_text(facts)
+            current = dict(by_role.get(role) or {})
+            headline = story_content_pipeline._clean(current.get("headline"), 90)
+            body = story_content_pipeline._clean(current.get("body"), 300)
+            current_ok = bool(
+                headline
+                and body
+                and story_japanese_rewriter.japanese_ratio(f"{headline} {body}") >= 0.45
+                and story_content_pipeline._claim_ok(headline, body, evidence)
+            )
+            if current_ok:
+                current["_copy_source"] = "batch_llm"
+                by_role[role] = current
+                continue
+
+            repair = story_japanese_rewriter.rewrite_card(
+                config,
+                role=role,
+                evidence=evidence,
+                subject=subject,
+                original_headline=headline,
+                original_body=body,
+                hook=False,
+            )
+            repaired_headline = story_content_pipeline._clean(repair.get("headline"), 90)
+            repaired_body = story_content_pipeline._clean(repair.get("body"), 300)
+            repaired_ok = bool(
+                repair.get("accepted")
+                and repaired_headline
+                and repaired_body
+                and story_japanese_rewriter.japanese_ratio(f"{repaired_headline} {repaired_body}") >= 0.45
+                and story_content_pipeline._claim_ok(repaired_headline, repaired_body, evidence)
+            )
+            if repaired_ok:
+                by_role[role] = {
+                    "role": role,
+                    "headline": repaired_headline,
+                    "body": repaired_body,
+                    "_copy_source": "ja_rewriter",
+                    "_rewrite_attempts": int(repair.get("attempts") or 0),
+                }
+                repair_notes.append(f"{role}:repaired:{int(repair.get('attempts') or 0)}")
+            else:
+                failed_roles.append(role)
+                detail = str(repair.get("warning") or "validation_failed")
+                repair_notes.append(f"{role}:failed:{detail[:120]}")
+
+        notes = "; ".join(repair_notes)
+        if failed_roles:
+            notes = (notes + "; " if notes else "") + "unrepaired_roles=" + ",".join(failed_roles)
+        combined_warning = warning
+        if notes:
+            combined_warning = f"{warning} / {notes}" if warning else notes
+        return by_role, combined_warning
+
+    story_content_pipeline._model_cards = model_cards_with_ja_repair
+    story_content_pipeline._kiyosaki_ja_rewriter_patch = STORY_OUTPUT_GUARD_VERSION
 
 
 def apply_generation_guard(story_content_pipeline) -> None:
     if getattr(story_content_pipeline, "_kiyosaki_story_output_guard", None) == STORY_OUTPUT_GUARD_VERSION:
         return
+
+    # This patch runs before generate_story_package executes. It makes the external
+    # model the Japanese rewrite authority when batch output is missing, malformed,
+    # English-heavy, or rejected by evidence/number validation.
+    _patch_model_cards(story_content_pipeline)
     original = story_content_pipeline.generate_story_package
 
     def generate_story_package(*args, **kwargs):
         result = original(*args, **kwargs)
         if getattr(result, "package", None):
             result.package = sanitize_story_package(result.package)
+        elif getattr(result, "error", None) and getattr(result, "model_warning", None):
+            # Do not hide the actual model/rewrite failure behind only the final language gate.
+            if "Model detail:" not in str(result.error):
+                result.error = f"{result.error}\nModel detail: {result.model_warning}"
         return result
 
     story_content_pipeline.generate_story_package = generate_story_package
