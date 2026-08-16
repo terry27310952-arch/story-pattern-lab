@@ -6,7 +6,7 @@ import re
 import story_japanese_rewriter
 
 
-STORY_OUTPUT_GUARD_VERSION = "story-output-guard-v6.5"
+STORY_OUTPUT_GUARD_VERSION = "story-output-guard-v6.6"
 DISPLAY_BRAND_LABEL = "キヨサキ"
 FORBIDDEN_VISIBLE_TOKENS = ["THE OBSERVER", "The Observer"]
 
@@ -88,8 +88,27 @@ def _join_warning(*parts: object) -> str:
     return " / ".join(str(v).strip() for v in parts if str(v or "").strip())
 
 
+def _patch_hook_fallback(story_content_pipeline) -> None:
+    """Never let an English title become the deterministic Hook fallback."""
+    marker = getattr(story_content_pipeline, "_kiyosaki_ja_hook_fallback_patch", None)
+    if marker == STORY_OUTPUT_GUARD_VERSION:
+        return
+    original_fallback = getattr(story_content_pipeline, "_fallback_copy", None)
+    if not callable(original_fallback):
+        return
+
+    def fallback_copy(role: str, facts: list[dict], plan: dict, hero: dict):
+        headline, body = original_fallback(role, facts, plan, hero)
+        if role == "hook" and story_japanese_rewriter.japanese_ratio(f"{headline} {body}") < 0.42:
+            return "前提が、静かに変わった。", ""
+        return headline, body
+
+    story_content_pipeline._fallback_copy = fallback_copy
+    story_content_pipeline._kiyosaki_ja_hook_fallback_patch = STORY_OUTPUT_GUARD_VERSION
+
+
 def _patch_hook_generation(story_content_pipeline) -> None:
-    """Guarantee that a failed/English Hook gets a dedicated ja-JP rewrite before the final gate."""
+    """Guarantee a Japanese, production-claim-safe Hook before the core pipeline sees it."""
     hook_engine = getattr(story_content_pipeline, "story_hook_engine", None)
     if hook_engine is None or not callable(getattr(hook_engine, "generate_hook", None)):
         return
@@ -130,6 +149,7 @@ def _patch_hook_generation(story_content_pipeline) -> None:
             headline
             and story_japanese_rewriter.japanese_ratio(combined) >= 0.42
             and story_japanese_rewriter.numeric_safe(headline, subline, evidence)
+            and story_content_pipeline._claim_ok(headline, subline, evidence)
         )
         if already_japanese:
             return result
@@ -146,7 +166,41 @@ def _patch_hook_generation(story_content_pipeline) -> None:
         )
         repaired_headline = story_content_pipeline._clean(repair.get("headline"), 90)
         repaired_subline = story_content_pipeline._clean(repair.get("body"), 90)
-        if repair.get("accepted") and repaired_headline:
+        repaired_claim_ok = bool(
+            repair.get("accepted")
+            and repaired_headline
+            and story_content_pipeline._claim_ok(repaired_headline, repaired_subline, evidence)
+        )
+
+        # A natural Japanese model may rewrite $100,000 as 10万ドル. The rewriter
+        # rejects that conversion, but the core pipeline has an even stricter claim
+        # canonicalizer. If the first repair still disagrees with the core validator,
+        # make one evidence-bound Hook without numbers rather than falling back to the
+        # original English title and failing the entire ja-JP package.
+        if not repaired_claim_ok:
+            repair_without_numbers = story_japanese_rewriter.rewrite_card(
+                config,
+                role="hook",
+                evidence=evidence,
+                subject=subject,
+                original_headline=re.sub(r"[$¥￥]?\d[\d,.]*\s*(?:%|MW|GW|億円|兆円|万円|円|億ドル|兆ドル|万ドル|ドル|USD|JPY|年)?", "", headline or fallback_headline, flags=re.I),
+                original_body="",
+                hook=True,
+                avoid_numbers=True,
+            )
+            alt_headline = story_content_pipeline._clean(repair_without_numbers.get("headline"), 90)
+            alt_subline = story_content_pipeline._clean(repair_without_numbers.get("body"), 90)
+            if (
+                repair_without_numbers.get("accepted")
+                and alt_headline
+                and story_content_pipeline._claim_ok(alt_headline, alt_subline, evidence)
+            ):
+                repair = repair_without_numbers
+                repaired_headline = alt_headline
+                repaired_subline = alt_subline
+                repaired_claim_ok = True
+
+        if repaired_claim_ok:
             style_pass = bool(hook_engine.hook_style_pass(repaired_headline, repaired_subline))
             score_fn = getattr(hook_engine, "_style_score", None)
             score = float(score_fn(repaired_headline, repaired_subline)) if callable(score_fn) else float(result.get("score") or 0)
@@ -165,11 +219,16 @@ def _patch_hook_generation(story_content_pipeline) -> None:
         raw_preview = str(repair.get("raw_preview") or "")[:180]
         return {
             **result,
+            "headline": "前提が、静かに変わった。",
+            "subline": "",
+            "source": "ja_failsafe",
             "warning": _join_warning(
                 result.get("warning"),
                 f"hook_ja_rewrite_failed:{detail}",
+                "hook_core_claim_validation_failed",
                 f"raw={raw_preview}" if raw_preview else "",
             ),
+            "style_pass": bool(hook_engine.hook_style_pass("前提が、静かに変わった。", "")),
             "rewrite_attempts": int(repair.get("attempts") or 0),
         }
 
@@ -268,6 +327,7 @@ def apply_generation_guard(story_content_pipeline) -> None:
         return
 
     _patch_language_gate(story_content_pipeline)
+    _patch_hook_fallback(story_content_pipeline)
     _patch_hook_generation(story_content_pipeline)
     _patch_model_cards(story_content_pipeline)
     original = story_content_pipeline.generate_story_package
