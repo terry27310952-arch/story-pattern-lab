@@ -52,6 +52,7 @@ import story_article_cleaner  # noqa: E402
 import story_source_engine_v5  # noqa: E402
 import story_graph_engine  # noqa: E402
 import story_hook_engine  # noqa: E402
+import story_llm_runtime  # noqa: E402
 import story_renderer_v4  # noqa: E402
 import story_renderer_v5  # noqa: E402
 import story_content_pipeline_v5  # noqa: E402
@@ -65,6 +66,7 @@ importlib.reload(story_article_cleaner)
 importlib.reload(story_source_engine_v5)
 importlib.reload(story_graph_engine)
 importlib.reload(story_hook_engine)
+importlib.reload(story_llm_runtime)
 importlib.reload(story_renderer_v4)
 importlib.reload(story_renderer_v5)
 importlib.reload(story_content_pipeline_v5)
@@ -86,52 +88,28 @@ def _secret_or_env(name: str, default: str = "") -> str:
 
 
 def _configured_story_llm() -> dict:
-    free_base = _secret_or_env("FREE_AI_API_BASE")
-    free_model = _secret_or_env("FREE_AI_MODEL")
-    free_key = _secret_or_env("FREE_AI_API_KEY")
-    if free_base and free_model:
-        return {
-            "provider": story_content_pipeline_v5.PROVIDER_OPENAI_COMPATIBLE,
-            "base_url": free_base,
-            "model": free_model,
-            "api_key": free_key,
-            "runtime_source": "FREE_AI_*",
-        }
-
-    ollama_base = _secret_or_env("OLLAMA_BASE_URL")
-    ollama_model = _secret_or_env("OLLAMA_MODEL")
-    if ollama_base and ollama_model:
-        return {
-            "provider": story_content_pipeline_v5.PROVIDER_OLLAMA,
-            "base_url": ollama_base,
-            "model": ollama_model,
-            "runtime_source": "OLLAMA_*",
-        }
-    return {}
+    """Ollama is the Story default; secrets/env only override its endpoint/model."""
+    return story_llm_runtime.ollama_config(
+        base_url=_secret_or_env("OLLAMA_BASE_URL", story_llm_runtime.DEFAULT_OLLAMA_BASE_URL),
+        model=_secret_or_env("OLLAMA_MODEL", story_llm_runtime.DEFAULT_OLLAMA_MODEL),
+        temperature=0.35,
+    )
 
 
 _story_llm = _configured_story_llm()
-if _story_llm:
-    desired_label = (
-        "OpenAI-compatible API · 외부 추론 모델"
-        if _story_llm.get("provider") == story_content_pipeline_v5.PROVIDER_OPENAI_COMPATIBLE
-        else "Ollama 로컬 추론 모델"
-    )
+_story_provider_init_key = "_story_default_provider_ollama_v1"
+if not st.session_state.get(_story_provider_init_key):
     current_story_provider = str(st.session_state.get("provider_story") or "")
     if not current_story_provider or current_story_provider.startswith("내장 규칙 기반"):
-        st.session_state["provider_story"] = desired_label
-else:
-    st.sidebar.warning(
-        "Story LLM이 아직 설정되지 않았습니다. 영어/비일본어 원문을 일본어 카드로 만들고 1번 Hook을 창의적으로 생성하려면 "
-        "OpenAI-compatible 또는 Ollama 모델 설정이 필요합니다."
-    )
+        st.session_state["provider_story"] = "Ollama 로컬 추론 모델"
+    st.session_state[_story_provider_init_key] = True
 
 
 _original_story_generate = story_content_pipeline_v5.generate_story_package
 
 
 def _generate_story_llm_first(*args, **kwargs):
-    """Use a configured reasoning model automatically for Story when the UI is still on deterministic fallback."""
+    """Run Story with Ollama by default and verify the endpoint/model before generation."""
     positional = list(args)
     if "config" in kwargs:
         config = dict(kwargs.get("config") or {})
@@ -142,30 +120,45 @@ def _generate_story_llm_first(*args, **kwargs):
 
     promoted = False
     if str(config.get("provider") or story_content_pipeline_v5.PROVIDER_LOCAL) == story_content_pipeline_v5.PROVIDER_LOCAL:
-        llm = _configured_story_llm()
-        if llm:
-            promoted = True
-            temperature = float(config.get("temperature") or 0.35)
-            config = {**config, **llm, "temperature": temperature}
-            if "config" in kwargs:
-                kwargs["config"] = config
-            elif len(positional) >= 3:
-                positional[2] = config
-        else:
+        promoted = True
+        temperature = float(config.get("temperature") or 0.35)
+        config = {**config, **_configured_story_llm(), "temperature": temperature}
+        if "config" in kwargs:
+            kwargs["config"] = config
+        elif len(positional) >= 3:
+            positional[2] = config
+
+    if str(config.get("provider") or "") == story_content_pipeline_v5.PROVIDER_OLLAMA:
+        base_url = str(config.get("base_url") or story_llm_runtime.DEFAULT_OLLAMA_BASE_URL)
+        model = str(config.get("model") or story_llm_runtime.DEFAULT_OLLAMA_MODEL)
+        status = story_llm_runtime.check_ollama(base_url, model, timeout=2.5)
+        st.session_state["story_ollama_status"] = status
+        if not status.get("reachable"):
             return story_content_pipeline_v5.StoryGenerationResult(
                 {},
                 error=(
-                    "Story mode requires an LLM for non-Japanese evidence and for the dedicated creative Hook pass. "
-                    "Configure OpenAI-compatible API (FREE_AI_API_BASE / FREE_AI_MODEL / optional FREE_AI_API_KEY) "
-                    "or Ollama, then generate again."
+                    f"Ollama에 연결할 수 없습니다: {base_url}. "
+                    "로컬 실행이면 `ollama serve`가 실행 중인지 확인하세요. Streamlit Cloud라면 localhost는 사용자의 PC가 아니라 "
+                    "Cloud 컨테이너를 가리키므로, Cloud에서 접근 가능한 OLLAMA_BASE_URL이 필요합니다."
+                ),
+            )
+        if not status.get("model_available"):
+            return story_content_pipeline_v5.StoryGenerationResult(
+                {},
+                error=(
+                    f"Ollama 연결은 정상이나 모델 '{model}'이 설치되어 있지 않습니다. "
+                    f"Ollama가 실행되는 호스트에서 `ollama pull {model}` 후 다시 생성하세요."
                 ),
             )
 
     result = _original_story_generate(*positional, **kwargs)
-    if promoted and getattr(result, "package", None):
+    if getattr(result, "package", None):
         quality = result.package.setdefault("content_quality", {})
-        quality["story_llm_auto_promoted"] = True
-        quality["story_llm_runtime_source"] = config.get("runtime_source")
+        quality["story_llm_default"] = "ollama"
+        quality["story_llm_runtime"] = story_llm_runtime.STORY_LLM_RUNTIME_VERSION
+        quality["story_llm_model"] = config.get("model")
+        quality["story_llm_base_url"] = config.get("base_url")
+        quality["story_llm_auto_promoted"] = promoted
     return result
 
 
@@ -210,11 +203,18 @@ st.sidebar.caption(f"Cleaner · {story_article_cleaner.STORY_ARTICLE_CLEANER_VER
 st.sidebar.caption(f"Source · {story_source_engine_v5.STORY_SOURCE_ENGINE_VERSION}")
 st.sidebar.caption(f"Graph · {story_graph_engine.STORY_GRAPH_ENGINE_VERSION}")
 st.sidebar.caption(f"Hook · {story_hook_engine.STORY_HOOK_ENGINE_VERSION}")
+st.sidebar.caption(f"LLM Runtime · {story_llm_runtime.STORY_LLM_RUNTIME_VERSION}")
 st.sidebar.caption(
-    "Story LLM · " + (
-        str(_story_llm.get("runtime_source")) if _story_llm else "NOT CONFIGURED"
-    )
+    f"Story LLM · Ollama · {_story_llm.get('model')} · {_story_llm.get('base_url')}"
 )
+_ollama_status = st.session_state.get("story_ollama_status") or {}
+if _ollama_status:
+    if _ollama_status.get("reachable") and _ollama_status.get("model_available"):
+        st.sidebar.success("Ollama 연결 · 모델 확인 완료")
+    elif _ollama_status.get("reachable"):
+        st.sidebar.warning("Ollama 연결됨 · 기본 모델 미설치")
+    else:
+        st.sidebar.error("Ollama 연결 실패")
 st.sidebar.caption(f"Story Renderer · {story_renderer_v5.STORY_RENDERER_VERSION}")
 st.sidebar.caption(f"Excel · {mode_exporter_v5.MODE_EXPORTER_VERSION}")
 
