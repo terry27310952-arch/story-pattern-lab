@@ -21,6 +21,12 @@ class StoryJapaneseRewriterTest(unittest.TestCase):
         self.assertEqual(parsed["headline"], "資金は入った。")
         self.assertEqual(parsed["body"], "価格はまだ追いついていない。")
 
+    def test_language_gate_treats_tickers_and_proper_names_as_neutral(self) -> None:
+        japanese = "BlackRockのBitcoin ETFに資金が流入した。BTC価格はまだ追いついていない。"
+        english = "BlackRock Bitcoin ETF saw another large inflow while the market price stayed flat."
+        self.assertGreaterEqual(story_japanese_rewriter.japanese_ratio(japanese), 0.80)
+        self.assertLess(story_japanese_rewriter.japanese_ratio(english), 0.20)
+
     def test_rewriter_retries_when_first_answer_invents_number(self) -> None:
         bad = '{"headline":"2029年に転換","body":"事業の軸が変わる。"}'
         good = '{"headline":"2028年が次の節目","body":"計画では2028年の稼働が示されている。"}'
