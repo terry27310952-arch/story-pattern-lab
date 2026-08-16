@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from io import BytesIO
 
 from openpyxl import Workbook
@@ -12,7 +11,7 @@ import mode_exporter_v4 as legacy
 import story_renderer_v5
 
 
-MODE_EXPORTER_VERSION = "mode-exporter-v10.0"
+MODE_EXPORTER_VERSION = "mode-exporter-v10.3"
 build_trader_excel = legacy.build_trader_excel
 
 
@@ -38,7 +37,7 @@ def add_preview_sheet(wb: Workbook, package: dict) -> int:
     ws.sheet_view.showGridLines = False
     ws["A1"] = "キヨサキ · Card Previews"
     ws["A1"].font = Font(size=16, bold=True)
-    ws["A2"] = "このシートの画像は、アプリと同一のStory v10レンダラーで生成されています。"
+    ws["A2"] = "このシートの画像は、アプリと同一のStory v10.3レンダラーで生成されています。"
     ws.column_dimensions["A"].width = 44
     ws.column_dimensions["B"].width = 44
 
@@ -77,6 +76,7 @@ def _context_rows(package: dict) -> list[dict]:
         {"item": "archetype_tag", "value": plan.get("archetype_tag")},
         {"item": "story_score", "value": hero.get("story_score")},
         {"item": "hero_story_score", "value": hero.get("hero_story_score")},
+        {"item": "hero_selection_reason", "value": quality.get("hero_selection_reason")},
         {"item": "hero_resource_ids", "value": context.get("hero_resource_ids")},
         {"item": "cluster_event_scores", "value": context.get("cluster_event_scores")},
         {"item": "story_thesis", "value": plan.get("thesis")},
@@ -89,12 +89,14 @@ def _context_rows(package: dict) -> list[dict]:
 def _candidate_rows(package: dict) -> list[dict]:
     rows = []
     for c in (package.get("story_context") or {}).get("candidates") or []:
+        hero_resource = c.get("hero_resource") or {}
         rows.append({
             "id": c.get("id"), "headline_seed": c.get("headline_seed"), "topic": c.get("topic"),
             "source_archetype_hint": c.get("archetype"), "story_score": c.get("story_score"),
             "hero_story_score": c.get("hero_story_score"), "confidence": c.get("confidence"),
             "cluster_size": c.get("cluster_size"), "cluster_coherence": c.get("cluster_coherence"),
-            "event_fingerprint": c.get("event_fingerprint"), "entities": c.get("entities"), "sources": c.get("source_names"),
+            "event_fingerprint": c.get("event_fingerprint"), "entities": c.get("entities"),
+            "ja_ratio": hero_resource.get("story_language_ratio_ja"), "sources": c.get("source_names"),
         })
     return rows
 
@@ -105,7 +107,8 @@ def _graph_rows(package: dict) -> list[dict]:
         {
             "id": f.get("id"), "source_id": f.get("source_id"), "index": f.get("index"),
             "subject": f.get("subject"), "relation": f.get("relation"), "values": f.get("values"),
-            "years": f.get("years"), "score": f.get("score"), "sentence": f.get("sentence"),
+            "value_details": f.get("value_details"), "years": f.get("years"), "complete": f.get("complete"),
+            "score": f.get("score"), "sentence": f.get("sentence"),
         }
         for f in graph.get("facts") or []
     ]
@@ -123,12 +126,15 @@ def _card_rows(package: dict) -> list[dict]:
     rows = []
     for set_name, card in _renderable_cards(package):
         direction = card.get("visual_direction") or {}
+        qa = card.get("qa") or {}
         rows.append({
             "set": set_name, "slide": card.get("slide"), "story_role": card.get("story_role"),
             "story_archetype": card.get("story_archetype"), "headline": card.get("headline"),
             "body": card.get("key_message"), "evidence_excerpt": card.get("evidence_excerpt"),
-            "evidence_refs": card.get("evidence_refs"), "fact_bound": (card.get("qa") or {}).get("fact_bound"),
-            "claim_evidence_consistent": (card.get("qa") or {}).get("claim_evidence_consistent"),
+            "evidence_refs": card.get("evidence_refs"), "fact_bound": qa.get("fact_bound"),
+            "claim_evidence_consistent": qa.get("claim_evidence_consistent"),
+            "evidence_sentence_complete": qa.get("evidence_sentence_complete"),
+            "scene_evidence_consistent": qa.get("scene_evidence_consistent"),
             "layout": direction.get("layout_variant"), "scene_type": direction.get("scene_type"),
             "visual_prompt_4_5": (direction.get("image_prompts") or {}).get("4:5"), "source": card.get("source"),
         })
@@ -142,16 +148,16 @@ def build_story_excel(package: dict, resources: list[dict]) -> bytes:
     legacy._append_rows(ws, ["item", "value"], _context_rows(package))
 
     candidates = wb.create_sheet("Story_Candidates")
-    legacy._append_rows(candidates, ["id", "headline_seed", "topic", "source_archetype_hint", "story_score", "hero_story_score", "confidence", "cluster_size", "cluster_coherence", "event_fingerprint", "entities", "sources"], _candidate_rows(package))
+    legacy._append_rows(candidates, ["id", "headline_seed", "topic", "source_archetype_hint", "story_score", "hero_story_score", "confidence", "cluster_size", "cluster_coherence", "event_fingerprint", "entities", "ja_ratio", "sources"], _candidate_rows(package))
 
     graph = wb.create_sheet("Story_Graph")
-    legacy._append_rows(graph, ["id", "source_id", "index", "subject", "relation", "values", "years", "score", "sentence"], _graph_rows(package))
+    legacy._append_rows(graph, ["id", "source_id", "index", "subject", "relation", "values", "value_details", "years", "complete", "score", "sentence"], _graph_rows(package))
 
     plan = wb.create_sheet("Story_Plan")
     legacy._append_rows(plan, ["order", "role", "fact_ids", "scene_type", "reason"], _plan_rows(package))
 
     cards = wb.create_sheet("Story_Cards")
-    legacy._append_rows(cards, ["set", "slide", "story_role", "story_archetype", "headline", "body", "evidence_excerpt", "evidence_refs", "fact_bound", "claim_evidence_consistent", "layout", "scene_type", "visual_prompt_4_5", "source"], _card_rows(package))
+    legacy._append_rows(cards, ["set", "slide", "story_role", "story_archetype", "headline", "body", "evidence_excerpt", "evidence_refs", "fact_bound", "claim_evidence_consistent", "evidence_sentence_complete", "scene_evidence_consistent", "layout", "scene_type", "visual_prompt_4_5", "source"], _card_rows(package))
 
     qa = wb.create_sheet("Story_QA")
     story_qa = (package.get("content_quality") or {}).get("story_qa") or {}
