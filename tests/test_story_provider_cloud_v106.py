@@ -21,7 +21,7 @@ class StoryProviderCloudV106Test(unittest.TestCase):
         self.assertIn('OLLAMA_CLOUD_BASE_URL', cloud_block)
         self.assertIn('OLLAMA_CLOUD_MODEL', cloud_block)
         self.assertNotIn('st.session_state.get("ollama_base_url")', cloud_block)
-        self.assertNotIn('OLLAMA_BASE_URL', cloud_block)
+        self.assertNotIn('_secret_or_env("OLLAMA_BASE_URL"', cloud_block)
 
     def test_deterministic_fallback_is_not_auto_promoted_to_ollama(self) -> None:
         entry = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
