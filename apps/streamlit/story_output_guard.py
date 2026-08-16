@@ -4,7 +4,7 @@ import copy
 import re
 
 
-STORY_OUTPUT_GUARD_VERSION = "story-output-guard-v6.1"
+STORY_OUTPUT_GUARD_VERSION = "story-output-guard-v6.2"
 DISPLAY_BRAND_LABEL = "キヨサキ"
 FORBIDDEN_VISIBLE_TOKENS = ["THE OBSERVER", "The Observer"]
 
@@ -21,8 +21,6 @@ def _clean_visible(value: object) -> str:
     text = " ".join(str(value or "").split())
     for token in FORBIDDEN_VISIBLE_TOKENS:
         text = text.replace(token, "")
-    # Story cards are Japanese output. Any accidental Korean fragment indicates an
-    # implementation/debug leak; do not try to machine-translate it at render time.
     text = re.sub(r"[가-힣]+(?:\s+[가-힣]+)*", "", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -44,9 +42,17 @@ def sanitize_story_package(package: dict) -> dict:
                 card["headline"] = "勢力ハンター キヨサキ"
                 card["subheadline"] = ""
                 card["key_message"] = _clean_visible(card.get("key_message")) or "フォローして、勢力が入ったポイントを無料でチェック。"
+            elif card.get("story_role") == "hook":
+                # A premium carousel hook may deliberately be a single line. Do not
+                # inject generic fallback body copy into an intentionally empty second line.
+                card["eyebrow"] = _safe_field(card, "eyebrow")
+                card["headline"] = _safe_field(card, "headline")
+                card["subheadline"] = _clean_visible(card.get("subheadline"))
+                card["key_message"] = _clean_visible(card.get("key_message"))
             else:
                 for key in ["eyebrow", "headline", "subheadline", "key_message"]:
                     card[key] = _safe_field(card, key)
+
             direction = card.setdefault("visual_direction", {})
             direction["brand_mark_policy"] = "text-only キヨサキ; no K monogram/icon"
             if card.get("card_type") != "brand_outro":
@@ -68,12 +74,6 @@ def sanitize_story_package(package: dict) -> dict:
 
 
 def apply_generation_guard(story_content_pipeline) -> None:
-    """Install only a final invariant guard around the independent story generator.
-
-    This is deliberately not a trader/story conversion patch. It cannot create cards,
-    choose an archetype, or alter evidence. It only enforces visible-language and brand
-    invariants on the already-independent Story package.
-    """
     if getattr(story_content_pipeline, "_kiyosaki_story_output_guard", None) == STORY_OUTPUT_GUARD_VERSION:
         return
     original = story_content_pipeline.generate_story_package
