@@ -6,7 +6,7 @@ import re
 import story_japanese_rewriter
 
 
-STORY_OUTPUT_GUARD_VERSION = "story-output-guard-v6.4"
+STORY_OUTPUT_GUARD_VERSION = "story-output-guard-v6.5"
 DISPLAY_BRAND_LABEL = "キヨサキ"
 FORBIDDEN_VISIBLE_TOKENS = ["THE OBSERVER", "The Observer"]
 
@@ -84,6 +84,99 @@ def _patch_language_gate(story_content_pipeline) -> None:
         hook_engine._jp_ratio = story_japanese_rewriter.japanese_ratio
 
 
+def _join_warning(*parts: object) -> str:
+    return " / ".join(str(v).strip() for v in parts if str(v or "").strip())
+
+
+def _patch_hook_generation(story_content_pipeline) -> None:
+    """Guarantee that a failed/English Hook gets a dedicated ja-JP rewrite before the final gate."""
+    hook_engine = getattr(story_content_pipeline, "story_hook_engine", None)
+    if hook_engine is None or not callable(getattr(hook_engine, "generate_hook", None)):
+        return
+    marker = getattr(hook_engine, "_kiyosaki_ja_hook_patch", None)
+    if marker == STORY_OUTPUT_GUARD_VERSION:
+        return
+
+    original_generate_hook = hook_engine.generate_hook
+
+    def generate_hook_with_ja_repair(
+        config: dict,
+        hero: dict,
+        plan: dict,
+        facts: list[dict],
+        fallback_headline: str,
+        fallback_subline: str = "",
+    ) -> dict:
+        result = dict(
+            original_generate_hook(
+                config,
+                hero,
+                plan,
+                facts,
+                fallback_headline,
+                fallback_subline,
+            )
+            or {}
+        )
+        provider = str(config.get("provider") or getattr(story_content_pipeline, "PROVIDER_LOCAL", "local"))
+        if provider == getattr(story_content_pipeline, "PROVIDER_LOCAL", "local"):
+            return result
+
+        headline = story_content_pipeline._clean(result.get("headline"), 90)
+        subline = story_content_pipeline._clean(result.get("subline"), 90)
+        combined = f"{headline} {subline}".strip()
+        evidence = story_content_pipeline._evidence_text(facts)
+        already_japanese = bool(
+            headline
+            and story_japanese_rewriter.japanese_ratio(combined) >= 0.42
+            and story_japanese_rewriter.numeric_safe(headline, subline, evidence)
+        )
+        if already_japanese:
+            return result
+
+        subject = story_content_pipeline._subject(plan, hero)
+        repair = story_japanese_rewriter.rewrite_card(
+            config,
+            role="hook",
+            evidence=evidence,
+            subject=subject,
+            original_headline=headline or fallback_headline,
+            original_body=subline or fallback_subline,
+            hook=True,
+        )
+        repaired_headline = story_content_pipeline._clean(repair.get("headline"), 90)
+        repaired_subline = story_content_pipeline._clean(repair.get("body"), 90)
+        if repair.get("accepted") and repaired_headline:
+            style_pass = bool(hook_engine.hook_style_pass(repaired_headline, repaired_subline))
+            score_fn = getattr(hook_engine, "_style_score", None)
+            score = float(score_fn(repaired_headline, repaired_subline)) if callable(score_fn) else float(result.get("score") or 0)
+            return {
+                **result,
+                "headline": repaired_headline,
+                "subline": repaired_subline,
+                "source": "ja_rewriter",
+                "score": round(score, 2),
+                "warning": _join_warning(result.get("warning"), repair.get("warning")),
+                "style_pass": style_pass,
+                "rewrite_attempts": int(repair.get("attempts") or 0),
+            }
+
+        detail = str(repair.get("warning") or "validation_failed")
+        raw_preview = str(repair.get("raw_preview") or "")[:180]
+        return {
+            **result,
+            "warning": _join_warning(
+                result.get("warning"),
+                f"hook_ja_rewrite_failed:{detail}",
+                f"raw={raw_preview}" if raw_preview else "",
+            ),
+            "rewrite_attempts": int(repair.get("attempts") or 0),
+        }
+
+    hook_engine.generate_hook = generate_hook_with_ja_repair
+    hook_engine._kiyosaki_ja_hook_patch = STORY_OUTPUT_GUARD_VERSION
+
+
 def _patch_model_cards(story_content_pipeline) -> None:
     """Repair missing/English batch LLM cards one role at a time before fallback copy is used."""
     if getattr(story_content_pipeline, "_kiyosaki_ja_rewriter_patch", None) == STORY_OUTPUT_GUARD_VERSION:
@@ -155,7 +248,8 @@ def _patch_model_cards(story_content_pipeline) -> None:
             else:
                 failed_roles.append(role)
                 detail = str(repair.get("warning") or "validation_failed")
-                repair_notes.append(f"{role}:failed:{detail[:120]}")
+                raw_preview = str(repair.get("raw_preview") or "")[:120]
+                repair_notes.append(f"{role}:failed:{detail[:100]}:{raw_preview}")
 
         notes = "; ".join(repair_notes)
         if failed_roles:
@@ -174,6 +268,7 @@ def apply_generation_guard(story_content_pipeline) -> None:
         return
 
     _patch_language_gate(story_content_pipeline)
+    _patch_hook_generation(story_content_pipeline)
     _patch_model_cards(story_content_pipeline)
     original = story_content_pipeline.generate_story_package
 
