@@ -7,7 +7,7 @@ from urllib.request import Request, urlopen
 import story_llm_runtime
 
 
-STORY_JAPANESE_REWRITER_VERSION = "story-ja-rewriter-v1.0"
+STORY_JAPANESE_REWRITER_VERSION = "story-ja-rewriter-v1.1"
 PROVIDER_LOCAL = "local"
 PROVIDER_OLLAMA = "ollama"
 PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
@@ -67,6 +67,21 @@ def parse_json_object(text: str) -> dict | None:
         if isinstance(parsed, dict):
             return parsed
     return None
+
+
+def _parse_line_protocol(text: str) -> tuple[str, str]:
+    value = str(text or "").strip()
+    headline = ""
+    body = ""
+    for line in value.splitlines():
+        stripped = line.strip()
+        head_match = re.match(r"^(?:\[?HEADLINE\]?|見出し|headline)\s*[:：]\s*(.+)$", stripped, flags=re.I)
+        body_match = re.match(r"^(?:\[?BODY\]?|本文|body)\s*[:：]\s*(.*)$", stripped, flags=re.I)
+        if head_match:
+            headline = _clean(head_match.group(1), 90)
+        elif body_match:
+            body = _clean(body_match.group(1), 300)
+    return headline, body
 
 
 def _post_json(url: str, payload: dict, headers: dict[str, str], timeout: int = 90) -> dict:
@@ -181,7 +196,7 @@ def rewrite_card(
     original_body: str = "",
     hook: bool = False,
 ) -> dict:
-    """Translate/rewrite one evidence-bound card into publishable ja-JP, with retry."""
+    """Translate/rewrite one evidence-bound card into publishable ja-JP, with recovery retries."""
     if str(config.get("provider") or PROVIDER_LOCAL) == PROVIDER_LOCAL:
         return {
             "accepted": False,
@@ -196,7 +211,6 @@ def rewrite_card(
         "あなたは日本の金融メディアの編集者です。入力されたEVIDENCEだけを根拠に、カード本文を自然な日本語へ書き直してください。"
         "翻訳調ではなく、日本人が読む短い編集文にしてください。数字、日付、固有名詞、因果関係を追加・推測・変更してはいけません。"
         "英語の原文を本文に残さないでください。固有名詞とティッカーは原綴りのままで構いません。"
-        "出力は必ずJSONオブジェクト1個だけにし、headlineとbody以外の説明文を付けないでください。"
     )
     if hook:
         system += (
@@ -217,25 +231,43 @@ def rewrite_card(
             "no_new_claims": True,
             "no_english_sentence_fallback": True,
         },
-        "schema": {"headline": "自然な日本語", "body": "自然な日本語。hookなら空文字可"},
     }
 
     warnings: list[str] = []
     last_raw = ""
-    for attempt in range(1, 3):
+    for attempt in range(1, 4):
         payload = dict(base_payload)
         payload["attempt"] = attempt
-        if attempt == 2:
+        if attempt < 3:
+            payload["schema"] = {"headline": "自然な日本語", "body": "自然な日本語。hookなら空文字可"}
+            if attempt == 2:
+                payload["repair_instruction"] = (
+                    "前回は形式または日本語品質の検証に失敗しました。説明文を一切付けず、JSONオブジェクト1個だけを返してください。"
+                    "EVIDENCEの意味を短く正確に日本語化してください。"
+                )
+            prompt_text = json.dumps(payload, ensure_ascii=False)
+        else:
             payload["repair_instruction"] = (
-                "前回は形式または日本語品質の検証に失敗しました。説明文を一切付けず、JSONオブジェクト1個だけを返してください。"
-                "EVIDENCEの意味を短く正確に日本語化してください。"
+                "JSON形式は使わず、必ず次の2行だけを返してください。\n"
+                "HEADLINE: 日本語の見出し\nBODY: 日本語の本文\n"
+                "説明、コードフェンス、前置きは禁止です。"
             )
-        raw, warning = _call_model(config, system, json.dumps(payload, ensure_ascii=False), temperature=0.18 if not hook else 0.55)
+            prompt_text = json.dumps(payload, ensure_ascii=False)
+
+        raw, warning = _call_model(
+            config,
+            system,
+            prompt_text,
+            temperature=0.16 if not hook else (0.50 if attempt < 3 else 0.35),
+        )
         last_raw = raw
         if warning:
             warnings.append(warning)
-        parsed = parse_json_object(raw)
-        headline, body = _extract_card(parsed)
+
+        if attempt < 3:
+            headline, body = _extract_card(parse_json_object(raw))
+        else:
+            headline, body = _parse_line_protocol(raw)
         if _valid_copy(headline, body, evidence, hook):
             return {
                 "accepted": True,
@@ -250,7 +282,7 @@ def rewrite_card(
         "accepted": False,
         "headline": "",
         "body": "",
-        "attempts": 2,
-        "warning": " / ".join(dict.fromkeys(warnings)) or "Japanese rewrite output failed validation after 2 attempts.",
+        "attempts": 3,
+        "warning": " / ".join(dict.fromkeys(warnings)) or "Japanese rewrite output failed validation after 3 attempts.",
         "raw_preview": _clean(last_raw, 240),
     }
