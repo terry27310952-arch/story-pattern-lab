@@ -6,7 +6,7 @@ import re
 import story_japanese_rewriter
 
 
-STORY_OUTPUT_GUARD_VERSION = "story-output-guard-v6.3"
+STORY_OUTPUT_GUARD_VERSION = "story-output-guard-v6.4"
 DISPLAY_BRAND_LABEL = "キヨサキ"
 FORBIDDEN_VISIBLE_TOKENS = ["THE OBSERVER", "The Observer"]
 
@@ -45,8 +45,6 @@ def sanitize_story_package(package: dict) -> dict:
                 card["subheadline"] = ""
                 card["key_message"] = _clean_visible(card.get("key_message")) or "フォローして、勢力が入ったポイントを無料でチェック。"
             elif card.get("story_role") == "hook":
-                # A premium carousel hook may deliberately be a single line. Do not
-                # inject generic fallback body copy into an intentionally empty second line.
                 card["eyebrow"] = _safe_field(card, "eyebrow")
                 card["headline"] = _safe_field(card, "headline")
                 card["subheadline"] = _clean_visible(card.get("subheadline"))
@@ -72,8 +70,18 @@ def sanitize_story_package(package: dict) -> dict:
     quality = next_package.setdefault("content_quality", {})
     quality["output_guard"] = STORY_OUTPUT_GUARD_VERSION
     quality["japanese_rewriter"] = story_japanese_rewriter.STORY_JAPANESE_REWRITER_VERSION
-    quality["visible_language_policy"] = "ja-JP; no Korean; no THE OBSERVER; text-only キヨサキ"
+    quality["visible_language_policy"] = "ja-JP; no Korean; no THE OBSERVER; Latin proper names/tickers are neutral"
     return next_package
+
+
+def _patch_language_gate(story_content_pipeline) -> None:
+    """Use one language detector everywhere so proper nouns do not look like English leakage."""
+    source_engine = getattr(story_content_pipeline, "source_engine", None)
+    if source_engine is not None:
+        source_engine.japanese_ratio = story_japanese_rewriter.japanese_ratio
+    hook_engine = getattr(story_content_pipeline, "story_hook_engine", None)
+    if hook_engine is not None and hasattr(hook_engine, "_jp_ratio"):
+        hook_engine._jp_ratio = story_japanese_rewriter.japanese_ratio
 
 
 def _patch_model_cards(story_content_pipeline) -> None:
@@ -165,9 +173,7 @@ def apply_generation_guard(story_content_pipeline) -> None:
     if getattr(story_content_pipeline, "_kiyosaki_story_output_guard", None) == STORY_OUTPUT_GUARD_VERSION:
         return
 
-    # This patch runs before generate_story_package executes. It makes the external
-    # model the Japanese rewrite authority when batch output is missing, malformed,
-    # English-heavy, or rejected by evidence/number validation.
+    _patch_language_gate(story_content_pipeline)
     _patch_model_cards(story_content_pipeline)
     original = story_content_pipeline.generate_story_package
 
@@ -176,7 +182,6 @@ def apply_generation_guard(story_content_pipeline) -> None:
         if getattr(result, "package", None):
             result.package = sanitize_story_package(result.package)
         elif getattr(result, "error", None) and getattr(result, "model_warning", None):
-            # Do not hide the actual model/rewrite failure behind only the final language gate.
             if "Model detail:" not in str(result.error):
                 result.error = f"{result.error}\nModel detail: {result.model_warning}"
         return result
