@@ -33,3 +33,10 @@ def test_missing_publication_time_never_counts_as_live():
     assert freshness_bucket("", now=now) == "unknown"
     assert freshness_bucket(row("old", 80)["posted_at"], now=now) == "stale"
     assert freshness_bucket(row("new", 1)["posted_at"], now=now) == "live"
+
+
+if __name__ == "__main__":
+    test_primary_24h_pool_blocks_fallback_when_enough()
+    test_24_to_48h_is_only_sparse_pool_fallback()
+    test_missing_publication_time_never_counts_as_live()
+    print("live source policy tests passed")
