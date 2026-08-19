@@ -100,14 +100,26 @@ def valid_defaults(names: list[str], registry: dict) -> list[str]:
     return [name for name in names if name in registry]
 
 
+def all_registry_defaults(preferred: list[str], registry: dict) -> list[str]:
+    """Select every currently registered RSS source while preserving mode-preferred ordering."""
+    selected = valid_defaults(preferred, registry)
+    for name in registry.keys():
+        if name not in selected:
+            selected.append(name)
+    return selected
+
+
 def default_sources(mode: str, rss_registry: dict, public_registry: dict) -> tuple[list[str], list[str]]:
+    # RSS is intentionally ALL-SELECTED by default for both modes. Mode-specific
+    # lists only control display/order priority; any newly registered RSS source
+    # is automatically appended and therefore selected without another code edit.
     if mode == MODE_STORY:
         return (
-            valid_defaults(STORY_RSS_DEFAULTS, rss_registry),
+            all_registry_defaults(STORY_RSS_DEFAULTS, rss_registry),
             valid_defaults(STORY_PUBLIC_DEFAULTS, public_registry),
         )
     return (
-        valid_defaults(TRADER_RSS_DEFAULTS, rss_registry),
+        all_registry_defaults(TRADER_RSS_DEFAULTS, rss_registry),
         valid_defaults(TRADER_PUBLIC_DEFAULTS, public_registry),
     )
 
