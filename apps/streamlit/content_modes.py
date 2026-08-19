@@ -18,6 +18,13 @@ TRADER_RSS_DEFAULTS = [
     "NewsBTC",
     "U.Today",
     "Blockworks",
+    "CoinPost JP",
+    "Cointelegraph Japan",
+    "Kraken Blog",
+    "CryptoSlate",
+    "SEC Press Releases",
+    "CFTC Press Releases",
+    "Federal Reserve Press Releases",
 ]
 TRADER_PUBLIC_DEFAULTS = [
     "CoinMarketCap Headlines",
@@ -35,6 +42,16 @@ STORY_RSS_DEFAULTS = [
     "CoinDesk Global",
     "Cryptonews JP",
     "Coinspeaker JP",
+    "CoinPost JP",
+    "Cointelegraph Japan",
+    "あたらしい経済",
+    "Kraken Blog",
+    "CryptoSlate",
+    "SEC Press Releases",
+    "CFTC Press Releases",
+    "Federal Reserve Press Releases",
+    "Reddit r/CryptoCurrency",
+    "Reddit r/Bitcoin",
 ]
 STORY_PUBLIC_DEFAULTS = [
     "Japan FSA Crypto Policy",
