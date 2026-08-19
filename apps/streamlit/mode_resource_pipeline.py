@@ -8,6 +8,13 @@ from urllib.request import Request, urlopen
 import resource_collector as core_collector
 import story_source_engine_v5 as story_engine
 from content_modes import MODE_STORY, MODE_TRADER, rank_resources
+from expanded_source_registry import (
+    EXPANDED_SOURCE_REGISTRY_VERSION,
+    annotate_source_metadata,
+    apply_expanded_sources,
+    discovery_sources,
+    merge_source_names,
+)
 from live_source_policy import (
     LIVE_MIN_CANDIDATES,
     LIVE_SOURCE_POLICY_VERSION,
@@ -15,6 +22,13 @@ from live_source_policy import (
     apply_live_patch,
     live_gate_log,
 )
+from topic_radar import (
+    TOPIC_RADAR_VERSION,
+    apply_story_heat_blend,
+    apply_topic_radar,
+    apply_trader_heat_blend,
+)
+from topic_signal_collector import TOPIC_SIGNAL_COLLECTOR_VERSION, collect_topic_signals
 from resource_collector import (
     PUBLIC_LIST_SOURCES,
     RSS_SOURCES,
@@ -26,23 +40,21 @@ from resource_collector import (
 )
 
 
-MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v10.1-live"
+MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v11.0-radar"
 
-# LIVE FIRST is installed before collect_resources runs. collect_resources resolves
-# collect_rss dynamically, so this replaces the old URL-only feedparser path with
-# an explicit no-cache HTTP request and a hard 48h ceiling.
+apply_expanded_sources(core_collector)
 apply_live_patch(core_collector)
 collect_core_resources = core_collector.collect_resources
 
 STORY_EXTRA_PUBLIC_SOURCES = {
-    "SEC Press Releases": {
+    "SEC Press Releases (HTML fallback)": {
         "url": "https://www.sec.gov/newsroom/press-releases",
         "category": "US securities policy and enforcement",
         "region": "US",
         "source_type": "official",
         "parser": "story_public",
     },
-    "CFTC Press Releases": {
+    "CFTC Press Releases (HTML fallback)": {
         "url": "https://www.cftc.gov/PressRoom/PressReleases",
         "category": "US derivatives policy and enforcement",
         "region": "US",
@@ -135,7 +147,10 @@ def _collect_story_public_source(source_name: str, meta: dict, limit: int) -> tu
             posted_at=None,
             rank=len(rows) + 1,
         )
-        rows.append(item.to_row())
+        row = item.to_row()
+        row["source_role"] = "official"
+        row["source_tier"] = 1
+        rows.append(row)
         if len(rows) >= limit:
             break
     return rows, f"{source_name}: collected {len(rows)} story-relevant official links (time verification required)"
@@ -154,32 +169,76 @@ def _collect_extra_public(names: list[str], limit: int) -> tuple[list[dict], lis
     return rows, logs
 
 
+def _top_radar_logs(clusters: list[dict], limit: int = 5) -> list[str]:
+    logs: list[str] = []
+    for index, cluster in enumerate((clusters or [])[:limit], start=1):
+        anchors = ",".join(cluster.get("anchors") or []) or "unlabeled"
+        themes = ",".join(cluster.get("themes") or []) or "general"
+        reasons = " / ".join(cluster.get("reasons") or [])
+        logs.append(
+            f"topic radar #{index}: heat {cluster.get('topic_heat_score', 0):.1f} · "
+            f"{anchors} · {themes} · sources {cluster.get('source_count', 0)} · {reasons}"
+        )
+    return logs
+
+
 def collect_for_mode(mode: str, rss_names: list[str], public_names: list[str], limit: int) -> tuple[list[dict], list[str]]:
+    expanded_rss = merge_source_names(rss_names, discovery_sources(mode))
+    expanded_rss = [name for name in expanded_rss if name in RSS_SOURCES]
+
     core_public = [name for name in public_names if name in PUBLIC_LIST_SOURCES]
     extra_public = [name for name in public_names if name in STORY_EXTRA_PUBLIC_SOURCES]
 
-    rows, logs = collect_core_resources([name for name in rss_names if name in RSS_SOURCES], core_public, limit)
+    direct_rows, logs = collect_core_resources(expanded_rss, core_public, limit)
     if mode == MODE_STORY and extra_public:
         extra_rows, extra_logs = _collect_extra_public(extra_public, limit)
-        rows = [*rows, *extra_rows]
+        direct_rows = [*direct_rows, *extra_rows]
         logs = [*logs, *extra_logs]
 
-    rows = _dedupe_rows(rows)
-
-    # Freshness is an admission rule, not a ranking bonus. Unknown dates and >48h
-    # items never enter Story/Trader candidates. 24-48h is used only when the
-    # <=24h pool is too sparse to build a usable briefing.
-    rows, freshness_stats = apply_live_gate(rows, min_candidates=LIVE_MIN_CANDIDATES)
+    direct_rows = annotate_source_metadata(_dedupe_rows(direct_rows))
+    direct_rows, freshness_stats = apply_live_gate(direct_rows, min_candidates=LIVE_MIN_CANDIDATES)
     logs.append(live_gate_log(freshness_stats))
+
+    signal_limit = max(6, min(18, int(limit) // 2))
+    signal_rows, signal_logs = collect_topic_signals(mode, signal_limit, core_collector)
+    signal_rows = _dedupe_rows(signal_rows)
+    signal_rows, signal_freshness = apply_live_gate(signal_rows, min_candidates=1)
+    logs.extend(signal_logs)
+    logs.append(
+        f"topic signals LIVE: {signal_freshness.get('output', 0)} · "
+        f"stale rejected {signal_freshness.get('stale_rejected', 0)} · "
+        f"time unknown rejected {signal_freshness.get('unknown_time_rejected', 0)}"
+    )
+
+    radar_rows, clusters = apply_topic_radar([*direct_rows, *signal_rows])
+    direct_ids = {str(row.get("id") or "") for row in direct_rows}
+    rows = [
+        row for row in radar_rows
+        if str(row.get("id") or "") in direct_ids and not row.get("signal_only")
+    ]
+
+    logs.append(
+        f"source expansion: {EXPANDED_SOURCE_REGISTRY_VERSION} · direct feeds {len(expanded_rss)} · "
+        f"topic signals {TOPIC_SIGNAL_COLLECTOR_VERSION}"
+    )
+    logs.append(
+        f"topic radar: {TOPIC_RADAR_VERSION} · {len(clusters)} clusters · "
+        "cross-source burst + audience pull + search/community attention blended before ranking"
+    )
+    logs.extend(_top_radar_logs(clusters))
     logs.append(f"live source policy: {LIVE_SOURCE_POLICY_VERSION}; latest-first gate applied before ranking")
 
     if mode == MODE_STORY:
         rows = story_engine.annotate_resources(rows)
+        rows = apply_story_heat_blend(rows)
         logs.append(
-            f"story mode: ranked {len(rows)} LIVE resources by {story_engine.STORY_ENGINE_VERSION}; "
-            "hook, change, evidence density, scale, market implication and visual potential are scored only after freshness gating"
+            f"story mode: ranked {len(rows)} LIVE resources by {story_engine.STORY_ENGINE_VERSION} + {TOPIC_RADAR_VERSION}; "
+            "story quality remains primary, with cross-site topic heat and audience pull as discovery multipliers"
         )
     else:
         rows = rank_resources(MODE_TRADER, rows)
-        logs.append(f"trader mode: ranked {len(rows)} LIVE resources by trader_score after freshness gating")
+        rows = apply_trader_heat_blend(rows)
+        logs.append(
+            f"trader mode: ranked {len(rows)} LIVE resources by trader_score + light {TOPIC_RADAR_VERSION} blend"
+        )
     return rows, logs
