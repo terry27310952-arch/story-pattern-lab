@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'chatgpt/**'
+      - 'agent/**'
   pull_request:
     branches:
       - main
@@ -33,6 +34,7 @@ jobs:
         run: |
           python -m py_compile \
             apps/streamlit/content_modes.py \
+            apps/streamlit/live_source_policy.py \
             apps/streamlit/mode_resource_pipeline.py \
             apps/streamlit/trader_pipeline.py \
             apps/streamlit/story_article_cleaner.py \
@@ -49,6 +51,7 @@ jobs:
             apps/streamlit/app_v2.py \
             streamlit_app.py \
             tests/run_regression_suite.py \
+            tests/test_live_source_policy.py \
             tests/test_story_v10.py \
             tests/test_story_ollama_default.py \
             tests/test_story_japanese_rewriter.py
@@ -77,6 +80,9 @@ jobs:
             apps/streamlit/story_render_runtime.py \
             apps/streamlit/story_export_runtime.py \
             apps/streamlit/mode_exporter.py
+
+      - name: Test LIVE FIRST freshness policy
+        run: PYTHONPATH=apps/streamlit python tests/test_live_source_policy.py
 
       - name: Run regression tests
         run: python tests/run_regression_suite.py
