@@ -5,21 +5,34 @@ from typing import Iterable
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
+import resource_collector as core_collector
 import story_source_engine_v5 as story_engine
 from content_modes import MODE_STORY, MODE_TRADER, rank_resources
+from live_source_policy import (
+    LIVE_MIN_CANDIDATES,
+    LIVE_SOURCE_POLICY_VERSION,
+    apply_live_gate,
+    apply_live_patch,
+    live_gate_log,
+)
 from resource_collector import (
     PUBLIC_LIST_SOURCES,
     RSS_SOURCES,
     LinkTextParser,
     USER_AGENT,
     clean_html,
-    collect_resources as collect_core_resources,
     decode_html,
     make_resource,
 )
 
 
-MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v10.0"
+MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v10.1-live"
+
+# LIVE FIRST is installed before collect_resources runs. collect_resources resolves
+# collect_rss dynamically, so this replaces the old URL-only feedparser path with
+# an explicit no-cache HTTP request and a hard 48h ceiling.
+apply_live_patch(core_collector)
+collect_core_resources = core_collector.collect_resources
 
 STORY_EXTRA_PUBLIC_SOURCES = {
     "SEC Press Releases": {
@@ -91,7 +104,8 @@ def _collect_story_public_source(source_name: str, meta: dict, limit: int) -> tu
         headers={
             "User-Agent": USER_AGENT,
             "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.7,ko;q=0.6",
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-store, max-age=0",
+            "Pragma": "no-cache",
         },
     )
     try:
@@ -124,7 +138,7 @@ def _collect_story_public_source(source_name: str, meta: dict, limit: int) -> tu
         rows.append(item.to_row())
         if len(rows) >= limit:
             break
-    return rows, f"{source_name}: collected {len(rows)} story-relevant official links"
+    return rows, f"{source_name}: collected {len(rows)} story-relevant official links (time verification required)"
 
 
 def _collect_extra_public(names: list[str], limit: int) -> tuple[list[dict], list[str]]:
@@ -151,13 +165,21 @@ def collect_for_mode(mode: str, rss_names: list[str], public_names: list[str], l
         logs = [*logs, *extra_logs]
 
     rows = _dedupe_rows(rows)
+
+    # Freshness is an admission rule, not a ranking bonus. Unknown dates and >48h
+    # items never enter Story/Trader candidates. 24-48h is used only when the
+    # <=24h pool is too sparse to build a usable briefing.
+    rows, freshness_stats = apply_live_gate(rows, min_candidates=LIVE_MIN_CANDIDATES)
+    logs.append(live_gate_log(freshness_stats))
+    logs.append(f"live source policy: {LIVE_SOURCE_POLICY_VERSION}; latest-first gate applied before ranking")
+
     if mode == MODE_STORY:
         rows = story_engine.annotate_resources(rows)
         logs.append(
-            f"story mode: ranked {len(rows)} resources by {story_engine.STORY_ENGINE_VERSION}; "
-            "hook, change, evidence density, scale, market implication and visual potential are scored generically"
+            f"story mode: ranked {len(rows)} LIVE resources by {story_engine.STORY_ENGINE_VERSION}; "
+            "hook, change, evidence density, scale, market implication and visual potential are scored only after freshness gating"
         )
     else:
         rows = rank_resources(MODE_TRADER, rows)
-        logs.append(f"trader mode: ranked {len(rows)} resources by trader_score")
+        logs.append(f"trader mode: ranked {len(rows)} LIVE resources by trader_score after freshness gating")
     return rows, logs
