@@ -42,8 +42,9 @@ from resource_collector import (
 )
 
 
-MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v11.1-radar-parallel"
+MODE_RESOURCE_PIPELINE_VERSION = "mode-resources-v11.2-radar-visible"
 MAX_DIRECT_WORKERS = 12
+_STREAMLIT_STATE_VERSION_KEY = "_mode_resource_pipeline_version"
 
 apply_expanded_sources(core_collector)
 apply_live_patch(core_collector)
@@ -81,11 +82,51 @@ STORY_LINK_KEYWORDS = [
 ]
 
 
+def _invalidate_stale_streamlit_collection_state() -> None:
+    """Make a newly deployed collector unmistakable in the UI.
+
+    Streamlit sessions can preserve old resources while the code reruns. When the
+    source-pipeline version changes, throw away previously collected candidates so
+    an old four-day-old list cannot masquerade as a successful new deployment.
+    """
+    try:
+        import streamlit as st
+
+        current = st.session_state.get(_STREAMLIT_STATE_VERSION_KEY)
+        if current != MODE_RESOURCE_PIPELINE_VERSION:
+            stale_keys = [
+                "resources_trader", "resources_story",
+                "logs_trader", "logs_story",
+                "selected_ids_trader", "selected_ids_story",
+                "story_event_candidates", "selected_story_event_id",
+                "enriched_trader", "enriched_story",
+                "trader_brief", "trader_package", "story_package",
+            ]
+            for key in stale_keys:
+                st.session_state.pop(key, None)
+            st.session_state[_STREAMLIT_STATE_VERSION_KEY] = MODE_RESOURCE_PIPELINE_VERSION
+            st.session_state["_live_source_refresh_required"] = True
+
+        st.sidebar.success("LIVE FIRST + TOPIC RADAR 활성화")
+        st.sidebar.caption(
+            f"Source Pipeline · {MODE_RESOURCE_PIPELINE_VERSION} · "
+            f"LIVE {LIVE_SOURCE_POLICY_VERSION} · Radar {TOPIC_RADAR_VERSION}"
+        )
+        st.sidebar.caption(
+            "자동 탐색 · " + ", ".join(discovery_sources(MODE_STORY)[:8]) + " …"
+        )
+        if st.session_state.get("_live_source_refresh_required"):
+            st.sidebar.warning("수집기 버전이 변경되었습니다. 최신 리소스를 다시 수집하세요.")
+    except Exception:
+        return
+
+
 def story_public_registry() -> dict[str, dict]:
     return {**PUBLIC_LIST_SOURCES, **STORY_EXTRA_PUBLIC_SOURCES}
 
 
 def available_public_registry(mode: str) -> dict[str, dict]:
+    _invalidate_stale_streamlit_collection_state()
     return story_public_registry() if mode == MODE_STORY else dict(PUBLIC_LIST_SOURCES)
 
 
@@ -263,9 +304,6 @@ def collect_for_mode(mode: str, rss_names: list[str], public_names: list[str], l
 
     direct_rows = annotate_source_metadata(_dedupe_rows(direct_rows))
 
-    # Community/RSS attention feeds are discovery sensors, not evidence. Keep them
-    # out of the evidence freshness quota so they cannot crowd out 24-48h fallback
-    # articles when the primary evidence pool is sparse.
     embedded_signal_rows = [row for row in direct_rows if row.get("signal_only")]
     evidence_rows = [row for row in direct_rows if not row.get("signal_only")]
     evidence_rows, freshness_stats = apply_live_gate(evidence_rows, min_candidates=LIVE_MIN_CANDIDATES)
@@ -316,4 +354,11 @@ def collect_for_mode(mode: str, rss_names: list[str], public_names: list[str], l
         logs.append(
             f"trader mode: ranked {len(rows)} LIVE resources by trader_score + light {TOPIC_RADAR_VERSION} blend"
         )
+
+    try:
+        import streamlit as st
+        st.session_state["_live_source_refresh_required"] = False
+    except Exception:
+        pass
+
     return rows, logs
