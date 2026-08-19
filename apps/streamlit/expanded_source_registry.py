@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Iterable
 
 
-EXPANDED_SOURCE_REGISTRY_VERSION = "expanded-sources-v1.0"
+EXPANDED_SOURCE_REGISTRY_VERSION = "expanded-sources-v1.1"
 
 EXPANDED_RSS_SOURCES: dict[str, dict] = {
     "CoinPost JP": {
@@ -98,6 +98,26 @@ EXPANDED_RSS_SOURCES: dict[str, dict] = {
     },
 }
 
+# Preserve the public-source names that older Story presets expect. The authoritative
+# real-time versions are the RSS feeds above; these aliases exist for UI/backward
+# compatibility and will be rejected by LIVE FIRST if their HTML list has no timestamp.
+LEGACY_STORY_PUBLIC_ALIASES: dict[str, dict] = {
+    "SEC Press Releases": {
+        "url": "https://www.sec.gov/newsroom/press-releases",
+        "category": "US securities policy and enforcement",
+        "region": "US",
+        "source_type": "official",
+        "parser": "story_public",
+    },
+    "CFTC Press Releases": {
+        "url": "https://www.cftc.gov/PressRoom/PressReleases",
+        "category": "US derivatives policy and enforcement",
+        "region": "US",
+        "source_type": "official",
+        "parser": "story_public",
+    },
+}
+
 STORY_DISCOVERY_DEFAULTS = [
     "CoinPost JP",
     "Cointelegraph Japan",
@@ -123,11 +143,15 @@ TRADER_DISCOVERY_DEFAULTS = [
 
 
 def apply_expanded_sources(resource_collector) -> None:
-    registry = getattr(resource_collector, "RSS_SOURCES", None)
-    if not isinstance(registry, dict):
-        return
-    for name, meta in EXPANDED_RSS_SOURCES.items():
-        registry.setdefault(name, dict(meta))
+    rss_registry = getattr(resource_collector, "RSS_SOURCES", None)
+    if isinstance(rss_registry, dict):
+        for name, meta in EXPANDED_RSS_SOURCES.items():
+            rss_registry.setdefault(name, dict(meta))
+
+    public_registry = getattr(resource_collector, "PUBLIC_LIST_SOURCES", None)
+    if isinstance(public_registry, dict):
+        for name, meta in LEGACY_STORY_PUBLIC_ALIASES.items():
+            public_registry.setdefault(name, dict(meta))
 
 
 def discovery_sources(mode: str) -> list[str]:
